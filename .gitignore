@@ -4,3 +4,5 @@
 debug.keystore
 .idea/*
 !.idea/runConfigurations/
+!.idea/modules.xml
+!.idea/rustnotes.iml
