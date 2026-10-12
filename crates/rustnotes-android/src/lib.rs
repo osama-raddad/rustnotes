@@ -214,8 +214,9 @@ fn android_main(app: AndroidApp) {
                     }
                 }
                 PollEvent::Main(MainEvent::TerminateWindow { .. }) => {
-                    if let Some((_, mut r)) = renderer.take() {
+                    if let Some((mut egl, mut r)) = renderer.take() {
                         r.shutdown();
+                        egl.destroy();
                     }
                 }
                 PollEvent::Main(MainEvent::WindowResized { .. })
@@ -237,7 +238,6 @@ fn android_main(app: AndroidApp) {
                 PollEvent::Main(MainEvent::GainedFocus) => {
                     // inset is queried once below via query_top_inset
                 }
-                PollEvent::Main(MainEvent::GainedFocus) => {}
                 PollEvent::Main(MainEvent::InputAvailable) => input_pending = true,
                 PollEvent::Main(MainEvent::Pause) => {
                     state.save_current();

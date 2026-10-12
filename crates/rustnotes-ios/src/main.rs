@@ -6,6 +6,7 @@
 //! a CADisplayLink frame loop, UIResponder touch forwarding, and a hidden
 //! UITextField that summons the keyboard and feeds us key events.
 #![allow(deprecated)] // Retained::cast: safe upcasts to AnyObject
+#![allow(non_snake_case)] // method names mirror their ObjC selectors
 
 use objc2::rc::Retained;
 use objc2::rc::Allocated;
@@ -17,20 +18,20 @@ use objc2::{
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{
     NSArray, NSDictionary, NSNumber, NSRange, NSObject, NSString, NSNotification,
-    NSNotificationCenter, NSRunLoop, NSRunLoopMode, NSSet, NSTimer,
+    NSNotificationCenter, NSRunLoop, NSSet, NSTimer,
 };
 use objc2_quartz_core::{CADisplayLink, CALayer};
 use objc2_ui_kit::{
     UIApplication, UIApplicationDelegate, UIApplicationLaunchOptionsKey, UIColor, UIEvent,
-    UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification, UIResponder, UIScreen,
-    UITextField, UITextFieldDelegate, UITouch, UIView, UIViewController, UIWindow,
+    UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification, UIScreen,
+    UITextField, UITextFieldDelegate, UITouch, UIViewController, UIWindow,
 };
 use rustnotes_core::{App, CoreEvent, CoreKey, Platform, Renderer};
 use glow::HasContext as _;
 
 fn main() {
     ios_log_init();
-    let mtm = MainThreadMarker::new().expect("must run on the main thread");
+    let _mtm = MainThreadMarker::new().expect("must run on the main thread");
     unsafe {
         // Force class registration before the name-based lookup in UIKit.
         let _ = RNAppDelegate::class();
@@ -192,17 +193,15 @@ define_class!(
             _application: &UIApplication,
             _launch_options: Option<&NSDictionary<UIApplicationLaunchOptionsKey, AnyObject>>,
         ) -> bool {
-            unsafe {
-                let mtm = MainThreadMarker::new().unwrap();
-                let screen = UIScreen::mainScreen(mtm);
-                let bounds = screen.bounds();
-                let window = UIWindow::initWithFrame(UIWindow::alloc(mtm), bounds);
-                let vc = RNViewController::new();
-                window.setRootViewController(Some(&vc));
-                window.makeKeyAndVisible();
-                WINDOW.with(|w| *w.borrow_mut() = Some(window));
-                nslog("didFinishLaunching: window ready");
-            }
+            let mtm = MainThreadMarker::new().unwrap();
+            let screen = UIScreen::mainScreen(mtm);
+            let bounds = screen.bounds();
+            let window = UIWindow::initWithFrame(UIWindow::alloc(mtm), bounds);
+            let vc = RNViewController::new();
+            window.setRootViewController(Some(&vc));
+            window.makeKeyAndVisible();
+            WINDOW.with(|w| *w.borrow_mut() = Some(window));
+            nslog("didFinishLaunching: window ready");
             true
         }
 
@@ -359,14 +358,12 @@ impl RNViewController {
     }
 
     fn rn_apply_insets(&self) {
-        unsafe {
-            let insets = self.view().expect("view").safeAreaInsets();
-            with_shell(|s| {
-                s.app.set_content_top(insets.top as f32 * s.scale);
-                let bottom_pts = s.kb_bottom_pts.max(insets.bottom as f32);
-                s.app.set_content_bottom(bottom_pts as f32 * s.scale);
-            });
-        }
+        let insets = self.view().expect("view").safeAreaInsets();
+        with_shell(|s| {
+            s.app.set_content_top(insets.top as f32 * s.scale);
+            let bottom_pts = s.kb_bottom_pts.max(insets.bottom as f32);
+            s.app.set_content_bottom(bottom_pts as f32 * s.scale);
+        });
     }
 
     fn new() -> Retained<Self> {
@@ -380,25 +377,23 @@ impl RNViewController {
     }
 
     unsafe fn rn_touch(&self, touches: &NSSet<UITouch>, phase: u8) {
-        unsafe {
-            let Some(touch) = touches.anyObject() else { return };
-            let view = self.view().expect("view");
-            let loc = touch.locationInView(Some(&view));
-            let ev = with_shell(|s| {
-                let x = loc.x as f32 * s.scale;
-                let y = loc.y as f32 * s.scale;
-                match phase {
-                    0 => CoreEvent::TouchDown { x, y },
-                    1 => CoreEvent::TouchMove { x, y },
-                    _ => CoreEvent::TouchUp { x, y },
-                }
-            });
-            if let Some(ev) = ev {
-                with_shell(|s| {
-                    let r = s.renderer.as_mut();
-                    s.app.handle_event(ev, &IosPlatform, r)
-                });
+        let Some(touch) = touches.anyObject() else { return };
+        let view = self.view().expect("view");
+        let loc = touch.locationInView(Some(&view));
+        let ev = with_shell(|s| {
+            let x = loc.x as f32 * s.scale;
+            let y = loc.y as f32 * s.scale;
+            match phase {
+                0 => CoreEvent::TouchDown { x, y },
+                1 => CoreEvent::TouchMove { x, y },
+                _ => CoreEvent::TouchUp { x, y },
             }
+        });
+        if let Some(ev) = ev {
+            with_shell(|s| {
+                let r = s.renderer.as_mut();
+                s.app.handle_event(ev, &IosPlatform, r)
+            });
         }
     }
 
@@ -435,8 +430,8 @@ impl RNViewController {
             view.layer().addSublayer(&layer);
 
             // --- EAGL context (GLES3)
-            let eagl = unsafe { EAGLContext::initWithAPI(EAGLContext::alloc(), 3) };
-            assert!(unsafe { EAGLContext::setCurrentContext(Some(&eagl)) }, "EAGL setCurrent");
+            let eagl = EAGLContext::initWithAPI(EAGLContext::alloc(), 3);
+            assert!(EAGLContext::setCurrentContext(Some(&eagl)), "EAGL setCurrent");
 
             // --- GL frame/renderbuffer
             let gl = make_gl();
@@ -533,14 +528,11 @@ impl RNViewController {
                 // Rebind renderbuffer storage to the resized layer.
                 let layer_obj: Retained<AnyObject> = Retained::cast(s.layer.clone());
                 s.gl.bind_renderbuffer(glow::RENDERBUFFER, Some(s.rb));
-                unsafe {
-                    s.eagl
-                        .renderbufferStorage_fromDrawable(glow::RENDERBUFFER as usize, None);
-                }
-                let ok = unsafe {
-                    s.eagl
-                        .renderbufferStorage_fromDrawable(glow::RENDERBUFFER as usize, Some(&*layer_obj))
-                };
+                s.eagl.renderbufferStorage_fromDrawable(glow::RENDERBUFFER as usize, None);
+                let ok = s.eagl.renderbufferStorage_fromDrawable(
+                    glow::RENDERBUFFER as usize,
+                    Some(&*layer_obj),
+                );
                 if !ok {
                     nslog("renderbufferStorage failed");
                 }

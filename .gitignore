@@ -3,4 +3,5 @@
 *.apk
 *.apk.idsig
 debug.keystore
-.idea/
+.idea/*
+!.idea/runConfigurations/
