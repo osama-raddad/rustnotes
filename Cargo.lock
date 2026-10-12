@@ -746,7 +746,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustnotes-android"
+name = "rustnotes"
 version = "0.1.0"
 dependencies = [
  "android-activity",

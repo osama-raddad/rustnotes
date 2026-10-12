@@ -1,0 +1,30 @@
+# xbuild manifest (https://github.com/rust-mobile/xbuild)
+# Used by `x build` / `x run` — see README.md. The Gradle-free path: xbuild
+# packages the APK itself (pure-Rust `apk` crate), no aapt2/d8 involved.
+android:
+  manifest:
+    package: com.osamaraddad.rustnotes
+    version_code: 1
+    version_name: 0.1.0
+    sdk:
+      min_sdk_version: 24
+      target_sdk_version: 33
+    application:
+      label: Rust Notes
+      has_code: false
+      theme: "@android:style/Theme.Material.Light.NoActionBar"
+      activities:
+        - name: android.app.NativeActivity
+          label: Rust Notes
+          exported: true
+          launch_mode: singleTask
+          config_changes: "orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+          window_soft_input_mode: adjustResize
+          meta_data:
+            - name: android.app.lib_name
+              value: rustnotes
+          intent_filters:
+            - actions:
+                - android.intent.action.MAIN
+              categories:
+                - android.intent.category.LAUNCHER

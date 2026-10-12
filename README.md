@@ -49,6 +49,21 @@ with `ANDROID_HOME` in `build.sh` if needed. The NDK linker path and the
 ./build.sh install    # build + install + launch on a connected device
 ```
 
+**Android with [xbuild](https://github.com/rust-mobile/xbuild)** (recommended
+for iteration; one tool: build, sign, deploy, launch, logs):
+
+```sh
+cargo install xbuild --locked   # once
+./x.sh build --release --format apk            # -> target/x/release/android/rustnotes.apk
+./x.sh run --device adb:emulator-5554 --release  # deploy + launch + stream logs (Ctrl-C to detach)
+```
+
+Config lives in `crates/rustnotes-android/manifest.yaml`. Notes on the xbuild
+path: its bundled NDK tops out at API 33 (hence `target_sdk_version: 33` there;
+the shell-script APK still targets 35), the APK is signed with a generated
+debug key, and the 16 KB page alignment comes from `.cargo/config.toml` either
+way. First run downloads xbuild's precompiled SDK/NDK into `~/Library/Caches/x`.
+
 **iOS** (simulator by default; device target builds but needs your signing identity):
 
 ```sh
