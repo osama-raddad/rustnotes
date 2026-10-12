@@ -64,23 +64,18 @@ impl FontBook {
     }
 }
 
-/// One wrapped line, as char-index range [start, end) + rendered width.
+/// One wrapped line, as char-index range [start, end).
 #[derive(Clone, Copy, Debug)]
 pub struct LineSpan {
     pub start: usize,
     pub end: usize,
-    pub width: f32,
 }
 
 /// Greedy word wrap on spaces, hard break for over-long words, honoring '\n'.
 pub fn layout_text(fb: &FontBook, text: &str, px: f32, max_w: f32) -> Vec<LineSpan> {
     let chars: Vec<char> = text.chars().collect();
     if chars.is_empty() {
-        return vec![LineSpan {
-            start: 0,
-            end: 0,
-            width: 0.0,
-        }];
+        return vec![LineSpan { start: 0, end: 0 }];
     }
     let mut lines = Vec::new();
     let mut line_start = 0usize;
@@ -93,7 +88,6 @@ pub fn layout_text(fb: &FontBook, text: &str, px: f32, max_w: f32) -> Vec<LineSp
             lines.push(LineSpan {
                 start: line_start,
                 end: i,
-                width,
             });
             line_start = i + 1;
             width = 0.0;
@@ -108,7 +102,6 @@ pub fn layout_text(fb: &FontBook, text: &str, px: f32, max_w: f32) -> Vec<LineSp
                     lines.push(LineSpan {
                         start: line_start,
                         end: b,
-                        width: measure(fb, &chars[line_start..b], px),
                     });
                     line_start = b;
                 }
@@ -116,7 +109,6 @@ pub fn layout_text(fb: &FontBook, text: &str, px: f32, max_w: f32) -> Vec<LineSp
                     lines.push(LineSpan {
                         start: line_start,
                         end: i,
-                        width,
                     });
                     line_start = i;
                 }
@@ -134,7 +126,6 @@ pub fn layout_text(fb: &FontBook, text: &str, px: f32, max_w: f32) -> Vec<LineSp
     lines.push(LineSpan {
         start: line_start,
         end: chars.len(),
-        width,
     });
     lines
 }

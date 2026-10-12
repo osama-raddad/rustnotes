@@ -1,4 +1,6 @@
 /target
 /build
 *.apk
+*.apk.idsig
 debug.keystore
+.idea/

@@ -58,7 +58,6 @@ extern "C" {
 
 pub struct Egl {
     pub display: EGLDisplay,
-    pub config: EGLConfig,
     pub context: EGLContext,
     pub surface: EGLSurface,
 }
@@ -131,7 +130,6 @@ impl Egl {
 
             Ok(Egl {
                 display: dpy,
-                config,
                 context,
                 surface,
             })

@@ -284,7 +284,6 @@ impl App {
                 }
             }
             InputEvent::KeyEvent(k) => {
-                let code: u32 = k.key_code().into();
                 log::debug!("key event: {k:?}");
                 if k.action() != KeyAction::Down {
                     return InputStatus::Unhandled;
@@ -424,16 +423,6 @@ impl App {
         self.cursor = text::hit_to_cursor(&r.fonts, &chars, &lines, cx, ty, g.line_h, g.px)
             .min(chars.len());
         self.after_edit();
-    }
-
-    fn clamp_list_scroll(&mut self) {
-        let max = (self.list_content_h - self.vh).max(0.0);
-        self.list_scroll = self.list_scroll.clamp(0.0, max);
-    }
-
-    fn clamp_editor_scroll(&mut self) {
-        // Uses last-known geometry; recalculated properly during draw.
-        self.edit_scroll = self.edit_scroll.max(0.0);
     }
 
     fn tick(&mut self) {
