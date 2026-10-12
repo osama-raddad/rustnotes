@@ -276,10 +276,12 @@ impl Renderer {    pub fn new(window: *mut std::ffi::c_void) -> Result<Renderer,
                     );
                 }
             }
+            // fontdue: ymin = bitmap BOTTOM edge (y-up, negative below baseline).
+            // Screen-space top of the bitmap = baseline - (ymin + height).
             let g = GlyphQuad {
                 uv,
                 x_off: metrics.xmin as f32,
-                y_top: -(metrics.ymin as f32),
+                y_top: -(metrics.ymin + metrics.height as i32) as f32,
                 w: metrics.width as f32,
                 h: metrics.height as f32,
                 advance: metrics.advance_width,
