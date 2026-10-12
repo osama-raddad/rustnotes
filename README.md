@@ -5,6 +5,9 @@ no Kotlin, no Java, no Swift, no Objective-C source, no Gradle, no Xcode
 project. One shared core drives both platforms; each platform shell is a thin
 layer over the OS windowing/input APIs.
 
+> Session log: [docs/worklog-2026-10-12.md](docs/worklog-2026-10-12.md) — how
+> this was built and debugged in one day, with every bug and measurement.
+
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │                        rustnotes-core (shared)                     │
