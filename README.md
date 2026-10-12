@@ -45,38 +45,27 @@ with `ANDROID_HOME` in `build.sh` if needed. The NDK linker path and the
 
 ## Build & run
 
-**Android** (arm64-v8a, minSdk 24, targetSdk 35):
+The entry point is [`just`](https://github.com/casey/just) (`brew install just`); run `just` alone to list recipes.
 
 ```sh
-./build.sh            # -> rustnotes.apk
-./build.sh install    # build + install + launch on a connected device
+just android          # release APK (aapt2/apksigner pipeline, targetSdk 35)
+just android-install  # + install & launch on a connected device
+just android-x        # release APK via xbuild (auto-signed, targetSdk 33)
+just android-run      # xbuild: deploy + launch + stream logs (Ctrl-C detaches)
+just ios              # simulator .app bundle (ad-hoc signed)
+just ios-run          # + install & launch on the booted simulator
+just check            # type-check all crates for their real targets
 ```
 
-**Android with [xbuild](https://github.com/rust-mobile/xbuild)** (recommended
-for iteration; one tool: build, sign, deploy, launch, logs):
+The recipes wrap the underlying pipelines, which also work directly:
 
 ```sh
-cargo install xbuild --locked   # once
-./x.sh build --release --format apk            # -> target/x/release/android/rustnotes.apk
-./x.sh run --device adb:emulator-5554 --release  # deploy + launch + stream logs (Ctrl-C to detach)
+./build.sh            # Android APK: cargo -> aapt2 -> zipalign -> apksigner
+./x.sh build --platform android --arch arm64 --release --format apk   # xbuild
+./build-ios.sh aarch64-apple-ios-sim install   # iOS: cargo -> .app -> codesign -> simctl
 ```
 
-Config lives in `crates/rustnotes-android/manifest.yaml`. Notes on the xbuild
-path: its bundled NDK tops out at API 33 (hence `target_sdk_version: 33` there;
-the shell-script APK still targets 35), the APK is signed with a generated
-debug key, and the 16 KB page alignment comes from `.cargo/config.toml` either
-way. First run downloads xbuild's precompiled SDK/NDK into `~/Library/Caches/x`.
-
-**iOS** (simulator by default; device target builds but needs your signing identity):
-
-```sh
-./build-ios.sh                        # -> "build/ios/Rust Notes.app" (ad-hoc signed)
-./build-ios.sh aarch64-apple-ios-sim install   # + install & launch on booted simulator
-```
-
-Both scripts cross-compile with the platform toolchains (NDK clang / Xcode
-clang), package the app with `aapt2`/`codesign` (no Gradle, no .xcodeproj),
-and can install + launch on a connected emulator/simulator.
+Device target: `./build-ios.sh aarch64-apple-ios` (needs your signing identity to install).
 
 Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
 `xcrun simctl spawn booted log show --predicate 'process == "rustnotes"'`).
