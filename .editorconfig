@@ -1,0 +1,26 @@
+# EditorConfig — https://editorconfig.org
+# Read natively by IntelliJ (bundled EditorConfig plugin) and most editors.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+# two trailing spaces are markdown hard line breaks — keep them
+trim_trailing_whitespace = false
+
+# Rust is owned by rustfmt (cargo fmt); TOML/XML match the existing files
+[*.{rs,toml,xml}]
+indent_style = space
+indent_size = 4
+
+[*.{yaml,yml,json}]
+indent_style = space
+indent_size = 2
+
+# Apple plists in this repo are tab-indented (Xcode convention)
+[*.plist]
+indent_style = tab

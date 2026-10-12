@@ -6,3 +6,5 @@ debug.keystore
 !.idea/runConfigurations/
 !.idea/modules.xml
 !.idea/rustnotes.iml
+!.idea/jsonSchemas.xml
+!.idea/schemas/

@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "xbuild manifest",
+  "description": "Build manifest for rust-mobile/xbuild (`x build` / `x run`, justfile recipes android-x / android-run). xbuild reads manifest.yaml from the crate's directory, which is why this file cannot live in resources/. Fields not modeled here are allowed; this schema only adds completion and type checking for the keys we use.",
+  "type": "object",
+  "properties": {
+    "android": {
+      "type": "object",
+      "properties": {
+        "manifest": {
+          "type": "object",
+          "properties": {
+            "package": { "type": "string" },
+            "version_code": { "type": "integer" },
+            "version_name": { "type": "string" },
+            "sdk": {
+              "type": "object",
+              "properties": {
+                "min_sdk_version": { "type": "integer" },
+                "target_sdk_version": { "type": "integer" }
+              }
+            },
+            "application": {
+              "type": "object",
+              "properties": {
+                "label": { "type": "string" },
+                "has_code": { "type": "boolean" },
+                "theme": { "type": "string" },
+                "activities": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": { "type": "string" },
+                      "label": { "type": "string" },
+                      "exported": { "type": "boolean" },
+                      "launch_mode": { "type": "string" },
+                      "config_changes": { "type": "string" },
+                      "window_soft_input_mode": { "type": "string" },
+                      "meta_data": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": { "type": "string" },
+                            "value": { "type": "string" }
+                          }
+                        }
+                      },
+                      "intent_filters": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "actions": { "type": "array", "items": { "type": "string" } },
+                            "categories": { "type": "array", "items": { "type": "string" } }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
