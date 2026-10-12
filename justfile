@@ -7,12 +7,12 @@ toolchain := sdk + '/ndk/27.1.12297006/toolchains/llvm/prebuilt/darwin-x86_64/bi
 bt        := sdk + '/build-tools/35.0.0'
 platform  := sdk + '/platforms/android-35/android.jar'
 ks        := 'debug.keystore'
-apk       := 'rustnotes.apk'
+apk       := 'build/rustnotes.apk'
 ios_app   := 'build/ios/Rust Notes.app'
 ios_id    := 'com.osamaraddad.rustnotes.ios'
 
 # NDK toolchain on PATH (xbuild's cc-rs resolves llvm-ar by name) and C env
-# for bundled SQLite when cargo runs outside the old build.sh
+# for bundled SQLite (rusqlite) in cargo builds
 export PATH := toolchain + ':' + env_var('PATH')
 export CC_aarch64_linux_android := toolchain + '/aarch64-linux-android24-clang'
 export AR_aarch64_linux_android := toolchain + '/llvm-ar'
@@ -29,12 +29,12 @@ android-stage:
     cargo build -p rustnotes --target aarch64-linux-android --release
     rm -rf build/apk
     mkdir -p build/apk/lib/arm64-v8a
-    cp target/aarch64-linux-android/release/librustnotes.so build/apk/lib/arm64-v8a/
+    cp build/target/aarch64-linux-android/release/librustnotes.so build/apk/lib/arm64-v8a/
 
 # Release APK: cargo -> aapt2 -> zip -> zipalign -> apksigner (targetSdk 35)
 android: android-stage
     {{bt}}/aapt2 link -o build/rustnotes.unsigned.apk \
-        --manifest AndroidManifest.xml -I {{platform}} \
+        --manifest resources/AndroidManifest.xml -I {{platform}} \
         --min-sdk-version 24 --target-sdk-version 35
     cd build/apk && zip -qr ../rustnotes.unsigned.apk lib
     {{bt}}/zipalign -f 4 build/rustnotes.unsigned.apk build/rustnotes.aligned.apk
@@ -103,8 +103,8 @@ ios-build target:
     cargo build -p rustnotes-ios --target {{target}} --release
     rm -rf build/ios
     mkdir -p "{{ios_app}}"
-    cp target/{{target}}/release/rustnotes "{{ios_app}}/rustnotes"
-    cp ios/Info.plist "{{ios_app}}/Info.plist"
+    cp build/target/{{target}}/release/rustnotes "{{ios_app}}/rustnotes"
+    cp resources/Info.plist "{{ios_app}}/Info.plist"
 
 # Simulator .app bundle (ad-hoc signed)
 ios: (ios-build 'aarch64-apple-ios-sim')
@@ -175,7 +175,7 @@ ios-sign:
         echo "ERROR: no provisioning profile covering {{ios_id}} in:"
         echo "  $profdir"
         echo "Fix: run 'just ios-profile' (rebuilds the bundled throwaway Xcode"
-        echo "project, ios/profile-helper, to mint a fresh 7-day personal-team"
+        echo "project, tools/ios-profile-helper, to mint a fresh 7-day personal-team"
         echo "profile — iPhone must be connected). Then rerun 'just ios-install'."
         echo "(Paid-team alternative: register the App ID + create a development"
         echo " profile at developer.apple.com, download it into the dir above.)"
@@ -204,14 +204,14 @@ ios-sign:
     codesign --verify "$app"
 
 # Refresh the 7-day development profile for {{ios_id}}: rebuild the throwaway
-# Xcode project (ios/profile-helper, team pre-set) with automatic signing.
+# Xcode project (tools/ios-profile-helper, team pre-set) with automatic signing.
 # Run when ios-install reports no valid profile. iPhone connected once.
 ios-profile:
     #!/bin/zsh
     set -euo pipefail
     dev="${DEVICE:-$(xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"||$i=="available"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/){print $j; exit}}}')}"
     [ -n "$dev" ] || { echo "ERROR: no connected device — profile refresh needs the iPhone once."; exit 1; }
-    xcodebuild -project ios/profile-helper/ios.xcodeproj -scheme ios \
+    xcodebuild -project tools/ios-profile-helper/ios.xcodeproj -scheme ios \
         -destination "id=$dev" -allowProvisioningUpdates \
         -allowProvisioningDeviceRegistration build
 

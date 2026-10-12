@@ -43,7 +43,7 @@ layer over the OS windowing/input APIs.
   auto-detects both — override with `IDENTITY=` / `PROFILE=` / `DEVICE=` when
   needed. Free personal-team profiles expire after 7 days: when that happens,
   `just ios-profile` rebuilds the bundled helper Xcode project
-  (`ios/profile-helper/`) to mint a fresh one (iPhone connected, Apple ID
+  (`tools/ios-profile-helper/`) to mint a fresh one (iPhone connected, Apple ID
   signed in to Xcode).
 
 Paths are defaulted for a macOS install under `~/Library/Android/sdk`; override
@@ -113,18 +113,28 @@ Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
   it works well for basic Latin; CJK/emoji and autocorrect are not supported.
   The idiomatic fix would be GameActivity's `TextInputState` or a thin Kotlin
   layer.
-- arm64-v8a only (add more targets in `build.sh` for other ABIs).
+- arm64-v8a only (add more ABIs in the `justfile`).
 - No text selection, no search, no themes — it's a demo of the pure-Rust
   stack, not a product.
 
 ## Project layout
+
+Grouped by file type: source in `crates/`, packaging manifests in
+`resources/`, generated output in `build/` (delete it to clean everything;
+`rm -rf build` is always safe). Files the toolchains anchor to the root
+(`Cargo.toml`/`Cargo.lock`, `justfile`, `.cargo/`, `.gitignore`, `.idea/`)
+stay there; `crates/rustnotes-android/manifest.yaml` must sit next to its
+crate because xbuild reads it from the working directory.
 
 | Path | Purpose |
 |---|---|
 | `crates/rustnotes-core/` | Shared: App state machine, neutral events, UI drawing, renderer, storage |
 | `crates/rustnotes-android/` | Android shell: NativeActivity, EGL FFI, input translation, JNI insets |
 | `crates/rustnotes-ios/` | iOS shell: objc2 classes, EAGL+CAEAGLLayer, keyboard, frame loop |
-| `AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs |
-| `ios/Info.plist` | App bundle manifest (hand-assembled .app) |
+| `resources/AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs |
+| `resources/Info.plist` | App bundle manifest (hand-assembled .app) |
+| `tools/ios-profile-helper/` | Throwaway Xcode project that mints 7-day provisioning profiles |
+| `build/` | All generated artifacts: cargo target dir, APK staging + final APK, iOS .app |
+| `debug.keystore` | Local debug signing key (auto-minted; kept at root so cleaning `build/` never invalidates installed apps) |
 | `justfile` | The single build file: cargo → package pipelines for each platform |
 | `.idea/runConfigurations/` | IntelliJ run configurations, one per just recipe |
