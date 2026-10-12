@@ -10,7 +10,8 @@ mod egl;
 use android_activity::input::{InputEvent, KeyAction, MotionAction};
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use egl::Egl;
-use rustnotes_core::{App, CoreEvent, CoreKey, Platform, Renderer};
+use rustnotes_core::{App, CoreEvent, CoreKey, Platform};
+use std::sync::Arc;
 
 /// Services the Android shell provides to the core.
 struct AndroidPlatform<'a> {
@@ -175,7 +176,7 @@ fn android_main(app: AndroidApp) {
         .unwrap_or_else(|| std::path::PathBuf::from("/data/local/tmp"));
     let mut state = App::new(dir);
 
-    let mut renderer: Option<(Egl, Renderer)> = None;
+    let mut egl: Option<Egl> = None;
     let mut destroyed = false;
     let mut input_pending = false;
     let mut inset_rx: Option<std::sync::mpsc::Receiver<i32>> = None;
@@ -188,23 +189,21 @@ fn android_main(app: AndroidApp) {
                     let _ = rect;
                     if let Some(win) = app.native_window() {
                         let ptr = win.ptr().as_ptr() as *mut std::ffi::c_void;
-                        match (|| -> Result<(Egl, Renderer), String> {
+                        match (|| -> Result<Egl, String> {
                             let egl = Egl::new(ptr)?;
                             let gl = unsafe {
                                 glow::Context::from_loader_function(
                                     |n| egl.get_proc_address(n) as *const _,
                                 )
                             };
-                            let (w, h) = egl.surface_size();
-                            let r = Renderer::new(gl, w, h)?;
-                            Ok((egl, r))
+                            state.attach_gl(Arc::new(gl))?;
+                            Ok(egl)
                         })() {
-                            Ok((egl, mut r)) => {
-                                let (w, h) = egl.surface_size();
-                                r.set_size(w, h);
-                                log::info!("renderer {w}x{h}, font: {}", r.fonts.source);
-                                renderer = Some((egl, r));
-                                state.dirty = true;
+                            Ok(e) => {
+                                let (w, h) = e.surface_size();
+                                state.set_viewport(w, h);
+                                log::info!("renderer {w}x{h}, font: {}", state.font_source());
+                                egl = Some(e);
                                 // Kick off the async inset query now that the
                                 // window exists.
                                 inset_rx = Some(post_top_inset_query(&app));
@@ -214,25 +213,25 @@ fn android_main(app: AndroidApp) {
                     }
                 }
                 PollEvent::Main(MainEvent::TerminateWindow { .. }) => {
-                    if let Some((mut egl, mut r)) = renderer.take() {
-                        r.shutdown();
-                        egl.destroy();
+                    state.detach_gl();
+                    if let Some(mut e) = egl.take() {
+                        e.destroy();
                     }
                 }
                 PollEvent::Main(MainEvent::WindowResized { .. })
                 | PollEvent::Main(MainEvent::ContentRectChanged { .. }) => {
-                    if let Some((egl, r)) = renderer.as_mut() {
-                        let (w, h) = egl.surface_size();
-                        r.set_size(w, h);
+                    if let Some(e) = egl.as_ref() {
+                        let (w, h) = e.surface_size();
+                        state.set_viewport(w, h);
                     }
                     state.dirty = true;
                 }
                 PollEvent::Main(MainEvent::RedrawNeeded { .. }) => {
-                    if let Some((egl, r)) = renderer.as_mut() {
-                        let (w, h) = egl.surface_size();
-                        r.set_size(w, h);
-                        state.draw(r);
-                        egl.swap();
+                    if let Some(e) = egl.as_mut() {
+                        let (w, h) = e.surface_size();
+                        state.set_viewport(w, h);
+                        state.frame(&AndroidPlatform { app: &app });
+                        e.swap();
                     }
                 }
                 PollEvent::Main(MainEvent::GainedFocus) => {
@@ -268,9 +267,9 @@ fn android_main(app: AndroidApp) {
             }
         }
 
+        let plat = AndroidPlatform { app: &app };
         if input_pending {
             input_pending = false;
-            let plat = AndroidPlatform { app: &app };
             if let Ok(mut iter) = app.input_events_iter() {
                 loop {
                     let more = iter.next(|ev| {
@@ -300,8 +299,7 @@ fn android_main(app: AndroidApp) {
                         };
                         match handled {
                             Some(ev) => {
-                                let r = renderer.as_mut().map(|(_, r)| r);
-                                if state.handle_event(ev, &plat, r) {
+                                if state.handle_event(ev, &plat) {
                                     InputStatus::Handled
                                 } else {
                                     InputStatus::Unhandled
@@ -319,9 +317,9 @@ fn android_main(app: AndroidApp) {
 
         state.tick();
         if state.dirty {
-            if let Some((egl, r)) = renderer.as_mut() {
-                state.draw(r);
-                egl.swap();
+            if let Some(e) = egl.as_mut() {
+                state.frame(&plat);
+                e.swap();
             }
         }
     }

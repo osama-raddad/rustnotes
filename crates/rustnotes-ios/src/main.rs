@@ -26,7 +26,8 @@ use objc2_ui_kit::{
     UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification, UIScreen,
     UITextField, UITextFieldDelegate, UITouch, UIViewController, UIWindow,
 };
-use rustnotes_core::{App, CoreEvent, CoreKey, Platform, Renderer};
+use rustnotes_core::{App, CoreEvent, CoreKey, Platform};
+use std::sync::Arc;
 use glow::HasContext as _;
 
 fn main() {
@@ -83,8 +84,7 @@ fn ios_log_init() {
 
 struct Shell {
     app: App,
-    renderer: Option<Renderer>,
-    gl: glow::Context, // raw access for the FBO (renderer has its own handle)
+    gl: glow::Context, // the shell's handle for the FBO (the core painter has its own)
     eagl: Retained<EAGLContext>,
     layer: Retained<CALayer>,
     fb: glow::NativeFramebuffer,
@@ -293,9 +293,7 @@ define_class!(
             _event: Option<&UIEvent>,
         ) {
             with_shell(|s| {
-                s.app
-                    .handle_event(CoreEvent::TouchCancel, &IosPlatform, None)
-                ;
+                s.app.handle_event(CoreEvent::TouchCancel, &IosPlatform);
             });
         }
     }
@@ -312,7 +310,7 @@ define_class!(
             while n > 0 {
                 with_shell(|s| {
                     s.app
-                        .handle_event(CoreEvent::Key(CoreKey::Backspace), &IosPlatform, None)
+                        .handle_event(CoreEvent::Key(CoreKey::Backspace), &IosPlatform)
                 });
                 n -= 1;
             }
@@ -321,7 +319,7 @@ define_class!(
                     continue;
                 }
                 with_shell(|s| {
-                    s.app.handle_event(CoreEvent::Key(CoreKey::Char(c)), &IosPlatform, None)
+                    s.app.handle_event(CoreEvent::Key(CoreKey::Char(c)), &IosPlatform)
                 });
             }
             false // we mirror edits into our own buffer
@@ -331,7 +329,7 @@ define_class!(
         unsafe fn textFieldShouldReturn(&self, _tf: &UITextField) -> bool {
             with_shell(|s| {
                 s.app
-                    .handle_event(CoreEvent::Key(CoreKey::Enter), &IosPlatform, None)
+                    .handle_event(CoreEvent::Key(CoreKey::Enter), &IosPlatform)
             });
             false
         }
@@ -390,10 +388,7 @@ impl RNViewController {
             }
         });
         if let Some(ev) = ev {
-            with_shell(|s| {
-                let r = s.renderer.as_mut();
-                s.app.handle_event(ev, &IosPlatform, r)
-            });
+            with_shell(|s| s.app.handle_event(ev, &IosPlatform));
         }
     }
 
@@ -446,7 +441,6 @@ impl RNViewController {
             SHELL.with(|s| {
                 *s.borrow_mut() = Some(Shell {
                     app,
-                    renderer: None,
                     gl,
                     eagl,
                     layer,
@@ -460,14 +454,13 @@ impl RNViewController {
 
             self.rn_resize(bounds.size.width, bounds.size.height);
 
-            // --- renderer (second GL handle for the core)
+            // --- egui painter (second GL handle for the core)
             with_shell(|s| {
                 let (w, h) = s.surface_size_px();
-                match Renderer::new(make_gl(), w, h) {
-                    Ok(r) => {
-                        nslog(&format!("renderer {w}x{h}, font: {}", r.fonts.source));
-                        s.renderer = Some(r);
-                        s.app.dirty = true;
+                match s.app.attach_gl(Arc::new(make_gl())) {
+                    Ok(()) => {
+                        s.app.set_viewport(w, h);
+                        nslog(&format!("renderer {w}x{h}, font: {}", s.app.font_source()));
                     }
                     Err(e) => nslog(&format!("renderer init failed: {e}")),
                 }
@@ -548,9 +541,7 @@ impl RNViewController {
                     nslog(&format!("FBO incomplete: 0x{status:x}"));
                 }
                 let (w, h) = s.surface_size_px();
-                if let Some(r) = s.renderer.as_mut() {
-                    r.set_size(w, h);
-                }
+                s.app.set_viewport(w, h);
                 s.app.dirty = true;
             });
         }
@@ -569,9 +560,7 @@ impl Shell {
     fn render(&mut self) {
         unsafe {
             self.gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fb));
-            if let Some(r) = self.renderer.as_mut() {
-                self.app.draw(r);
-            }
+            self.app.frame(&IosPlatform);
             let ok = self.eagl.presentRenderbuffer(self.rb.0.get() as usize);
             if !ok {
                 nslog("presentRenderbuffer failed");
