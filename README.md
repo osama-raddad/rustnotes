@@ -45,27 +45,24 @@ with `ANDROID_HOME` in `build.sh` if needed. The NDK linker path and the
 
 ## Build & run
 
-The entry point is [`just`](https://github.com/casey/just) (`brew install just`); run `just` alone to list recipes.
+The whole build lives in the [`justfile`](justfile) — no shell scripts, one
+command surface ([`just`](https://github.com/casey/just), `brew install just`).
+Run `just` alone to list recipes.
 
 ```sh
-just android          # release APK (aapt2/apksigner pipeline, targetSdk 35)
+just android          # release APK (aapt2/zipalign/apksigner pipeline, targetSdk 35)
 just android-install  # + install & launch on a connected device
 just android-x        # release APK via xbuild (auto-signed, targetSdk 33)
 just android-run      # xbuild: deploy + launch + stream logs (Ctrl-C detaches)
 just ios              # simulator .app bundle (ad-hoc signed)
 just ios-run          # + install & launch on the booted simulator
+just ios-device       # device build (needs your signing identity to install)
 just check            # type-check all crates for their real targets
 ```
 
-The recipes wrap the underlying pipelines, which also work directly:
-
-```sh
-./build.sh            # Android APK: cargo -> aapt2 -> zipalign -> apksigner
-./x.sh build --platform android --arch arm64 --release --format apk   # xbuild
-./build-ios.sh aarch64-apple-ios-sim install   # iOS: cargo -> .app -> codesign -> simctl
-```
-
-Device target: `./build-ios.sh aarch64-apple-ios` (needs your signing identity to install).
+Underneath, the recipes drive plain `cargo` plus the platform packagers
+(`aapt2`/`apksigner`, `codesign`/`simctl`, or xbuild) — no Gradle, no Xcode
+project, no shell scripts.
 
 Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
 `xcrun simctl spawn booted log show --predicate 'process == "rustnotes"'`).
