@@ -1,0 +1,17 @@
+[package]
+name = "rustnotes-android"
+version = "0.1.0"
+edition = "2021"
+description = "Android shell for Rust Notes: NativeActivity + EGL + input translation"
+
+[lib]
+name = "rustnotes"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustnotes-core = { path = "../rustnotes-core" }
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.14"
+log.workspace = true
+glow.workspace = true
+jni = "0.22"

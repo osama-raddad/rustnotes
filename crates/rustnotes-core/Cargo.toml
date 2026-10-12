@@ -1,0 +1,11 @@
+[package]
+name = "rustnotes-core"
+version = "0.1.0"
+edition = "2021"
+description = "Platform-agnostic core of Rust Notes: app state, UI layout, GL renderer, storage"
+
+[dependencies]
+log.workspace = true
+glow.workspace = true
+fontdue.workspace = true
+rusqlite.workspace = true

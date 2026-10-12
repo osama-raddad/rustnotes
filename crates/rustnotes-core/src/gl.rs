@@ -1,8 +1,8 @@
 //! Immediate-mode OpenGL ES 3 renderer: colored quads + a fontdue-powered glyph
 //! atlas. One VBO, two tiny shader programs, everything rebuilt per frame (fine
-//! for a UI this small).
+//! for a UI this small). The shell owns the GL context and calls `finish()` +
+//! its own swap/present.
 
-use crate::egl::Egl;
 use crate::text::FontBook;
 use glow::*;
 use std::collections::HashMap;
@@ -65,7 +65,6 @@ const ATLAS_DIM: u32 = 512;
 
 pub struct Renderer {
     gl: Context,
-    egl: Egl,
     solid: NativeProgram,
     solid_res: Option<NativeUniformLocation>,
     text: NativeProgram,
@@ -121,11 +120,10 @@ fn link(gl: &Context, vs: &str, fs: &str) -> Result<NativeProgram, String> {
     }
 }
 
-impl Renderer {    pub fn new(window: *mut std::ffi::c_void) -> Result<Renderer, String> {
-        let egl = Egl::new(window)?;
-        let gl =
-            unsafe { Context::from_loader_function(|n| egl.get_proc_address(n) as *const _) };
-
+impl Renderer {
+    /// Build the renderer on an existing GL ES 3 context (current on the
+    /// calling thread). The shell keeps ownership of the context.
+    pub fn new(gl: Context, w: i32, h: i32) -> Result<Renderer, String> {
         unsafe {
             gl.enable(BLEND);
             gl.blend_func(SRC_ALPHA, ONE_MINUS_SRC_ALPHA);
@@ -163,11 +161,9 @@ impl Renderer {    pub fn new(window: *mut std::ffi::c_void) -> Result<Renderer,
         }
 
         let fonts = FontBook::load()?;
-        let (w, h) = egl.surface_size();
 
         let mut r = Renderer {
             gl,
-            egl,
             solid,
             solid_res,
             text,
@@ -182,23 +178,27 @@ impl Renderer {    pub fn new(window: *mut std::ffi::c_void) -> Result<Renderer,
             solid_verts: Vec::with_capacity(4096),
             text_verts: Vec::with_capacity(16384),
             fonts,
-            w,
-            h,
+            w: w.max(1),
+            h: h.max(1),
         };
         r.resize();
         Ok(r)
     }
 
     pub fn resize(&mut self) {
-        let (w, h) = self.egl.surface_size();
-        if w > 0 && h > 0 {
-            self.w = w;
-            self.h = h;
-        }
         unsafe { self.gl.viewport(0, 0, self.w, self.h) };
     }
 
-    pub fn destroy(&mut self) {
+    pub fn set_size(&mut self, w: i32, h: i32) {
+        if w > 0 && h > 0 && (w != self.w || h != self.h) {
+            self.w = w;
+            self.h = h;
+            unsafe { self.gl.viewport(0, 0, w, h) };
+        }
+    }
+
+    /// Delete GL resources. The shell destroys its own context afterwards.
+    pub fn shutdown(&mut self) {
         unsafe {
             self.gl.delete_program(self.solid);
             self.gl.delete_program(self.text);
@@ -206,7 +206,6 @@ impl Renderer {    pub fn new(window: *mut std::ffi::c_void) -> Result<Renderer,
             self.gl.delete_vertex_array(self.vao);
             self.gl.delete_texture(self.atlas);
         }
-        self.egl.destroy();
     }
 
     // ---- glyph atlas ----------------------------------------------------
@@ -500,6 +499,5 @@ impl Renderer {    pub fn new(window: *mut std::ffi::c_void) -> Result<Renderer,
             }
             gl.bind_vertex_array(None);
         }
-        self.egl.swap();
     }
 }

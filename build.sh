@@ -25,7 +25,7 @@ echo "==> rustup target"
 rustup target add "$TARGET"
 
 echo "==> cargo build ($TARGET, release)"
-cargo build --target "$TARGET" --release
+cargo build -p rustnotes-android --target "$TARGET" --release
 
 echo "==> package APK"
 rm -rf build

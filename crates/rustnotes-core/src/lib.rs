@@ -1,17 +1,14 @@
-//! Rust Notes — a pure-Rust Android app. No Kotlin, no Java, no Gradle.
-//!
-//! android-activity (NativeActivity) drives the lifecycle; we render the UI
-//! with OpenGL ES 3 (see gl.rs) and store notes in SQLite (see notes.rs).
+//! Rust Notes core — platform-agnostic app state machine, input handling and
+//! UI drawing. Shells (android / ios) own the window, GL context and event
+//! translation, and drive this code through [`CoreEvent`]s.
 
-mod egl;
-mod gl;
-mod notes;
-mod text;
-mod util;
+pub mod gl;
+pub mod notes;
+pub mod text;
+pub mod util;
 
-use android_activity::input::{InputEvent, KeyAction, MotionAction};
-use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
-use gl::{Color, Renderer};
+pub use gl::{Color, Renderer};
+
 use notes::{Note, NotesDb};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -26,7 +23,34 @@ const DANGER: Color = [0.83, 0.19, 0.19, 1.0];
 const DANGER_BG: Color = [0.985, 0.91, 0.91, 1.0];
 const PLACEHOLDER: Color = [0.62, 0.64, 0.69, 1.0];
 
-type Rect = (f32, f32, f32, f32);
+/// Services only the platform shell can provide.
+pub trait Platform {
+    fn show_keyboard(&self);
+    fn hide_keyboard(&self);
+}
+
+/// Neutral key events (shells translate from their own input systems).
+pub enum CoreKey {
+    Char(char),
+    Enter,
+    Backspace,
+    Left,
+    Right,
+    Up,
+    Down,
+    Back,
+}
+
+pub enum CoreEvent {
+    /// Coordinates are in pixels, origin top-left, y down.
+    TouchDown { x: f32, y: f32 },
+    TouchMove { x: f32, y: f32 },
+    TouchUp { x: f32, y: f32 },
+    TouchCancel,
+    Key(CoreKey),
+}
+
+pub type Rect = (f32, f32, f32, f32);
 
 fn hit(rect: Option<Rect>, x: f32, y: f32) -> bool {
     matches!(rect, Some((rx, ry, rw, rh)) if x >= rx && x < rx + rw && y >= ry && y < ry + rh)
@@ -43,7 +67,6 @@ enum Screen {
 }
 
 struct TouchState {
-    down: (f32, f32),
     last: (f32, f32),
     moved: f32,
     dragging: bool,
@@ -58,7 +81,7 @@ struct EditorGeom {
     px: f32,
 }
 
-struct App {
+pub struct App {
     db: NotesDb,
     screen: Screen,
     notes: Vec<Note>,
@@ -82,23 +105,21 @@ struct App {
     touch: Option<TouchState>,
     blink_on: bool,
     last_blink: Instant,
-    dirty: bool,
+    pub dirty: bool,
     scale: f32,
     vw: f32,
     vh: f32,
-    /// Top content inset (status bar height) — all UI is drawn below this.
+    /// Top content inset (status bar / notch) in px; UI is drawn below this.
     content_top: f32,
-    got_insets: bool,
+    /// Bottom content inset (keyboard / home indicator) in px; 0 = use full height.
+    content_bottom: f32,
 }
 
 impl App {
-    fn new(app: &AndroidApp) -> App {
-        let dir: PathBuf = app
-            .internal_data_path()
-            .unwrap_or_else(|| PathBuf::from("/data/local/tmp"));
-        let db = NotesDb::open(&dir).expect("open notes database");
+    pub fn new(data_dir: PathBuf) -> App {
+        let db = NotesDb::open(&data_dir).expect("open notes database");
         let notes = db.list();
-        log::info!("loaded {} notes from {}", notes.len(), dir.display());
+        log::info!("loaded {} notes from {}", notes.len(), data_dir.display());
         App {
             db,
             screen: Screen::List,
@@ -124,13 +145,35 @@ impl App {
             vw: 1080.0,
             vh: 2280.0,
             content_top: 0.0,
-            got_insets: false,
+            content_bottom: 0.0,
+        }
+    }
+
+    pub fn set_content_top(&mut self, px: f32) {
+        if px != self.content_top {
+            self.content_top = px;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_content_bottom(&mut self, px: f32) {
+        if px != self.content_bottom {
+            self.content_bottom = px;
+            self.dirty = true;
+        }
+    }
+
+    fn bottom(&self) -> f32 {
+        if self.content_bottom > 0.0 {
+            self.content_bottom.min(self.vh)
+        } else {
+            self.vh
         }
     }
 
     // ---- editor ----------------------------------------------------------
 
-    fn open_editor(&mut self, id: i64, app: &AndroidApp) {
+    fn open_editor(&mut self, id: i64, plat: &dyn Platform) {
         log::info!("editor: open id={id}");
         self.edit_id = id;
         self.buffer = if id == 0 {
@@ -147,11 +190,11 @@ impl App {
         self.screen = Screen::Editor;
         self.blink_on = true;
         self.last_blink = Instant::now();
-        app.show_soft_input(false);
+        plat.show_keyboard();
         self.dirty = true;
     }
 
-    fn close_editor(&mut self, app: &AndroidApp) {
+    fn close_editor(&mut self, plat: &dyn Platform) {
         let empty = self.buffer.trim().is_empty();
         log::info!("editor: close id={} empty={}", self.edit_id, empty);
         if self.edit_id == 0 {
@@ -176,12 +219,12 @@ impl App {
         self.notes = self.db.list();
         self.screen = Screen::List;
         self.list_scroll = 0.0;
-        app.hide_soft_input(false);
+        plat.hide_keyboard();
         self.dirty = true;
     }
 
-    /// Save without leaving the editor (used on Pause/Destroy).
-    fn save_current(&mut self) {
+    /// Save without leaving the editor (used on app pause).
+    pub fn save_current(&mut self) {
         if self.screen != Screen::Editor || self.buffer.trim().is_empty() {
             return;
         }
@@ -226,133 +269,118 @@ impl App {
 
     // ---- input ------------------------------------------------------------
 
-    fn handle_input(
+    /// Handle one neutral event. Returns whether the shell should consider it
+    /// consumed (used e.g. for Android's back key).
+    pub fn handle_event(
         &mut self,
-        ev: &InputEvent,
-        app: &AndroidApp,
+        ev: CoreEvent,
+        plat: &dyn Platform,
         r: Option<&mut Renderer>,
-    ) -> InputStatus {
+    ) -> bool {
         match ev {
-            InputEvent::MotionEvent(m) => {
-                let action = m.action();
-                let p = m.pointer_at_index(0);
-                let (x, y) = (p.x(), p.y());
-                match action {
-                    MotionAction::Down => {
-                        self.touch = Some(TouchState {
-                            down: (x, y),
-                            last: (x, y),
-                            moved: 0.0,
-                            dragging: false,
-                        });
-                        InputStatus::Handled
-                    }
-                    MotionAction::Move => {
-                        if let Some(t) = self.touch.as_mut() {
-                            let dx = x - t.last.0;
-                            let dy = y - t.last.1;
-                            t.moved += dx.abs() + dy.abs();
-                            if t.moved > 16.0 * self.scale {
-                                t.dragging = true;
-                            }
-                            t.last = (x, y);
-                            if t.dragging {
-                                match self.screen {
-                                    Screen::List => {
-                                        self.list_scroll -= dy;
-                                        let max = (self.list_content_h - self.vh).max(0.0);
-                                        self.list_scroll = self.list_scroll.clamp(0.0, max);
-                                    }
-                                    Screen::Editor => {
-                                        self.edit_scroll = (self.edit_scroll - dy).max(0.0);
-                                    }
-                                }
-                                self.dirty = true;
-                            }
-                        }
-                        InputStatus::Handled
-                    }
-                    MotionAction::Up | MotionAction::Cancel => {
-                        if let Some(t) = self.touch.take() {
-                            if action == MotionAction::Up && !t.dragging {
-                                self.handle_tap(t.down.0, t.down.1, app, r);
-                            }
-                        }
-                        InputStatus::Handled
-                    }
-                    _ => InputStatus::Unhandled,
-                }
+            CoreEvent::TouchDown { x, y } => {
+                self.touch = Some(TouchState {
+                    last: (x, y),
+                    moved: 0.0,
+                    dragging: false,
+                });
+                true
             }
-            InputEvent::KeyEvent(k) => {
-                log::debug!("key event: {k:?}");
-                if k.action() != KeyAction::Down {
-                    return InputStatus::Unhandled;
-                }
-                let code: u32 = k.key_code().into();
-                let meta = k.meta_state().0;
-
-                if self.screen == Screen::Editor {
-                    match code {
-                        4 => {
-                            // BACK
-                            self.close_editor(app);
-                            InputStatus::Handled
-                        }
-                        66 => {
-                            // ENTER
-                            self.insert_char('\n');
-                            InputStatus::Handled
-                        }
-                        67 => {
-                            // DEL / backspace
-                            self.backspace();
-                            InputStatus::Handled
-                        }
-                        21 => {
-                            self.move_cursor(-1);
-                            InputStatus::Handled
-                        }
-                        22 => {
-                            self.move_cursor(1);
-                            InputStatus::Handled
-                        }
-                        19 => {
-                            self.move_cursor_vertical(-1, r);
-                            InputStatus::Handled
-                        }
-                        20 => {
-                            self.move_cursor_vertical(1, r);
-                            InputStatus::Handled
-                        }
-                        _ => match key_to_char(code, meta) {
-                            Some(c) => {
-                                self.insert_char(c);
-                                InputStatus::Handled
+            CoreEvent::TouchMove { x, y } => {
+                if let Some(t) = self.touch.as_mut() {
+                    let dx = x - t.last.0;
+                    let dy = y - t.last.1;
+                    t.moved += dx.abs() + dy.abs();
+                    if t.moved > 16.0 * self.scale {
+                        t.dragging = true;
+                    }
+                    if t.dragging {
+                        match self.screen {
+                            Screen::List => {
+                                self.list_scroll -= dy;
+                                let max = (self.list_content_h - self.vh).max(0.0);
+                                self.list_scroll = self.list_scroll.clamp(0.0, max);
                             }
-                            None => InputStatus::Unhandled,
-                        },
-                    }
-                } else {
-                    match code {
-                        66 => {
-                            self.open_editor(0, app); // ENTER: quick new note
-                            InputStatus::Handled
+                            Screen::Editor => {
+                                self.edit_scroll = (self.edit_scroll - dy).max(0.0);
+                            }
                         }
-                        _ => InputStatus::Unhandled,
+                        self.dirty = true;
+                    }
+                    t.last = (x, y);
+                }
+                true
+            }
+            CoreEvent::TouchUp { x, y } => {
+                if let Some(t) = self.touch.take() {
+                    if !t.dragging {
+                        self.handle_tap(x, y, plat, r);
                     }
                 }
+                true
             }
-            _ => InputStatus::Unhandled,
+            CoreEvent::TouchCancel => {
+                self.touch.take();
+                true
+            }
+            CoreEvent::Key(k) => self.handle_key(k, plat, r),
         }
     }
 
-    fn handle_tap(&mut self, x: f32, y: f32, app: &AndroidApp, r: Option<&mut Renderer>) {
+    fn handle_key(&mut self, k: CoreKey, plat: &dyn Platform, r: Option<&mut Renderer>) -> bool {
+        if self.screen == Screen::Editor {
+            match k {
+                CoreKey::Back => {
+                    self.close_editor(plat);
+                    true
+                }
+                CoreKey::Enter => {
+                    self.insert_char('\n');
+                    true
+                }
+                CoreKey::Backspace => {
+                    self.backspace();
+                    true
+                }
+                CoreKey::Left => {
+                    self.move_cursor(-1);
+                    true
+                }
+                CoreKey::Right => {
+                    self.move_cursor(1);
+                    true
+                }
+                CoreKey::Up => {
+                    self.move_cursor_vertical(-1, r);
+                    true
+                }
+                CoreKey::Down => {
+                    self.move_cursor_vertical(1, r);
+                    true
+                }
+                CoreKey::Char(c) => {
+                    self.insert_char(c);
+                    true
+                }
+            }
+        } else {
+            match k {
+                CoreKey::Enter => {
+                    self.open_editor(0, plat); // quick new note
+                    true
+                }
+                _ => false,
+            }
+        }
+    }
+
+    fn handle_tap(&mut self, x: f32, y: f32, plat: &dyn Platform, r: Option<&mut Renderer>) {
         self.dirty = true;
         match self.screen {
             Screen::List => {
                 if hit(self.hit_add, x, y) {
                     self.armed_delete = None;
-                    self.open_editor(0, app);
+                    self.open_editor(0, plat);
                     return;
                 }
                 let dels: Vec<(Rect, usize)> = self.hit_del.clone();
@@ -360,9 +388,7 @@ impl App {
                     if in_rect(rect, x, y) {
                         // Two taps within 2s on ✕ confirms the delete.
                         match self.armed_delete.take() {
-                            Some((i, t))
-                                if i == *idx && t.elapsed() < Duration::from_secs(2) =>
-                            {
+                            Some((i, t)) if i == *idx && t.elapsed() < Duration::from_secs(2) => {
                                 if let Some(n) = self.notes.get(*idx) {
                                     self.db.delete(n.id);
                                 }
@@ -379,7 +405,7 @@ impl App {
                         let id = self.notes.get(*idx).map(|n| n.id);
                         if let Some(id) = id {
                             self.armed_delete = None;
-                            self.open_editor(id, app);
+                            self.open_editor(id, plat);
                         }
                         return;
                     }
@@ -387,14 +413,14 @@ impl App {
             }
             Screen::Editor => {
                 if hit(self.hit_back, x, y) {
-                    self.close_editor(app);
+                    self.close_editor(plat);
                     return;
                 }
                 if hit(self.hit_editor, x, y) {
                     if let Some(r) = r {
                         self.place_cursor(x, y, r);
                     }
-                    app.show_soft_input(false);
+                    plat.show_keyboard();
                 }
             }
         }
@@ -425,7 +451,8 @@ impl App {
         self.after_edit();
     }
 
-    fn tick(&mut self) {
+    /// Advance animations (cursor blink, armed-delete expiry). Call ~10Hz.
+    pub fn tick(&mut self) {
         if self.screen == Screen::Editor && self.last_blink.elapsed() >= Duration::from_millis(530)
         {
             self.blink_on = !self.blink_on;
@@ -442,7 +469,7 @@ impl App {
 
     // ---- rendering --------------------------------------------------------
 
-    fn draw(&mut self, r: &mut Renderer) {
+    pub fn draw(&mut self, r: &mut Renderer) {
         self.dirty = false;
         let w = r.w as f32;
         let h = r.h as f32;
@@ -490,7 +517,11 @@ impl App {
 
         let base = top + header_h / 2.0 + r.fonts.ascent(title_px) / 2.0;
         r.text_str(pad, base, "Notes", title_px, TEXT_DARK);
-        let count = format!("{} notes", self.notes.len());
+        let count = match self.notes.len() {
+            0 => "no notes".to_string(),
+            1 => "1 note".to_string(),
+            n => format!("{n} notes"),
+        };
         let tw = r.text_width("Notes", title_px);
         r.text_str(pad + tw + 12.0 * s, base, &count, date_px, TEXT_GRAY);
 
@@ -505,9 +536,10 @@ impl App {
         r.line(cx, cy - arm, cx, cy + arm, 2.5 * s, CARD_BG);
         self.hit_add = Some((bx - 8.0 * s, by - 8.0 * s, btn_d + 16.0 * s, btn_d + 16.0 * s));
 
+        let bottom = self.bottom();
         let mut y = top + header_h + 12.0 * s - self.list_scroll;
         for (idx, note) in self.notes.iter().enumerate() {
-            if y + card_h > top + header_h && y < h {
+            if y + card_h > top + header_h && y < bottom {
                 r.fill_round_rect(card_m, y, w - card_m * 2.0, card_h, 10.0 * s, CARD_BG);
 
                 // delete button (right side)
@@ -565,7 +597,7 @@ impl App {
             let t2 = "Tap + to write one";
             let p1 = (18.0 * s).round();
             let p2 = (14.0 * s).round();
-            let mid = top + (h - top) * 0.4;
+            let mid = top + (bottom - top) * 0.4;
             let w1 = r.text_width(t1, p1);
             let w2 = r.text_width(t2, p2);
             r.text_str((w - w1) / 2.0, mid, t1, p1, TEXT_GRAY);
@@ -601,14 +633,15 @@ impl App {
         let chars: Vec<char> = self.buffer.chars().collect();
         let lines = text::layout_text(&r.fonts, &self.buffer, px, max_w);
         let content_h = lines.len() as f32 * line_h;
-        let area_h = (h - y0).max(line_h);
+        let bottom = self.bottom();
+        let area_h = (bottom - y0).max(line_h);
 
         // keep cursor on screen
         let (cx_off, cli) = text::cursor_geometry(&r.fonts, &chars, &lines, self.cursor, px);
         let cur_top = y0 + cli as f32 * line_h - self.edit_scroll;
         let cur_bottom = cur_top + line_h;
-        if cur_bottom > h {
-            self.edit_scroll += cur_bottom - h;
+        if cur_bottom > bottom {
+            self.edit_scroll += cur_bottom - bottom;
         }
         if cur_top < y0 {
             self.edit_scroll -= y0 - cur_top;
@@ -633,7 +666,7 @@ impl App {
             if ly + line_h < y0 {
                 continue;
             }
-            if ly > h {
+            if ly > bottom {
                 break;
             }
             let baseline = ly + r.fonts.ascent(px);
@@ -643,237 +676,6 @@ impl App {
             let cy0 = y0 + cli as f32 * line_h - self.edit_scroll;
             r.fill_rect(x0 + cx_off, cy0 + line_h * 0.12, 2.0 * s, line_h * 0.76, ACCENT);
         }
-        self.hit_editor = Some((0.0, top + header_h, w, h - top - header_h));
+        self.hit_editor = Some((0.0, top + header_h, w, bottom - top - header_h));
     }
-}
-
-/// Android AKEYCODE_* values -> ASCII char, honoring shift. Key events are how
-/// NativeActivity delivers soft-keyboard input (English/basic latin).
-fn key_to_char(code: u32, meta: u32) -> Option<char> {
-    let shift = meta & (0x01 | 0x40 | 0x80) != 0; // SHIFT_ON | SHIFT_LEFT_ON | SHIFT_RIGHT_ON
-    let c = match code {
-        29..=54 => {
-            let letter = (b'a' + (code - 29) as u8) as char;
-            if shift {
-                letter.to_ascii_uppercase()
-            } else {
-                letter
-            }
-        }
-        7..=16 => {
-            let d = (b'0' + (code - 7) as u8) as char;
-            if shift {
-                match d {
-                    '1' => '!',
-                    '2' => '@',
-                    '3' => '#',
-                    '4' => '$',
-                    '5' => '%',
-                    '6' => '^',
-                    '7' => '&',
-                    '8' => '*',
-                    '9' => '(',
-                    _ => ')',
-                }
-            } else {
-                d
-            }
-        }
-        62 => ' ',
-        55 => if shift { '<' } else { ',' },
-        56 => if shift { '>' } else { '.' },
-        68 => if shift { '~' } else { '`' },
-        69 => if shift { '_' } else { '-' },
-        70 => if shift { '+' } else { '=' },
-        71 => if shift { '{' } else { '[' },
-        72 => if shift { '}' } else { ']' },
-        73 => if shift { '|' } else { '\\' },
-        74 => if shift { ':' } else { ';' },
-        75 => if shift { '"' } else { '\'' },
-        76 => if shift { '?' } else { '/' },
-        17 => '*',
-        18 => '#',
-        77 => '@',
-        81 => '+',
-        _ => return None,
-    };
-    Some(c)
-}
-
-/// Ask the Activity (on the Java main thread) for the system-bar top inset.
-/// NativeActivity lays out under the status bar, so we must offset our UI
-/// ourselves. Returns 0 if anything goes wrong.
-fn query_top_inset(app: &AndroidApp) -> f32 {
-    let (tx, rx) = std::sync::mpsc::channel::<i32>();
-    let app2 = app.clone();
-    app.run_on_java_main_thread(Box::new(move || {
-        let vm = unsafe { jni::JavaVM::from_raw(app2.vm_as_ptr().cast()) };
-        let res = vm.attach_current_thread(|env| -> jni::errors::Result<i32> {
-            // Borrow the unowned global ref; forget it so it isn't deleted.
-            let activity = unsafe {
-                jni::objects::JObject::from_raw(
-                    env,
-                    app2.activity_as_ptr() as jni::sys::jobject,
-                )
-            };
-            let r = (|| -> jni::errors::Result<i32> {
-                let window = env
-                    .call_method(
-                        &activity,
-                        jni::jni_str!("getWindow"),
-                        jni::jni_sig!("()Landroid/view/Window;"),
-                        &[],
-                    )?
-                    .l()?;
-                let decor = env
-                    .call_method(
-                        &window,
-                        jni::jni_str!("getDecorView"),
-                        jni::jni_sig!("()Landroid/view/View;"),
-                        &[],
-                    )?
-                    .l()?;
-                let insets = env
-                    .call_method(
-                        &decor,
-                        jni::jni_str!("getRootWindowInsets"),
-                        jni::jni_sig!("()Landroid/view/WindowInsets;"),
-                        &[],
-                    )?
-                    .l()?;
-                let tclass = env.find_class(jni::jni_str!("android/view/WindowInsets$Type"))?;
-                let sysbars = env
-                    .call_static_method(
-                        &tclass,
-                        jni::jni_str!("systemBars"),
-                        jni::jni_sig!("()I"),
-                        &[],
-                    )?
-                    .i()?;
-                let bars = env
-                    .call_method(
-                        &insets,
-                        jni::jni_str!("getInsets"),
-                        jni::jni_sig!("(I)Landroid/graphics/Insets;"),
-                        &[jni::JValue::from(sysbars)],
-                    )?
-                    .l()?;
-                Ok(env
-                    .get_field(&bars, jni::jni_str!("top"), jni::jni_sig!("I"))?
-                    .i()?)
-            })();
-            std::mem::forget(activity);
-            r
-        });
-        let _ = tx.send(res.unwrap_or(0));
-    }));
-    rx.recv().map(|v| v.max(0) as f32).unwrap_or(0.0)
-}
-
-#[no_mangle]
-fn android_main(app: AndroidApp) {
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_tag("rustnotes")
-            .with_max_level(log::LevelFilter::Info),
-    );
-    std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
-
-    let mut state = App::new(&app);
-    let mut renderer: Option<Renderer> = None;
-    let mut destroyed = false;
-    let mut input_pending = false;
-
-    while !destroyed {
-        app.poll_events(Some(Duration::from_millis(120)), |event| match event {
-            PollEvent::Main(MainEvent::InitWindow { .. }) => {
-                let rect = app.content_rect();
-                log::info!("content_rect: {rect:?}");
-                state.content_top = rect.top.max(0) as f32;
-                if let Some(win) = app.native_window() {
-                    match Renderer::new(win.ptr().as_ptr() as *mut std::ffi::c_void) {
-                        Ok(mut r) => {
-                            r.resize();
-                            log::info!(
-                                "renderer {}x{}, font: {}",
-                                r.w,
-                                r.h,
-                                r.fonts.source
-                            );
-                            renderer = Some(r);
-                            state.dirty = true;
-                        }
-                        Err(e) => log::error!("renderer init failed: {e}"),
-                    }
-                }
-            }
-            PollEvent::Main(MainEvent::TerminateWindow { .. }) => {
-                if let Some(mut r) = renderer.take() {
-                    r.destroy();
-                }
-            }
-            PollEvent::Main(MainEvent::WindowResized { .. })
-            | PollEvent::Main(MainEvent::ContentRectChanged { .. }) => {
-                let rect = app.content_rect();
-                let new_top = rect.top.max(0) as f32;
-                if (new_top - state.content_top).abs() > 0.5 {
-                    log::info!("content top inset: {new_top} (rect {rect:?})");
-                }
-                state.content_top = new_top;
-                if let Some(r) = renderer.as_mut() {
-                    r.resize();
-                }
-                state.dirty = true;
-            }
-            PollEvent::Main(MainEvent::RedrawNeeded { .. }) => {
-                if let Some(r) = renderer.as_mut() {
-                    r.resize();
-                    state.draw(r);
-                }
-            }
-            PollEvent::Main(MainEvent::GainedFocus) => {
-                if !state.got_insets {
-                    state.got_insets = true;
-                    let top = query_top_inset(&app);
-                    log::info!("system bar top inset: {top}");
-                    state.content_top = top;
-                    state.dirty = true;
-                }
-            }
-            PollEvent::Main(MainEvent::InputAvailable) => input_pending = true,
-            PollEvent::Main(MainEvent::Pause) => {
-                state.save_current();
-                state.dirty = true;
-            }
-            PollEvent::Main(MainEvent::Resume { .. }) => state.dirty = true,
-            PollEvent::Main(MainEvent::Destroy) => destroyed = true,
-            _ => {}
-        });
-
-        if destroyed {
-            break;
-        }
-
-        if input_pending {
-            input_pending = false;
-            if let Ok(mut iter) = app.input_events_iter() {
-                loop {
-                    let more = iter.next(|ev| state.handle_input(ev, &app, renderer.as_mut()));
-                    if !more {
-                        break;
-                    }
-                }
-            }
-        }
-
-        state.tick();
-        if state.dirty {
-            if let Some(r) = renderer.as_mut() {
-                state.draw(r);
-            }
-        }
-    }
-
-    state.save_current();
-    log::info!("android_main exiting");
 }

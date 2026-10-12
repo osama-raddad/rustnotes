@@ -1,0 +1,47 @@
+[package]
+name = "rustnotes-ios"
+version = "0.1.0"
+edition = "2021"
+description = "iOS shell for Rust Notes: 100% Rust via objc2 (no Swift, no ObjC files)"
+
+[[bin]]
+name = "rustnotes"
+path = "src/main.rs"
+
+[dependencies]
+rustnotes-core = { path = "../rustnotes-core" }
+log.workspace = true
+glow.workspace = true
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSDictionary",
+    "NSObject",
+    "NSValue",
+    "NSNotification",
+    "NSRunLoop",
+    "NSTimer",
+    "NSProcessInfo",
+] }
+objc2-quartz-core = { version = "0.3", features = [
+    "CALayer",
+    "CADisplayLink",
+    "CAEAGLLayer",
+    "CAMediaTiming",
+] }
+objc2-ui-kit = { version = "0.3", features = [
+    "UIApplication",
+    "UIWindow",
+    "UIScreen",
+    "UIView",
+    "UIViewController",
+    "UIResponder",
+    "UITouch",
+    "UIEvent",
+    "UITextField",
+    "UIInterface",
+    "UIDevice",
+    "UIColor",
+    "UIGeometry",
+] }
