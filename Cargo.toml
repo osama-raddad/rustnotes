@@ -1,0 +1,22 @@
+[package]
+name = "rustnotes"
+version = "0.1.0"
+edition = "2021"
+description = "A pure-Rust Android note-taking app (no Kotlin, no Gradle, no JNI)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.14"
+log = "0.4"
+glow = "0.14"
+fontdue = "0.9"
+rusqlite = { version = "0.32", features = ["bundled"] }
+jni = "0.22"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

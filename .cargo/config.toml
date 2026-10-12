@@ -1,0 +1,6 @@
+# Linker for the Android target (NDK r27, min API 24).
+# CC/AR for C dependencies (rusqlite bundled) are exported by build.sh.
+[target.aarch64-linux-android]
+linker = "/Users/osamaraddad/Library/Android/sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
+# 16 KB page alignment (required for Pixel-class 16 KB kernel devices)
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
