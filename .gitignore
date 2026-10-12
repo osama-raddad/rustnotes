@@ -8,3 +8,4 @@ debug.keystore
 !.idea/rustnotes.iml
 !.idea/jsonSchemas.xml
 !.idea/schemas/
+/.claude/worktrees/

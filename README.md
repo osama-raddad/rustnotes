@@ -7,6 +7,10 @@ layer over the OS windowing/input APIs.
 
 > Session log: [docs/worklog-2026-10-12.md](docs/worklog-2026-10-12.md) — how
 > this was built and debugged in one day, with every bug and measurement.
+>
+> Renderer research: [docs/rendering-engine-research-2026-10-12.md](docs/rendering-engine-research-2026-10-12.md)
+> — open-source engines evaluated to replace the hand-rolled GL renderer
+> (recommendation: egui + egui_glow; parley + swash for a text-only swap).
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
