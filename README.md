@@ -1,21 +1,23 @@
 # Rust Notes
 
-A minimal note-taking app for Android, written **entirely in Rust** — no Kotlin,
-no Java, no Gradle. The app is a `cdylib` loaded by the framework's
-`android.app.NativeActivity`; it creates its own OpenGL ES 3 context, renders
-its own UI, and stores notes in SQLite.
+A minimal note-taking app for Android **and iOS**, written **entirely in Rust** —
+no Kotlin, no Java, no Swift, no Objective-C source, no Gradle, no Xcode
+project. One shared core drives both platforms; each platform shell is a thin
+layer over the OS windowing/input APIs.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Android                                                     │
-│  └─ NativeActivity (framework, no app Java code)            │
-│      └─ librustnotes.so                                     │
-│          ├─ android-activity  lifecycle + input (NativeActivity glue) │
-│          ├─ EGL (FFI)       GLES3 context on the ANativeWindow       │
-│          ├─ glow            shaders: colored quads + glyph atlas     │
-│          ├─ fontdue         Roboto loaded from /system/fonts at runtime │
-│          └─ rusqlite        notes.db in the app's internal dir (bundled SQLite) │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                        rustnotes-core (shared)                     │
+│  App state machine · UI layout/drawing · word wrap · SQLite notes  │
+├────────────────────────────────┬───────────────────────────────────┤
+│ Android shell                  │ iOS shell (100% Rust, objc2)      │
+│  android-activity/NativeActivity│  UIApplicationMain from fn main() │
+│  hand-rolled EGL + GLES3        │  define_class! app delegate + VC  │
+│  key/motion translation         │  CAEAGLLayer + EAGL (typed FFI)   │
+│  insets via async JNI query     │  touches + hidden UITextField     │
+│  no dex, aapt2-packaged APK     │  CADisplayLink/NSTimer frame loop │
+│                                 │  script-built .app, ad-hoc signed│
+└────────────────────────────────┴───────────────────────────────────┘
 ```
 
 ## Features
@@ -25,7 +27,7 @@ its own UI, and stores notes in SQLite.
 - Word-wrapped plain-text editor with blinking cursor, tap-to-place-cursor
 - Scrolling list and editor, auto-scroll to keep the cursor visible
 - Notes persisted in SQLite across restarts (autosave on pause/destroy)
-- Correct status-bar inset handling (queried once via JNI)
+- Correct status-bar/safe-area and keyboard inset handling on both platforms
 
 ## Prerequisites
 
@@ -40,24 +42,26 @@ with `ANDROID_HOME` in `build.sh` if needed. The NDK linker path and the
 
 ## Build & run
 
+**Android** (arm64-v8a, minSdk 24, targetSdk 35):
+
 ```sh
-./build.sh            # -> rustnotes.apk (arm64-v8a, minSdk 24, targetSdk 35)
+./build.sh            # -> rustnotes.apk
 ./build.sh install    # build + install + launch on a connected device
 ```
 
-The script:
-
-1. Cross-compiles the `cdylib` with the NDK clang as linker (also builds the
-   bundled SQLite C code via `cc`).
-2. Packages the manifest + `lib/arm64-v8a/librustnotes.so` with `aapt2`
-   (`android:hasCode="false"` — the APK contains no dex at all).
-3. `zipalign`s and signs with a generated local `debug.keystore`.
-
-Logs go to logcat under the tag `rustnotes`:
+**iOS** (simulator by default; device target builds but needs your signing identity):
 
 ```sh
-adb logcat -s rustnotes
+./build-ios.sh                        # -> "build/ios/Rust Notes.app" (ad-hoc signed)
+./build-ios.sh aarch64-apple-ios-sim install   # + install & launch on booted simulator
 ```
+
+Both scripts cross-compile with the platform toolchains (NDK clang / Xcode
+clang), package the app with `aapt2`/`codesign` (no Gradle, no .xcodeproj),
+and can install + launch on a connected emulator/simulator.
+
+Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
+`xcrun simctl spawn booted log show --predicate 'process == "rustnotes"'`).
 
 ## Testing notes (emulator)
 
@@ -82,11 +86,9 @@ adb logcat -s rustnotes
 
 | Path | Purpose |
 |---|---|
-| `src/lib.rs` | App state machine, event loop, input handling, UI layout/drawing |
-| `src/egl.rs` | Hand-rolled EGL 1.4 FFI (context/surface management) |
-| `src/gl.rs` | Immediate-mode GLES3 renderer + fontdue glyph atlas |
-| `src/text.rs` | Font loading, measurement, word wrap, cursor mapping |
-| `src/notes.rs` | SQLite persistence, note model, title/snippet helpers |
-| `src/util.rs` | Epoch → "Oct 12" date formatting (no chrono) |
+| `crates/rustnotes-core/` | Shared: App state machine, neutral events, UI drawing, renderer, storage |
+| `crates/rustnotes-android/` | Android shell: NativeActivity, EGL FFI, input translation, JNI insets |
+| `crates/rustnotes-ios/` | iOS shell: objc2 classes, EAGL+CAEAGLLayer, keyboard, frame loop |
 | `AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs |
-| `build.sh` | cargo → aapt2 → zipalign → apksigner pipeline |
+| `ios/Info.plist` | App bundle manifest (hand-assembled .app) |
+| `build.sh` / `build-ios.sh` | cargo → package pipelines for each platform |

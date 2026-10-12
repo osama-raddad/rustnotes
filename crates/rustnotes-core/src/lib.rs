@@ -163,9 +163,21 @@ impl App {
         }
     }
 
+    /// Debug introspection for shells: (vw, vh, top_inset, bottom_inset, notes).
+    pub fn debug_layout(&self) -> (f32, f32, f32, f32, usize) {
+        (
+            self.vw,
+            self.vh,
+            self.content_top,
+            self.content_bottom,
+            self.notes.len(),
+        )
+    }
+
+    /// The y coordinate of the usable bottom edge (viewport minus insets).
     fn bottom(&self) -> f32 {
         if self.content_bottom > 0.0 {
-            self.content_bottom.min(self.vh)
+            (self.vh - self.content_bottom).max(0.0)
         } else {
             self.vh
         }
@@ -508,7 +520,7 @@ impl App {
         // Pre-compute content height and clamp scroll before drawing.
         self.list_content_h =
             top + header_h + 12.0 * s + self.notes.len() as f32 * row_h + 16.0 * s;
-        let max_scroll = (self.list_content_h - self.vh).max(0.0);
+        let max_scroll = (self.list_content_h - self.bottom()).max(0.0);
         self.list_scroll = self.list_scroll.clamp(0.0, max_scroll);
 
         r.fill_rect(0.0, 0.0, w, h, gl::SCREEN_BG);

@@ -4,10 +4,11 @@
 use fontdue::{Font, FontSettings, Metrics};
 
 const FONT_CANDIDATES: &[&str] = &[
-    "/system/fonts/Roboto-Regular.ttf",
-    "/system/fonts/NotoSans-Regular.ttf",
-    "/system/fonts/DroidSans.ttf",
-    "/system/fonts/RobotoStatic-Regular.ttf",
+    "/system/fonts/Roboto-Regular.ttf",    // Android
+    "/system/fonts/NotoSans-Regular.ttf",  // Android fallback
+    "/System/Library/Fonts/SFNS.ttf",      // iOS: San Francisco
+    "/System/Library/Fonts/Geneva.ttf",    // iOS fallback
+    "/System/Library/Fonts/DroidSans.ttf", // Android last resort
 ];
 
 pub struct FontBook {
