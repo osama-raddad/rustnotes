@@ -332,6 +332,15 @@ impl App {
     /// consumed (used e.g. for Android's back key).
     pub fn handle_event(&mut self, ev: CoreEvent, plat: &dyn Platform) -> bool {
         self.dirty = true;
+        let handled = self.handle_event_inner(ev, plat);
+        if self.painter.is_none() {
+            // No frame will drain these until a GL context is attached.
+            self.events.clear();
+        }
+        handled
+    }
+
+    fn handle_event_inner(&mut self, ev: CoreEvent, plat: &dyn Platform) -> bool {
         match ev {
             CoreEvent::TouchDown { x, y } => {
                 let p = self.pos(x, y);
@@ -751,6 +760,13 @@ impl App {
 
         let id = Id::new(EDITOR_ID);
         if std::mem::take(&mut self.focus_editor) {
+            // The widget id is shared by every note, so replace the stored
+            // cursor/selection with "caret at the end of this note".
+            let mut st = egui::text_edit::TextEditState::default();
+            let end = egui::text::CCursor::new(self.buffer.chars().count());
+            st.cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(end)));
+            st.store(ui.ctx(), id);
             ui.memory_mut(|m| m.request_focus(id));
         }
         let body_h = ui.available_height();
