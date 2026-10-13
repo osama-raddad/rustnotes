@@ -142,24 +142,39 @@ pub struct App {
     pub dirty: bool,
 }
 
-fn load_fonts() -> Result<(FontDefinitions, String), String> {
+/// egui font definitions naming a single installed font "system", used for
+/// every family. `source` is the diagnostic origin (path or platform API).
+fn font_defs_from(bytes: Vec<u8>, source: &str) -> (FontDefinitions, String) {
+    let mut defs = FontDefinitions::empty();
+    defs.font_data
+        .insert("system".to_owned(), Arc::new(FontData::from_owned(bytes)));
+    defs.families
+        .insert(FontFamily::Proportional, vec!["system".to_owned()]);
+    defs.families
+        .insert(FontFamily::Monospace, vec!["system".to_owned()]);
+    (defs, source.to_owned())
+}
+
+/// First readable candidate wins. Every miss is logged, because a silent
+/// fall-through is how the iOS 26 device shipped a black screen: the
+/// simulator's reads resolve against the macOS host FS, which still has the
+/// candidate paths the device no longer does.
+fn load_fonts_from(candidates: &[&str]) -> Result<(FontDefinitions, String), String> {
     let mut last_err = String::from("no font candidates");
-    for path in FONT_CANDIDATES {
+    for path in candidates {
         match std::fs::read(path) {
-            Ok(bytes) => {
-                let mut defs = FontDefinitions::empty();
-                defs.font_data
-                    .insert("system".to_owned(), Arc::new(FontData::from_owned(bytes)));
-                defs.families
-                    .insert(FontFamily::Proportional, vec!["system".to_owned()]);
-                defs.families
-                    .insert(FontFamily::Monospace, vec!["system".to_owned()]);
-                return Ok((defs, (*path).to_string()));
+            Ok(bytes) => return Ok(font_defs_from(bytes, path)),
+            Err(e) => {
+                log::info!("font candidate miss: {path}: {e}");
+                last_err = format!("cannot read {path}: {e}");
             }
-            Err(e) => last_err = format!("cannot read {path}: {e}"),
         }
     }
     Err(last_err)
+}
+
+fn load_fonts() -> Result<(FontDefinitions, String), String> {
+    load_fonts_from(FONT_CANDIDATES)
 }
 
 impl App {
@@ -227,6 +242,19 @@ impl App {
     }
 
     // ---- GL / viewport -----------------------------------------------------
+
+    /// Replace the UI font with bytes the shell resolved through the
+    /// platform's font API (iOS: CoreText), overriding the candidate-path
+    /// lookup. Call before `attach_gl`, which fails while no font is loaded —
+    /// that failure state is what paints a black CAEAGLLayer on iOS 26
+    /// devices, where the hardcoded candidate paths no longer exist.
+    pub fn set_system_font(&mut self, bytes: Vec<u8>, source: &str) {
+        log::info!("system font override from {source}");
+        let (defs, src) = font_defs_from(bytes, source);
+        self.ctx.set_fonts(defs);
+        self.font_source = Ok(src);
+        self.dirty = true;
+    }
 
     /// Attach the shell's (current) GL context. Fails if no system font loaded.
     pub fn attach_gl(&mut self, gl: Arc<glow::Context>) -> Result<(), String> {
@@ -687,5 +715,48 @@ impl App {
             &primitives,
             &mut out.textures_delta,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("rn-core-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// The seam the iOS 26 black screen came through: the loader must fall
+    /// through unreadable candidates to a readable one (on device, every
+    /// candidate missed; on the simulator, a host-FS path masked it).
+    #[test]
+    fn font_fallback_picks_first_readable_candidate() {
+        let dir = temp("fonts");
+        let missing = dir.join("missing.ttf");
+        let present = dir.join("present.ttf");
+        std::fs::write(&present, b"fake-font-bytes").unwrap();
+        let (m, p) = (missing.to_str().unwrap(), present.to_str().unwrap());
+
+        let (defs, src) = load_fonts_from(&[m, p]).expect("second candidate loads");
+        assert_eq!(src, p);
+        assert!(defs.font_data.contains_key("system"));
+        let _ = std::fs::remove_file(&present);
+    }
+
+    #[test]
+    fn font_fallback_reports_last_error_when_all_missing() {
+        let err = load_fonts_from(&["/nonexistent/a.ttf", "/nonexistent/b.ttf"]).unwrap_err();
+        assert!(err.contains("b.ttf"), "error should name the last candidate");
+    }
+
+    /// A shell-resolved font (CoreText on iOS) must override a failed — or
+    /// successful — candidate lookup, since `attach_gl` gates on it.
+    #[test]
+    fn set_system_font_overrides_candidate_lookup() {
+        let mut app = App::new(temp("app").join("data"));
+        app.set_system_font(b"bytes".to_vec(), "coretext://SF");
+        assert_eq!(app.font_source(), "coretext://SF");
     }
 }

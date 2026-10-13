@@ -194,6 +194,31 @@ extern_methods!(
     }
 );
 
+// ---------------------------------------------------------------- CoreText font
+
+/// Resolve the system UI font's file through CoreText and read its bytes.
+///
+/// iOS 26 devices have no readable font at the core's hardcoded candidate
+/// paths (`/System/Library/Fonts/SFNS.ttf` etc.); asking the platform where
+/// the font lives works on every iOS version. The simulator masked this: its
+/// file reads resolve against the macOS host FS, which still has those paths.
+fn system_font_bytes() -> Option<(Vec<u8>, String)> {
+    use objc2_core_foundation::{CFURL, CFURLPathStyle};
+    use objc2_core_text::{CTFont, CTFontUIFontType, kCTFontURLAttribute};
+    unsafe {
+        let font = CTFont::new_ui_font_for_language(CTFontUIFontType::System, 0.0, None)?;
+        let attr = font.attribute(kCTFontURLAttribute)?;
+        let url = attr.downcast::<CFURL>().ok()?;
+        let path = url.file_system_path(CFURLPathStyle::CFURLPOSIXPathStyle)?;
+        let path = path.to_string();
+        let bytes = std::fs::read(&path).ok()?;
+        if bytes.is_empty() {
+            return None;
+        }
+        Some((bytes, path))
+    }
+}
+
 // ---------------------------------------------------------------- ObjC classes
 
 define_class!(
@@ -474,6 +499,13 @@ impl RNViewController {
             let dir = std::path::PathBuf::from(home).join("Documents");
             let mut app = App::new(dir);
             app.set_edge_swipe_back(true); // UIKit has no system back gesture for us
+            match system_font_bytes() {
+                Some((bytes, src)) => {
+                    nslog(&format!("CoreText system font: {src} ({} bytes)", bytes.len()));
+                    app.set_system_font(bytes, &src);
+                }
+                None => nslog("CoreText font resolution failed; candidate paths are next"),
+            }
 
             SHELL.with(|s| {
                 *s.borrow_mut() = Some(Shell {
