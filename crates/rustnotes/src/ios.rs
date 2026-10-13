@@ -4,7 +4,7 @@
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{class, define_class, msg_send, sel};
+use objc2::{class, define_class, msg_send, sel, AnyThread};
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject, NSString};
 use objc2_ui_kit::{
@@ -60,15 +60,8 @@ pub(crate) fn system_font_bytes() -> Option<(Vec<u8>, String)> {
     use objc2_core_foundation::{CFURLPathStyle, CFURL};
     use objc2_core_text::{kCTFontURLAttribute, CTFont, CTFontUIFontType};
     unsafe {
-        let font = CTFont::new_ui_font_for_language(CTFontUIFontType::System, 0.0, None)
-            .unwrap_or_else(|| {
-                log::warn!("CoreText could not create the system font");
-                None
-            })?;
-        let attr = font.attribute(kCTFontURLAttribute).unwrap_or_else(|| {
-            log::warn!("system font has no URL attribute");
-            None
-        })?;
+        let font = CTFont::new_ui_font_for_language(CTFontUIFontType::System, 0.0, None)?;
+        let attr = font.attribute(kCTFontURLAttribute)?;
         let url = attr.downcast::<CFURL>().ok()?;
         let path = url.file_system_path(CFURLPathStyle::CFURLPOSIXPathStyle)?;
         let path = path.to_string();
@@ -226,11 +219,11 @@ fn ensure_lifecycle_observer() {
         // suspension and in the documented order (WillResignActive, then
         // DidEnterBackground); the save is idempotent, so a missing or
         // reordered one is safe.
-        for name in [
-            UIApplicationWillResignActiveNotification,
-            UIApplicationDidEnterBackgroundNotification,
-        ] {
-            unsafe {
+        unsafe {
+            for name in [
+                UIApplicationWillResignActiveNotification,
+                UIApplicationDidEnterBackgroundNotification,
+            ] {
                 center.addObserver_selector_name_object(&obs, sel!(saveState:), Some(name), None);
             }
         }
@@ -362,7 +355,7 @@ pub(crate) fn raw_input_hook(ctx: &egui::Context, raw: &mut egui::RawInput) -> O
     // (hardware-keyboard) frames.
     let keyboard = KEYBOARD_FRAME.with(Cell::get).map_or(0.0, |frame| {
         let r: CGRect =
-            unsafe { msg_send![&*window, convertRect:fromWindow:, frame, None::<&AnyObject>] };
+            unsafe { msg_send![&*window, convertRect: frame, fromWindow: None::<&AnyObject>] };
         (height - r.origin.y).clamp(0.0, height)
     });
     let pt = |v: f64| (v / zoom) as f32;

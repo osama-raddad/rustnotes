@@ -29,10 +29,15 @@ eframe = { workspace = true, features = ["default_fonts"] }
 
 # Renderer per platform: glow (OpenGL ES 3) on Android and desktop; wgpu
 # (Metal) on iOS, because eframe's glow path needs glutin, which has no iOS
-# backend. Desktop and iOS re-enable accesskit (screen readers); Android
-# can't — NativeActivity has no winit integration to hang it on.
+# backend. Android can't take accesskit — NativeActivity has no winit
+# integration to hang it on (eframe compile_error!s on the pairing).
 [target.'cfg(not(target_os = "ios"))'.dependencies]
-eframe = { workspace = true, features = ["glow", "accesskit"] }
+eframe = { workspace = true, features = ["glow"] }
+
+# Desktop-only screen-reader support (accesskit pairs fine with glow/wgpu
+# wherever winit's integration exists — just not under NativeActivity).
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+eframe = { workspace = true, features = ["accesskit"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 eframe = { workspace = true, features = ["wgpu"] }
