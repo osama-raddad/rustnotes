@@ -219,4 +219,144 @@ mod tests {
             "HIGH-1: a read failure must not look like \"no notes\""
         );
     }
+
+    // ---- grafted from the parallel fix branch (PR #11) ----
+
+    /// A fresh temp dir, so the reopen test exercises a real on-disk file.
+    fn temp(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("rn-notes-test-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn note(body: &str) -> Note {
+        Note {
+            id: 0,
+            body: body.to_owned(),
+            updated: 0,
+        }
+    }
+
+    #[test]
+    fn save_survives_reopen() {
+        let dir = temp("roundtrip");
+        let mut n = note("first line\nsecond line");
+        {
+            let db = NotesDb::open(&dir).unwrap();
+            db.save(&mut n).unwrap();
+            assert_ne!(n.id, 0, "insert assigns the row id");
+            assert!(n.updated > 0, "insert stamps updated");
+        }
+        let db = NotesDb::open(&dir).unwrap();
+        let notes = db.list().unwrap();
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].id, n.id);
+        assert_eq!(notes[0].updated, n.updated);
+        // The list carries only a prefix; the stored body is read via `get`.
+        assert_eq!(
+            db.get(n.id).unwrap().unwrap().body,
+            "first line\nsecond line"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn title_is_the_first_line() {
+        assert_eq!(title_of("Hello\nworld"), "Hello");
+        assert_eq!(title_of("  padded  \nbody"), "padded");
+        assert_eq!(title_of(""), "(untitled)");
+        assert_eq!(title_of("\nstarts on line two"), "(untitled)");
+    }
+
+    #[test]
+    fn snippet_is_the_first_non_empty_line_after_the_title() {
+        assert_eq!(snippet_of("Title\nbody line"), Some("body line"));
+        assert_eq!(snippet_of("Title\n\n  spaced  \nmore"), Some("spaced"));
+        assert_eq!(snippet_of("Title"), None);
+        assert_eq!(snippet_of("Title\n\n"), None);
+    }
+
+    #[test]
+    fn save_bumps_updated_only_when_the_write_lands() {
+        let db = NotesDb::open_in_memory().unwrap();
+
+        // A failed insert must not invent an id or stamp updated.
+        db.conn.execute("DROP TABLE notes", []).unwrap();
+        let mut n = note("doomed insert");
+        assert!(db.save(&mut n).is_err(), "failed insert reports the error");
+        assert_eq!(
+            (n.id, n.updated),
+            (0, 0),
+            "failed insert leaves the note as-is"
+        );
+        db.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS notes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    body TEXT NOT NULL,
+                    updated INTEGER NOT NULL
+                )",
+                [],
+            )
+            .unwrap();
+
+        // A successful update re-stamps updated past a seeded old value.
+        db.conn
+            .execute(
+                "INSERT INTO notes (body, updated) VALUES (?1, ?2)",
+                params!["old body", 1000],
+            )
+            .unwrap();
+        let mut m = db
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|x| x.body == "old body")
+            .unwrap();
+        assert_eq!(m.updated, 1000);
+        m.body = "new body".to_owned();
+        db.save(&mut m).unwrap();
+        assert!(m.updated > 1000, "successful update re-stamps updated");
+
+        // A failed update must leave updated where the last success put it.
+        let stamped = m.updated;
+        db.conn.execute("DROP TABLE notes", []).unwrap();
+        m.body = "doomed update".to_owned();
+        assert!(db.save(&mut m).is_err(), "failed update reports the error");
+        assert_eq!(m.updated, stamped, "failed update must not bump updated");
+    }
+
+    #[test]
+    fn delete_removes_only_its_note() {
+        let db = NotesDb::open_in_memory().unwrap();
+        let mut a = note("a");
+        let mut b = note("b");
+        db.save(&mut a).unwrap();
+        db.save(&mut b).unwrap();
+
+        db.delete(a.id).unwrap();
+        let left = db.list().unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].body, "b");
+
+        db.delete(a.id).unwrap(); // already gone: a no-op, not an error
+        assert_eq!(db.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn list_orders_most_recent_first() {
+        let db = NotesDb::open_in_memory().unwrap();
+        for (body, updated) in [("old", 100), ("newest", 300), ("middle", 200)] {
+            db.conn
+                .execute(
+                    "INSERT INTO notes (body, updated) VALUES (?1, ?2)",
+                    params![body, updated],
+                )
+                .unwrap();
+        }
+        let notes = db.list().unwrap();
+        let bodies: Vec<&str> = notes.iter().map(|n| n.body.as_str()).collect();
+        assert_eq!(bodies, ["newest", "middle", "old"]);
+    }
 }

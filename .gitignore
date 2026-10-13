@@ -11,4 +11,8 @@ debug.keystore
 /.claude/worktrees/
 .DS_Store
 xcuserdata/
-.orchestration/
+
+# Local research/orchestration scratch, not part of the repo
+/reports/
+/research_notes/
+/.orchestration/

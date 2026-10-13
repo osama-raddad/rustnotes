@@ -70,8 +70,11 @@ only what they lack on mobile.
   signed in to Xcode).
 
 Paths are defaulted for a macOS install under `~/Library/Android/sdk`; override
-with `ANDROID_HOME` if needed. The NDK linker path and the
-16 KB-page-alignment flag live in `.cargo/config.toml`.
+with `ANDROID_HOME` if needed. The `justfile` exports the NDK linker (and
+CC/AR) from `ANDROID_HOME`; `.cargo/config.toml` holds only the target dir and
+the 16 KB-page-alignment link flag — so a direct
+`cargo build --target aarch64-linux-android` outside `just` needs
+`CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` set.
 
 The NDK path itself derives from `ANDROID_HOME`, but the packaging recipes
 are still macOS-only: they call `keytool`, `security`, `plutil` and
@@ -98,6 +101,9 @@ just ios-device       # device .app (unsigned)
 just ios-install      # device: sign + install + launch on a connected iPhone
 just ios-profile      # refresh the 7-day device profile (see below)
 just check            # type-check core, Android lib and iOS binary
+just fmt              # cargo fmt --all
+just lint             # fmt --check, then clippy on both crates
+just test             # rustnotes-core unit tests
 ```
 
 Underneath, the recipes drive plain `cargo` plus the platform packagers
@@ -114,7 +120,7 @@ shared via git). Pick one from the Run/Debug dropdown:
 |---|---|
 | Run on Android (just run-android) | physical device if connected → else emulator (boots the first AVD if needed) |
 | Run on iOS (just run-ios) | connected iPhone (sign + install + launch) → else simulator (boots one if needed) |
-| Check all targets | `cargo check` for both crates on their real targets (core, Android lib, iOS binary) |
+| Check all targets | `cargo check` for both crates on their real targets (core, Android lib, iOS-sim binary, host desktop binary) |
 
 The granular recipes (`just android`, `just ios-run`, `just ios-install`,
 …) remain available as plain `just` commands in the terminal, and
@@ -145,10 +151,11 @@ panic hook (Console.app on a device); other log output is stderr via
   typing; CJK composition, autocorrect and emoji input are not supported.
   The real fix on Android is eframe's `android-game-activity` feature.
 - The Android manifest lists every configuration change in `configChanges`.
-  The in-app exit path now closes the eframe event loop cleanly
-  (`ViewportCommand::Close`); what remains is a system-initiated activity
-  destroy (e.g. "Don't keep activities"), which still depends on upstream
-  winit.
+  Leaving via back at the root is clean now — the eframe loop exits and
+  `android_main` returns before the activity is finished — but a destroy
+  the system starts itself still stalls: NativeActivity's `onDestroy`
+  waits for `android_main` to return, which only our exit path ends, so
+  relaunching the cached process after such a destroy can freeze the app.
 - arm64-v8a only (add more ABIs in the `justfile`).
 - No search, no clipboard, no user-selectable theme — it's a demo of the pure-Rust stack,
   not a product.

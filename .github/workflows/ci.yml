@@ -1,26 +1,65 @@
-# Host-safe quality gate: fmt + clippy + tests + a host type-check of the
-# desktop binary. Cross-compiles and `just` recipes are deliberately not run
-# here yet: `just check`'s Android/iOS legs need the NDK (ANDROID_HOME) and
-# Xcode device tooling — revisit once CI grows an Android SDK setup story.
+# CI — the safety net behind `just lint` / `just test` / `just check`.
+#
+# core:    fmt + clippy + unit tests on Linux (host feature set).
+# targets: the three cross-checks of `just check` on macOS — the workspace
+#          can't be checked as a whole on one host (ndk-sys only compiles
+#          for Android), and the Apple targets need Xcode, which the macos
+#          runners preinstall.
 name: CI
+
 on:
   push:
     branches: [main]
   pull_request:
 
+# Superseded pushes to the same ref don't queue up — cancel them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
-    runs-on: macos-latest
+  core:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # No toolchain action needed: rustup is preinstalled on GitHub runners
-      # and picks up the pinned 1.99.0 + targets from rust-toolchain.toml on
-      # the first cargo invocation (fmt/clippy ship as default components).
-      - name: fmt
-        run: cargo fmt --all --check
-      - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: test
-        run: cargo test --workspace
-      - name: check host binary
-        run: cargo check -p rustnotes --bin rustnotes
+      # rust + components/targets pinned by rust-toolchain.toml.
+      # rustflags must be emptied: the action's default '-D warnings' is
+      # exported as RUSTFLAGS, which overrides .cargo/config.toml's target
+      # rustflags (the 16 KB page-alignment link flag) — warnings are
+      # enforced on the clippy command line instead.
+      # cache: false — the explicit rust-cache step below owns caching.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ''
+          components: clippy, rustfmt
+          cache: false
+      # cargo's target dir is build/target (.cargo/config.toml), not target/
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> build/target"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p rustnotes-core --all-targets -- -D warnings
+      - run: cargo test -p rustnotes-core
+
+  targets:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install just
+      # Android SDK; ANDROID_HOME is preset on macos runners (and exported
+      # by this action) — the justfile derives the NDK toolchain from it
+      - uses: android-actions/setup-android@v4
+      - run: sdkmanager --install "ndk;27.1.12297006"
+      # rust + aarch64-linux-android / aarch64-apple-ios{,-sim} come from
+      # rust-toolchain.toml; the Apple targets are preinstalled on macos.
+      # Same rustflags/cache rationale as the core job (components aren't
+      # needed for `just check`, but keep the setups identical).
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ''
+          components: clippy, rustfmt
+          cache: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> build/target"
+      - run: just check
