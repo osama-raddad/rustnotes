@@ -1,9 +1,10 @@
 //! The Vynatix gallery: a theme switcher, the type specimen, a palette
 //! swatch grid, the interaction states, the foundation specimens
 //! (spacing, radii, elevation), the icons, the logo, the action
-//! components (buttons, chips, badges) and the surface components
-//! (cards, metrics, editorial, glass). Run with `cargo run -p ui-kit
-//! --example gallery`. Each issue grows a section here.
+//! components (buttons, chips, badges), the surface components (cards,
+//! metrics, editorial, glass) and the text input components (fields,
+//! select). Run with `cargo run -p ui-kit --example gallery`. Each
+//! issue grows a section here.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
@@ -11,6 +12,8 @@ use ui_kit::components::badge::{count_text, Badge, BadgeTone, IconButton};
 use ui_kit::components::button::{Button, ButtonEmphasis};
 use ui_kit::components::chip::{Chip, ChipEvent};
 use ui_kit::components::liquid_glass::{glass_recipe, paint_glass, GlassThickness, GlassTint};
+use ui_kit::components::select::Select;
+use ui_kit::components::text_field::TextField;
 use ui_kit::components::{Card, EditorialCard, FocusRing, LiquidGlass, MetricCard};
 use ui_kit::icon::{icon, icon_active, install as install_icons, IconSize};
 use ui_kit::icons::{Icon, CATEGORY_GROUPS};
@@ -40,6 +43,7 @@ fn main() -> eframe::Result {
                 flags: UiKitFlags::default(),
                 filters: [false; 4],
                 saved_chip: true,
+                form: ProjectForm::populated(),
             }))
         }),
     )
@@ -55,6 +59,8 @@ struct Gallery {
     filters: [bool; 4],
     /// Whether the dismissible chip demo still holds its chip.
     saved_chip: bool,
+    /// The project-details form the text inputs section edits.
+    form: ProjectForm,
 }
 
 /// A role name for display: strip the `md-sys-color-` prefix and set the
@@ -1167,6 +1173,250 @@ fn components_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     glass_group(ui, theme, flags);
 }
 
+// ---- the text input components (issue 07) ----------------------------------
+
+/// The region options, the Radio preview's example domain, shared with
+/// this section's select.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Region {
+    Nordics,
+    Europe,
+    Global,
+}
+
+const REGION_OPTIONS: &[(Region, &str)] = &[
+    (Region::Nordics, "Nordics"),
+    (Region::Europe, "Europe"),
+    (Region::Global, "Global"),
+];
+
+/// The team sizes, the Select preview's own options.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TeamSize {
+    OneToTwo,
+    ThreeToFive,
+    SixOrMore,
+}
+
+const TEAM_SIZE_OPTIONS: &[(TeamSize, &str)] = &[
+    (TeamSize::OneToTwo, "1 to 2 people"),
+    (TeamSize::ThreeToFive, "3 to 5 people"),
+    (TeamSize::SixOrMore, "6 or more"),
+];
+
+/// The delivery offices: nine of them, so the list scrolls inside the
+/// eight rows the kit caps it at.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Office {
+    Gothenburg,
+    Stockholm,
+    Copenhagen,
+    Oslo,
+    Helsinki,
+    Berlin,
+    Amsterdam,
+    London,
+    Edinburgh,
+}
+
+const OFFICE_OPTIONS: &[(Office, &str)] = &[
+    (Office::Gothenburg, "Gothenburg"),
+    (Office::Stockholm, "Stockholm"),
+    (Office::Copenhagen, "Copenhagen"),
+    (Office::Oslo, "Oslo"),
+    (Office::Helsinki, "Helsinki"),
+    (Office::Berlin, "Berlin"),
+    (Office::Amsterdam, "Amsterdam"),
+    (Office::London, "London"),
+    (Office::Edinburgh, "Edinburgh"),
+];
+
+/// One invoice currency, locked by the contract: the disabled select.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Currency {
+    Sek,
+}
+
+const CURRENCY_OPTIONS: &[(Currency, &str)] = &[(Currency::Sek, "SEK")];
+
+/// The project-details form the section edits, with the email's
+/// touched flag carrying the validate-on-leave rule.
+#[derive(Default)]
+struct ProjectForm {
+    name: String,
+    email: String,
+    reference: String,
+    search: String,
+    brief: String,
+    /// Whether the person has left the email field yet: the field
+    /// validates on leave, not while they type.
+    email_touched: bool,
+    region: Option<Region>,
+    team_size: Option<TeamSize>,
+    office: Option<Office>,
+}
+
+impl ProjectForm {
+    fn populated() -> Self {
+        Self {
+            reference: "A-2026-114".to_owned(),
+            brief: "Replacing the in-cab radio firmware before the autumn launch: Android Automotive, three-screen layout, OTA pipeline.".to_owned(),
+            region: Some(Region::Nordics),
+            office: Some(Office::Gothenburg),
+            ..Default::default()
+        }
+    }
+}
+
+/// A work email is valid when it has one @ with something before it and
+/// a domain with a dot inside it: loose enough for the demo, strict
+/// enough to be worth fixing.
+fn email_is_valid(email: &str) -> bool {
+    match email.split_once('@') {
+        Some((local, domain)) => {
+            !local.is_empty()
+                && domain
+                    .split_once('.')
+                    .is_some_and(|(head, tail)| !head.is_empty() && !tail.is_empty())
+        }
+        None => false,
+    }
+}
+
+/// The four-part error copy, per the voice guidelines: what is wrong,
+/// why it matters, what to do next, where to get help.
+const EMAIL_ERROR: &str = "That address is missing its @ sign or its domain, so the proposal would not arrive. Type the full address, like name@company.se. If you are unsure which one to use, ask your account manager.";
+
+/// The fields group: the project-details form's text fields, the
+/// preview's own grid of variants as live controls.
+fn fields_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
+    let colors = theme.colors();
+    ui.label("Fields · label, control, hint · radius-md · 12 by 14 padding");
+    ui.add_space(spacing::SPACE_2);
+    ui.columns(2, |columns| {
+        let (left, right) = columns.split_at_mut(1);
+
+        TextField::new("Project name", &mut form.name)
+            .placeholder("In-cab radio, phase two")
+            .hint("As it appears in the proposal.")
+            .ui(&mut left[0], theme, flags);
+
+        // The email validates when the person leaves the field, not
+        // while they type: the first leave arms it, and the error
+        // clears as soon as the address is fixed.
+        let invalid = form.email_touched && !email_is_valid(&form.email);
+        let mut email = TextField::new("Work email *", &mut form.email)
+            .placeholder("name@company.se")
+            .hint("Required. We will never sell or share your email.");
+        if invalid {
+            email = email.error(EMAIL_ERROR);
+        }
+        let email_field = email.ui(&mut left[0], theme, flags);
+        if email_field.lost_focus {
+            form.email_touched = true;
+        }
+
+        TextField::new("Search the case studies", &mut form.search)
+            .placeholder("Case, essay or note")
+            .leading_icon(Icon::Search)
+            .ui(&mut right[0], theme, flags);
+
+        TextField::new("Reference number", &mut form.reference)
+            .disabled()
+            .hint("Set by your contract.")
+            .ui(&mut right[0], theme, flags);
+    });
+
+    // The textarea, spanning both columns.
+    TextField::new("What are you trying to ship?", &mut form.brief)
+        .placeholder("Two sentences is plenty.")
+        .multiline(3)
+        .ui(ui, theme, flags);
+
+    ui.add(egui::Label::new(specimen_job(
+        "The label stays visible when the field fills, and the placeholder is a format hint, never a substitute. The hint carries the rule; the error replaces it, says what is wrong and how to fix it, and the icon keeps the state off colour alone. The email checks when you leave the field, not while you type. Tab through the fields to see each ring.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The selects group: the region with a choice made, the team size on
+/// its placeholder, a nine-office list that scrolls, and the locked
+/// currency.
+fn selects_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
+    let colors = theme.colors();
+    ui.label("Select · the same box with a chevron · popover list");
+    ui.add_space(spacing::SPACE_2);
+    ui.columns(2, |columns| {
+        let (left, right) = columns.split_at_mut(1);
+
+        let region = Select::new("Region")
+            .options(REGION_OPTIONS)
+            .selected(form.region)
+            .hint("Where the team will work from.")
+            .ui(&mut left[0], theme, flags);
+        if let Some(picked) = region.committed {
+            form.region = Some(picked);
+        }
+
+        let office = Select::new("Delivery office")
+            .options(OFFICE_OPTIONS)
+            .selected(form.office)
+            .hint("Nine offices, so the list scrolls.")
+            .ui(&mut left[0], theme, flags);
+        if let Some(picked) = office.committed {
+            form.office = Some(picked);
+        }
+
+        let team = Select::new("Team size *")
+            .options(TEAM_SIZE_OPTIONS)
+            .selected(form.team_size)
+            .placeholder("Choose a team size")
+            .hint("Required. We staff one team per project.")
+            .ui(&mut right[0], theme, flags);
+        if let Some(picked) = team.committed {
+            form.team_size = Some(picked);
+        }
+
+        Select::new("Invoice currency")
+            .options(CURRENCY_OPTIONS)
+            .selected(Some(Currency::Sek))
+            .disabled()
+            .hint("Set by your contract.")
+            .ui(&mut right[0], theme, flags);
+    });
+
+    ui.add(egui::Label::new(specimen_job(
+        "The select commits on a click or Enter, and Escape or a click outside closes it without changing the choice. The check marks the selected option, never colour alone. The arrow keys move the hover, wrapping; a list longer than eight options scrolls inside eight rows.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The text inputs section: a believable project-details form, every
+/// field and select a live control in the active theme.
+fn text_inputs_section(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &UiKitFlags,
+    form: &mut ProjectForm,
+) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "Components · Text inputs",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    fields_group(ui, theme, flags, form);
+    ui.add_space(spacing::SPACE_4);
+    selects_group(ui, theme, flags, form);
+}
+
 impl eframe::App for Gallery {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
@@ -1216,6 +1466,8 @@ impl eframe::App for Gallery {
                 );
                 ui.add_space(spacing::SPACE_6);
                 components_section(ui, self.theme, &self.flags);
+                ui.add_space(spacing::SPACE_6);
+                text_inputs_section(ui, self.theme, &self.flags, &mut self.form);
                 ui.add_space(spacing::SPACE_6);
 
                 ui.add_space(spacing::SPACE_4);

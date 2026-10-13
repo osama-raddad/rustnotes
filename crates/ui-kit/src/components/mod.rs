@@ -11,6 +11,8 @@ pub mod editorial_card;
 pub mod focus_ring;
 pub mod liquid_glass;
 pub mod metric_card;
+pub mod select;
+pub mod text_field;
 
 pub use badge::{count_text, Badge, BadgeLook, BadgeTone, IconButton};
 pub use button::{emphasis_look, Button, ButtonEmphasis, ButtonResponse, ButtonSize};
@@ -22,3 +24,5 @@ pub use liquid_glass::{
     glass_recipe, paint_glass, GlassRecipe, GlassThickness, GlassTint, LiquidGlass,
 };
 pub use metric_card::MetricCard;
+pub use select::{select_look, Select, SelectInteraction, SelectResponse};
+pub use text_field::{field_look, FieldLook, TextField, TextFieldResponse};
