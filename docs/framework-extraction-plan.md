@@ -276,7 +276,9 @@ found that the record above didn't predict:
 ## Addendum: packaging generalized (2026-10-13)
 
 The endpoint wave parametrized the justfile over apps — an `app`
-parameter, default `rustnotes`, on every packaging recipe — added the
+parameter, default `rustnotes`, on every user-facing packaging recipe
+(the private `ios-build` takes `app` without a default: just forbids a
+required parameter after a defaulted one) — added the
 screenshot recipes the endpoint section names as missing, and gave
 hello-mobile its own `resources/` (manifest + Info.plist) and debug
 keystore. Both apps now package through the same recipes; the defaults

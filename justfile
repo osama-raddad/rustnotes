@@ -240,8 +240,11 @@ android-x app='rustnotes':
     cd "crates/$key" && x build --platform android --arch arm64 --release --format apk
 
 # xbuild: deploy + launch + stream logs (Ctrl-C detaches; app keeps running)
-# (--device implies --platform; x rejects passing both)
-android-run device='adb:emulator-5554' app='rustnotes':
+# (--device implies --platform; x rejects passing both). `app` is first, as
+# in every app-facing recipe — with device first, `just android-run
+# app=hello-mobile` would bind the whole token to the DEVICE (just binds
+# positional tokens whole) and silently keep packaging rustnotes.
+android-run app='rustnotes' device='adb:emulator-5554':
     #!/bin/zsh
     set -euo pipefail
     cfg=$(just app-identity "{{app}}")
