@@ -36,6 +36,13 @@ layer over the OS windowing/input APIs.
 - Scrolling list and editor, auto-scroll to keep the cursor visible
 - Notes persisted in SQLite across restarts (autosave on pause/destroy)
 - Correct status-bar/safe-area and keyboard inset handling on both platforms
+- Native-size layout: the OS pixels-per-point sets the scale, Android
+  "Display size" / font scale and iOS Dynamic Type scale the UI, and the
+  OS light/dark appearance is followed live
+- Window size classes: tablets get a list–detail two-pane layout; phones in
+  landscape stay single-pane
+- Slide transitions between screens, an iOS edge-swipe back, swipe-to-delete,
+  pull-to-refresh, and a bottom navigation bar with a Settings diagnostics tab
 
 ## Prerequisites
 
@@ -120,7 +127,7 @@ Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
   The idiomatic fix would be GameActivity's `TextInputState` or a thin Kotlin
   layer.
 - arm64-v8a only (add more ABIs in the `justfile`).
-- No search, no themes, no clipboard — it's a demo of the pure-Rust stack,
+- No search, no clipboard, no user-selectable theme — it's a demo of the pure-Rust stack,
   not a product.
 - Dragging inside the editor selects text (egui `TextEdit`); long notes
   scroll by moving the cursor, not by swiping.
@@ -136,7 +143,7 @@ crate because xbuild reads it from the working directory.
 
 | Path | Purpose |
 |---|---|
-| `crates/rustnotes-core/` | Shared: App state machine, neutral events → egui input, egui UI + egui_glow painter, storage |
+| `crates/rustnotes-core/` | Shared: App state machine, neutral events → egui input, `layout/` (metrics, size classes, palette, scaffold, nav, bottom nav), screens, egui_glow painter, storage |
 | `crates/rustnotes-android/` | Android shell: NativeActivity, EGL FFI, input translation, JNI insets |
 | `crates/rustnotes-ios/` | iOS shell: objc2 classes, EAGL+CAEAGLLayer, keyboard, frame loop |
 | `resources/AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs |

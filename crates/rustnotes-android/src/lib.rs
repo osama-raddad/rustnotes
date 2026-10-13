@@ -27,6 +27,15 @@ impl Platform for AndroidPlatform<'_> {
     }
 }
 
+/// OS pixels-per-point: configuration density over the 160 dpi baseline
+/// (480 dpi -> 3.0). Follows the user's "Display size" setting.
+fn display_ppp(app: &AndroidApp) -> Option<f32> {
+    app.config()
+        .density()
+        .filter(|d| (60..=1280).contains(d))
+        .map(|d| d as f32 / 160.0)
+}
+
 /// Android AKEYCODE_* values -> ASCII char, honoring shift. Key events are how
 /// NativeActivity delivers soft-keyboard input (English/basic latin).
 fn key_to_char(code: u32, meta: u32) -> Option<char> {
@@ -96,19 +105,19 @@ fn translate_key(code: u32, meta: u32) -> Option<CoreKey> {
 /// Post an async JNI query for the system-bar top inset on the Java main
 /// thread. Returns the receiver; poll it with `try_recv` from the main loop
 /// (never block on it — the Java thread may be parked in a lifecycle barrier).
-fn post_top_inset_query(app: &AndroidApp) -> std::sync::mpsc::Receiver<i32> {
-    let (tx, rx) = std::sync::mpsc::channel::<i32>();
+fn post_top_inset_query(app: &AndroidApp) -> std::sync::mpsc::Receiver<(i32, i32)> {
+    let (tx, rx) = std::sync::mpsc::channel::<(i32, i32)>();
     let app2 = app.clone();
     app.run_on_java_main_thread(Box::new(move || {
         let vm = unsafe { jni::JavaVM::from_raw(app2.vm_as_ptr().cast()) };
-        let res = vm.attach_current_thread(|env| -> jni::errors::Result<i32> {
+        let res = vm.attach_current_thread(|env| -> jni::errors::Result<(i32, i32)> {
             let activity = unsafe {
                 jni::objects::JObject::from_raw(
                     env,
                     app2.activity_as_ptr() as jni::sys::jobject,
                 )
             };
-            let r = (|| -> jni::errors::Result<i32> {
+            let r = (|| -> jni::errors::Result<(i32, i32)> {
                 let window = env
                     .call_method(
                         &activity,
@@ -150,14 +159,78 @@ fn post_top_inset_query(app: &AndroidApp) -> std::sync::mpsc::Receiver<i32> {
                         &[jni::JValue::from(sysbars)],
                     )?
                     .l()?;
-                Ok(env
+                let top = env
                     .get_field(&bars, jni::jni_str!("top"), jni::jni_sig!("I"))?
-                    .i()?)
+                    .i()?;
+                let bottom = env
+                    .get_field(&bars, jni::jni_str!("bottom"), jni::jni_sig!("I"))?
+                    .i()?;
+                // With the keyboard up the surface already resizes
+                // (adjustResize), so the gesture-bar inset must not count too.
+                let ime = env
+                    .call_static_method(
+                        &tclass,
+                        jni::jni_str!("ime"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )?
+                    .i()?;
+                let ime_visible = env
+                    .call_method(
+                        &insets,
+                        jni::jni_str!("isVisible"),
+                        jni::jni_sig!("(I)Z"),
+                        &[jni::JValue::from(ime)],
+                    )?
+                    .z()?;
+                Ok((top, if ime_visible { 0 } else { bottom }))
             })();
             std::mem::forget(activity);
             r
         });
-        let _ = tx.send(res.unwrap_or(0));
+        let _ = tx.send(res.unwrap_or((0, 0)));
+    }));
+    rx
+}
+
+/// Post an async JNI query for `Configuration.fontScale` (the NDK exposes no
+/// accessor for it). Poll the receiver with `try_recv`.
+fn post_font_scale_query(app: &AndroidApp) -> std::sync::mpsc::Receiver<f32> {
+    let (tx, rx) = std::sync::mpsc::channel::<f32>();
+    let app2 = app.clone();
+    app.run_on_java_main_thread(Box::new(move || {
+        let vm = unsafe { jni::JavaVM::from_raw(app2.vm_as_ptr().cast()) };
+        let res = vm.attach_current_thread(|env| -> jni::errors::Result<f32> {
+            let activity = unsafe {
+                jni::objects::JObject::from_raw(
+                    env,
+                    app2.activity_as_ptr() as jni::sys::jobject,
+                )
+            };
+            let r = (|| -> jni::errors::Result<f32> {
+                let res = env
+                    .call_method(
+                        &activity,
+                        jni::jni_str!("getResources"),
+                        jni::jni_sig!("()Landroid/content/res/Resources;"),
+                        &[],
+                    )?
+                    .l()?;
+                let cfg = env
+                    .call_method(
+                        &res,
+                        jni::jni_str!("getConfiguration"),
+                        jni::jni_sig!("()Landroid/content/res/Configuration;"),
+                        &[],
+                    )?
+                    .l()?;
+                env.get_field(&cfg, jni::jni_str!("fontScale"), jni::jni_sig!("F"))?
+                    .f()
+            })();
+            std::mem::forget(activity);
+            r
+        });
+        let _ = tx.send(res.unwrap_or(1.0));
     }));
     rx
 }
@@ -179,7 +252,9 @@ fn android_main(app: AndroidApp) {
     let mut egl: Option<Egl> = None;
     let mut destroyed = false;
     let mut input_pending = false;
-    let mut inset_rx: Option<std::sync::mpsc::Receiver<i32>> = None;
+    let mut inset_rx: Option<std::sync::mpsc::Receiver<(i32, i32)>> = None;
+    let mut scale_rx: Option<std::sync::mpsc::Receiver<f32>> = None;
+    let mut last_night: Option<bool> = None;
 
     while !destroyed {
         app.poll_events(Some(std::time::Duration::from_millis(120)), |event| {
@@ -201,12 +276,13 @@ fn android_main(app: AndroidApp) {
                         })() {
                             Ok(e) => {
                                 let (w, h) = e.surface_size();
-                                state.set_viewport(w, h);
+                                state.set_viewport(w, h, display_ppp(&app));
                                 log::info!("renderer {w}x{h}, font: {}", state.font_source());
                                 egl = Some(e);
                                 // Kick off the async inset query now that the
                                 // window exists.
                                 inset_rx = Some(post_top_inset_query(&app));
+                                scale_rx = Some(post_font_scale_query(&app));
                             }
                             Err(e) => log::error!("renderer init failed: {e}"),
                         }
@@ -222,17 +298,27 @@ fn android_main(app: AndroidApp) {
                 | PollEvent::Main(MainEvent::ContentRectChanged { .. }) => {
                     if let Some(e) = egl.as_ref() {
                         let (w, h) = e.surface_size();
-                        state.set_viewport(w, h);
+                        state.set_viewport(w, h, display_ppp(&app));
+                        inset_rx = Some(post_top_inset_query(&app));
                     }
                     state.dirty = true;
                 }
                 PollEvent::Main(MainEvent::RedrawNeeded { .. }) => {
                     if let Some(e) = egl.as_mut() {
                         let (w, h) = e.surface_size();
-                        state.set_viewport(w, h);
+                        state.set_viewport(w, h, display_ppp(&app));
                         state.frame(&AndroidPlatform { app: &app });
                         e.swap();
                     }
+                }
+                PollEvent::Main(MainEvent::ConfigChanged { .. }) => {
+                    // Density, font scale or night mode may have changed.
+                    scale_rx = Some(post_font_scale_query(&app));
+                    if let Some(e) = egl.as_ref() {
+                        let (w, h) = e.surface_size();
+                        state.set_viewport(w, h, display_ppp(&app));
+                    }
+                    state.dirty = true;
                 }
                 PollEvent::Main(MainEvent::GainedFocus) => {
                     // inset is queried once below via query_top_inset
@@ -257,10 +343,10 @@ fn android_main(app: AndroidApp) {
         // Drain the async inset query when the Java thread gets to it.
         if let Some(rx) = inset_rx.take() {
             match rx.try_recv() {
-                Ok(v) => {
-                    let top = v.max(0) as f32;
-                    log::info!("system bar top inset: {top}");
-                    state.set_content_top(top);
+                Ok((top, bottom)) => {
+                    log::info!("system bar insets: top {top}, bottom {bottom}");
+                    state.set_content_top(top.max(0) as f32);
+                    state.set_content_bottom(bottom.max(0) as f32);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => inset_rx = Some(rx),
                 Err(_) => {}
@@ -268,6 +354,20 @@ fn android_main(app: AndroidApp) {
         }
 
         let plat = AndroidPlatform { app: &app };
+        if let Some(rx) = scale_rx.take() {
+            match rx.try_recv() {
+                Ok(v) => state.set_text_scale(v),
+                Err(std::sync::mpsc::TryRecvError::Empty) => scale_rx = Some(rx),
+                Err(_) => {}
+            }
+        }
+        // Night mode is a cheap local read; the core ignores unchanged values.
+        let night = format!("{:?}", app.config().ui_mode_night()) == "Yes";
+        if last_night != Some(night) {
+            last_night = Some(night);
+            state.set_appearance(night);
+        }
+
         if input_pending {
             input_pending = false;
             if let Ok(mut iter) = app.input_events_iter() {
