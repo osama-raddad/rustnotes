@@ -586,4 +586,146 @@ mod tests {
         assert!(app.screen() == Screen::List);
         assert!(!app.on_back(), "nothing left: the host may leave the app");
     }
+
+    /// One egui pass, as the host runs it: the app draws into a root `Ui`
+    /// covering the screen between begin_pass/end_pass, so list widgets are
+    /// real, hit-testable widgets.
+    fn run_pass(app: &mut App, ctx: &egui::Context, events: Vec<Event>, t: f64) {
+        let mut raw = frame(events, t);
+        let screen = raw.screen_rect.unwrap();
+        ctx.begin_pass(raw);
+        let mut root = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::new("test-root"),
+            egui::UiBuilder::new().max_rect(screen),
+        );
+        app.ui(&mut root);
+        // No renderer applies the glyph-atlas delta; clear it or epaint
+        // panics on the drop.
+        ctx.end_pass().textures_delta.clear();
+    }
+
+    /// A tap at `pos`: move, press, release, all in one pass.
+    fn click(pos: egui::Pos2) -> Vec<Event> {
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        vec![Event::PointerMoved(pos), button(true), button(false)]
+    }
+
+    /// A corrupt on-disk database must not brick the app: App::new falls
+    /// back to an in-memory store, stays usable, and never touches the file.
+    #[test]
+    fn corrupt_database_falls_back_to_a_usable_in_memory_app() {
+        let dir = temp("corrupt-db");
+        let db_path = dir.join("notes.db");
+        std::fs::write(&db_path, b"not a sqlite database").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut app = App::new(dir.clone(), &ctx, None); // must not panic
+
+        assert!(app.screen() == Screen::List);
+        app.open_editor(0);
+        app.buffer = "in-memory only".to_owned();
+        app.close_editor();
+        assert!(app.screen() == Screen::List);
+        assert_eq!(
+            app.notes.len(),
+            1,
+            "session edits persist to the fallback store"
+        );
+        assert_eq!(app.notes[0].body, "in-memory only");
+
+        assert_eq!(
+            std::fs::read(&db_path).unwrap(),
+            b"not a sqlite database",
+            "the corrupt file is left as-is, for later recovery"
+        );
+    }
+
+    /// The editor round trip: a new note saves on close, reopening loads
+    /// its body, re-editing updates it in place, and closing returns to
+    /// the list.
+    #[test]
+    fn editor_round_trip_creates_then_updates_a_note() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("editor-roundtrip").join("data"), &ctx, None);
+
+        app.open_editor(0);
+        app.buffer = "first draft".to_owned();
+        app.close_editor();
+        assert!(app.screen() == Screen::List, "closing returns to the list");
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(app.notes[0].body, "first draft");
+        let id = app.notes[0].id;
+
+        app.open_editor(id);
+        assert_eq!(
+            app.buffer, "first draft",
+            "the editor loads the stored body"
+        );
+        app.buffer = "second draft".to_owned();
+        app.close_editor();
+        assert_eq!(app.notes.len(), 1, "editing updates in place, no duplicate");
+        assert_eq!(app.notes[0].id, id);
+        assert_eq!(app.notes[0].body, "second draft");
+    }
+
+    #[test]
+    fn closing_an_empty_new_note_discards_it() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("editor-empty-new").join("data"), &ctx, None);
+        app.open_editor(0);
+        app.close_editor();
+        assert!(app.notes.is_empty(), "an empty new note is never saved");
+    }
+
+    #[test]
+    fn emptying_an_existing_note_deletes_it() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("editor-empty-out").join("data"), &ctx, None);
+        app.open_editor(0);
+        app.buffer = "will be emptied".to_owned();
+        app.close_editor();
+        assert_eq!(app.notes.len(), 1);
+
+        let id = app.notes[0].id;
+        app.open_editor(id);
+        app.buffer.clear();
+        app.close_editor();
+        assert!(app.notes.is_empty(), "emptying an existing note deletes it");
+    }
+
+    /// Tapping a row's ✕ once arms the delete; only a second tap within
+    /// the 2 s window removes the note. (The expiry after 2 s runs on
+    /// `Instant` and is not injectable, so it is not tested here.)
+    #[test]
+    fn delete_cross_needs_two_taps() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("delete-two-tap").join("data"), &ctx, None);
+        app.open_editor(0);
+        app.buffer = "to delete".to_owned();
+        app.close_editor();
+        let id = app.notes[0].id;
+
+        // Lay the list out once, then read the cross's rect back from the
+        // widget registry — the same rects egui hit-tests against.
+        run_pass(&mut app, &ctx, vec![], 1.0);
+        let cross = ctx
+            .read_response(egui::Id::new(("del", id)))
+            .expect("the delete cross is laid out")
+            .rect
+            .center();
+
+        run_pass(&mut app, &ctx, click(cross), 2.0);
+        assert_eq!(app.armed_delete.map(|(i, _)| i), Some(0), "first tap arms");
+        assert_eq!(app.notes.len(), 1, "arming alone must not delete");
+
+        run_pass(&mut app, &ctx, click(cross), 2.2);
+        assert_eq!(app.armed_delete, None, "the second tap consumes the arm");
+        assert!(app.notes.is_empty(), "second tap within the window deletes");
+    }
 }
