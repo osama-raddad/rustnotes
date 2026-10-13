@@ -3,4 +3,9 @@
   <component name="ModulesManager">
     <module fileurl="file://$PROJECT_DIR$/.idea/rustnotes.iml" filepath="$PROJECT_DIR$/.idea/rustnotes.iml" />
   </component>
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/rustnotes.iml" filepath="$PROJECT_DIR$/.idea/rustnotes.iml" />
+    </modules>
+  </component>
 </project>
