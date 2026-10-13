@@ -43,7 +43,15 @@ impl Metrics {
     };
 
     /// `space[i]`, clamped to the scale.
+    ///
+    /// An out-of-scale index is a typo somewhere, so it is loud in debug
+    /// builds; release builds keep the silent clamp.
     pub fn sp(&self, i: usize) -> f32 {
+        debug_assert!(
+            i < self.space.len(),
+            "space index {i} is off the scale (0..={})",
+            self.space.len() - 1
+        );
         self.space[i.min(self.space.len() - 1)]
     }
 
@@ -58,10 +66,43 @@ impl Metrics {
         ctx.all_styles_mut(move |s| {
             s.spacing.interact_size = Vec2::new(m.touch_target, m.touch_target);
             s.spacing.button_padding = Vec2::new(m.sp(3), m.sp(1));
-            s.text_styles.insert(TextStyle::Small, m.font(m.text.caption));
-            s.text_styles.insert(TextStyle::Body, m.font(m.text.body_large));
-            s.text_styles.insert(TextStyle::Button, m.font(m.text.body_large));
-            s.text_styles.insert(TextStyle::Heading, m.font(m.text.headline));
+            s.text_styles
+                .insert(TextStyle::Small, m.font(m.text.caption));
+            s.text_styles
+                .insert(TextStyle::Body, m.font(m.text.body_large));
+            s.text_styles
+                .insert(TextStyle::Button, m.font(m.text.body_large));
+            s.text_styles
+                .insert(TextStyle::Heading, m.font(m.text.headline));
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sp_reads_the_scale() {
+        let m = Metrics::DEFAULT;
+        assert_eq!(m.sp(0), 4.0);
+        assert_eq!(m.sp(1), 8.0);
+        assert_eq!(m.sp(2), 12.0);
+        assert_eq!(m.sp(3), 16.0);
+        assert_eq!(m.sp(4), 24.0);
+    }
+
+    /// Off-scale indices assert in debug builds and clamp in release ones.
+    #[test]
+    fn off_scale_index_is_loud_in_debug() {
+        if cfg!(debug_assertions) {
+            let prev = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let panicked = std::panic::catch_unwind(|| Metrics::DEFAULT.sp(7));
+            std::panic::set_hook(prev);
+            assert!(panicked.is_err(), "sp(7) must debug-assert");
+        } else {
+            assert_eq!(Metrics::DEFAULT.sp(7), 24.0, "release clamps to the top");
+        }
     }
 }
