@@ -1,0 +1,51 @@
+[package]
+name = "demo-mobile"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95" # egui 0.36 floor
+description = "Feature-gallery consumer of the rustnotes host: every seam hook exercised with real behaviour"
+
+# One crate, two shapes, mirroring the other apps: Android's activity
+# loads the cdylib and calls `android_main`; iOS and desktop run the
+# binary in src/main.rs.
+[lib]
+name = "demo_mobile"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "demo-mobile"
+path = "src/main.rs"
+
+# The backend swap, same as hello-mobile's (see rustnotes/Cargo.toml for
+# the full rationale — android-activity compile_error!s on both-on and on
+# neither). Default is NativeActivity; GameActivity is the opt-in.
+[features]
+default = ["android-native-activity"]
+android-native-activity = [
+    "rustnotes/android-native-activity",
+    "android-activity/native-activity",
+]
+android-game-activity = [
+    "rustnotes/android-game-activity",
+    "android-activity/game-activity",
+]
+
+[dependencies]
+# The host, consumed as a framework — default features off so this
+# crate's own `android_main` (src/lib.rs) is the only one linked.
+rustnotes = { path = "../rustnotes", default-features = false }
+log.workspace = true
+egui.workspace = true
+# The bin's `eframe::Result` return type only; renderer features arrive
+# through rustnotes' own target-scoped eframe deps (features unify).
+eframe.workspace = true
+
+# Desktop only: the iOS binary logs through the host's panic hook (NSLog)
+# instead — same scoping as the other apps.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+env_logger = "0.11"
+
+# The lib's `android_main` signature; winit gets the AndroidApp through
+# the host's `start`, which sets `options.android_app` itself.
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = "0.6"
