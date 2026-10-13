@@ -272,3 +272,74 @@ found that the record above didn't predict:
   package identity, the next hard-coded surface (the endpoint CLI's
   problem). Q3 stays open — a hello screen is not "a real second
   consumer" for `layout/`.
+
+## Addendum: packaging generalized (2026-10-13)
+
+The endpoint wave parametrized the justfile over apps — an `app`
+parameter, default `rustnotes`, on every user-facing packaging recipe
+(the private `ios-build` takes `app` without a default: just forbids a
+required parameter after a defaulted one) — added the
+screenshot recipes the endpoint section names as missing, and gave
+hello-mobile its own `resources/` (manifest + Info.plist) and debug
+keystore. Both apps now package through the same recipes; the defaults
+(`just android`, `just ios`, …) keep rustnotes' exact paths and
+pipeline. What generalizing exposed:
+
+- One coincidence was doing triple duty: crate name == bin name ==
+  crates/ dir name == "rustnotes". The `app` key keeps that triple true
+  for both apps by construction, but the identity table now spells out
+  where it actually held — and where it doesn't: hello-mobile's cdylib
+  lib name is `hello_mobile` (its Cargo `[lib]` name), not the crate
+  name, so the manifest's `android.app.lib_name`, the staged
+  `lib<cdylib>.so`, and the iOS `CFBundleExecutable` all follow the
+  table, never the key.
+- The manifest/packaging matched set is per-app, and one leg of it lives
+  in Rust: the Android package must equal both the manifest's `package`
+  attr and the App impl's `ANDROID_DATA_DIR_FALLBACK` (the fallback path
+  encodes the package name — a mismatched pair installs, launches, and
+  quietly writes into a directory Android doesn't own). The trait cannot
+  enforce this; the identity table is the one place all three values are
+  visible at once. The rest of the set copies verbatim per app (full
+  configChanges list, `extractNativeLibs="true"`, `hasCode="false"`,
+  NativeActivity/singleTask/adjustResize, targetSdk 35, MinimumOSVersion
+  13.0 mirrored by the recipe's IPHONEOS_DEPLOYMENT_TARGET).
+- just's grammar forced one design note: `just android app=hello-mobile`
+  binds the whole `app=hello-mobile` token as a positional argument, so
+  the identity table normalizes the key (strips a leading `app=`) and
+  recipes name artifacts with the normalized `$key` — both spellings of
+  the argument produce the same `build/hello-mobile.apk`.
+- Keystores are per-app FILES (`debug.keystore`,
+  `hello-mobile.debug.keystore`), not one file with an alias per app:
+  keytool rewrites the whole keystore non-atomically for every
+  genkeypair, so a shared file would put a live keystore (the other
+  app's signing key) under that rewrite and break the temp-file+mv
+  atomicity the keystore recipe exists to provide. `.gitignore` widened
+  to `*.keystore`.
+- The label doubles as the iOS `.app` dir name, space included ("Rust
+  Notes.app", "Hello Mobile.app"); the iOS bundle id follows the repo
+  convention android-pkg + ".ios". Shared staging dirs stay shared and
+  per-run-wiped (`build/apk`, `build/ios`) — one app packages at a time,
+  and the other app's staged lib or bundle must not survive the wipe —
+  while artifacts are per-app (`build/<app>.apk`,
+  `build/ios/<label>.app`).
+- rustnotes' resources stay at the repo root while hello-mobile's live
+  under `crates/hello-mobile/resources/` — asymmetry kept for backward
+  compat (moving rustnotes' would churn docs and muscle memory);
+  resolved when the endpoint CLI's per-app config names the dir.
+- `ios-sign` / `ios-profile` / `ios-install` remain rustnotes-only: the
+  profile helper's pbxproj bakes `com.osamaraddad.rustnotes.ios`, and
+  both recipes now guard loudly instead of letting a second app reach
+  for a rustnotes profile. The guard fires after the device build (deps
+  run in order) with the reason and a pointer here; a per-app profile
+  story is the endpoint CLI's to build. `ios-device` (unsigned) works
+  for every app.
+- The screenshot recipes are the capture half of the "per-device
+  screenshots" this plan until now compared by hand:
+  `screenshot-android` (`adb exec-out screencap` — exec-out, because the
+  shell pty's LF→CRLF corrupts the PNG) and `screenshot-ios` (`simctl io
+  booted screenshot` under the same exactly-one-booted-sim guard as
+  `ios-run`).
+- The identity table is the embryo of the endpoint CLI's config shape:
+  its keys are the CLI's per-app fields, its two rows the first two
+  consumers. Q5 (name and home) stays the gate on promoting it from a
+  justfile recipe to anything compiled.

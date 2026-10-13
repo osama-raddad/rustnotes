@@ -91,20 +91,30 @@ Run `just` alone to list recipes.
 cargo run -p rustnotes # desktop window: the fastest loop for UI work
 just run-android       # connected device (physical first), else emulator (boots one if needed)
 just run-ios           # connected iPhone, else simulator (boots one if needed)
-just android          # release APK (aapt2/zipalign/apksigner pipeline, targetSdk 35)
-just android-install  # + install & launch on a specific adb target
-just android-x        # release APK via xbuild (auto-signed, targetSdk 33)
-just android-run      # xbuild: deploy + launch + stream logs (Ctrl-C detaches)
-just ios              # simulator .app bundle (ad-hoc signed)
-just ios-run          # + install & launch on the booted simulator
-just ios-device       # device .app (unsigned)
-just ios-install      # device: sign + install + launch on a connected iPhone
-just ios-profile      # refresh the 7-day device profile (see below)
+just android           # release APK (aapt2/zipalign/apksigner pipeline, targetSdk 35)
+just android-install   # + install & launch on the first adb target (args: app, serial)
+just android-x         # release APK via xbuild (auto-signed, targetSdk 35)
+just android-run       # xbuild: deploy + launch + stream logs (Ctrl-C detaches)
+just ios               # simulator .app bundle (ad-hoc signed)
+just ios-run           # + install & launch on the booted simulator
+just ios-device        # device .app (unsigned)
+just ios-install       # device: sign + install + launch on a connected iPhone
+just ios-profile       # refresh the 7-day device profile (see below)
+just screenshot-android # device screenshot -> build/screenshot-<app>-android.png
+just screenshot-ios    # booted-simulator screenshot -> build/screenshot-<app>-ios.png
 just check            # type-check core, Android lib and iOS binary
 just fmt              # cargo fmt --all
 just lint             # fmt --check, then clippy on both crates
 just test             # rustnotes-core unit tests
 ```
+
+Every packaging recipe is app-parametric: the `app` argument defaults to
+`rustnotes` — `just android` is exactly `just android app=rustnotes` — and
+the second consumer packages with `just android app=hello-mobile`,
+`just run-ios app=hello-mobile`, and so on. Each app brings its own
+resources (Android manifest, Info.plist) and debug keystore; device
+signing (`just ios-install`/`just ios-profile`) is rustnotes-only for now
+(the bundled profile helper mints profiles for one bundle id).
 
 Underneath, the recipes drive plain `cargo` plus the platform packagers
 (`aapt2`/`apksigner`, `codesign`/`simctl`, or xbuild) — no Gradle, no Xcode

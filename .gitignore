@@ -1,7 +1,9 @@
 /build
 *.apk
 *.apk.idsig
-debug.keystore
+# every app mints its own debug keystore (justfile `keystore` recipe):
+# debug.keystore, hello-mobile.debug.keystore, …
+*.keystore
 .idea/*
 !.idea/runConfigurations/
 !.idea/modules.xml
