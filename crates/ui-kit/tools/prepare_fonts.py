@@ -12,6 +12,12 @@ embeds with `include_bytes!`:
                                  144 instance, a documented deviation)
   Fraunces-Headline.ttf          Fraunces upright instanced at
                                  wght 600, opsz 36, SOFT 0, WONK 0 (H3)
+  Fraunces-Metric.ttf            Fraunces upright instanced at
+                                 wght 700, opsz 144, SOFT 30, WONK 0
+                                 (the metric card figure at 56px and the
+                                 editorial card headline at 24px, the two
+                                 component styles that set the display
+                                 voice in bold; added by issue 08)
   Fraunces-EditorialItalic.ttf   Fraunces italic instanced at
                                  wght 400, opsz 22, SOFT 30, WONK 0
                                  (editorial pull-quotes)
@@ -88,6 +94,14 @@ INSTANCES = [
         "headline 3",
     ),
     (
+        "Fraunces-Metric.ttf",
+        "Fraunces-VariableFont_SOFT_WONK_opsz_wght.ttf",
+        {"wght": 700, "opsz": 144, "SOFT": 30, "WONK": 0},
+        "Fraunces Metric",
+        "Bold",
+        "metric card figure (56px) and editorial headline (24px)",
+    ),
+    (
         "Fraunces-EditorialItalic.ttf",
         "Fraunces-Italic-VariableFont_SOFT_WONK_opsz_wght.ttf",
         {"wght": 400, "opsz": 22, "SOFT": 30, "WONK": 0},
@@ -144,9 +158,10 @@ from the Vynatix design-system font sources and embedded with
   ship in Vynatix products only; check Microsoft's terms before
   distributing it outside Vynatix's own documents and apps.
 - **Fraunces** (Fraunces-Display.ttf, Fraunces-Headline.ttf,
-  Fraunces-EditorialItalic.ttf): SIL Open Font License upstream
-  (underdale.org). The source zip the design system hosts carried no
-  licence text; see https://openfontlicense.org for the terms.
+  Fraunces-Metric.ttf, Fraunces-EditorialItalic.ttf): SIL Open Font
+  License upstream (underdale.org). The source zip the design system
+  hosts carried no licence text; see https://openfontlicense.org for
+  the terms.
 - **Geist** (Geist-Regular.ttf, Geist-Medium.ttf, Geist-SemiBold.ttf):
   SIL Open Font License upstream (Vercel). No licence text shipped in
   the source download; see https://openfontlicense.org for the terms.
@@ -232,7 +247,7 @@ def main() -> None:
     for out_name, derivation, size in report:
         total += size
         print(f"  {out_name:<34} {human(size):>7}  {derivation}")
-    print(f"  {'11 faces, total':<34} {human(total):>7}")
+    print(f"  {'12 faces, total':<34} {human(total):>7}")
     print()
     print(f"Wrote {len(report)} faces, {len(LICENCES)} licences and the notes to {OUT_DIR}")
     print("The output is committed; builds embed it with include_bytes!.")

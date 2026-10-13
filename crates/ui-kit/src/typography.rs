@@ -31,7 +31,11 @@
 //! face (no 350 static exists); Teal's display styles name weight 500 but
 //! set Instrument Serif, which ships one weight (the Teal book turns
 //! synthesis off, so no faux bold); the eyebrow's leading is the tokens'
-//! absolute 16px over its 11px size.
+//! absolute 16px over its 11px size; and the two component styles that
+//! name weight 700 (the metric figure, the editorial headline) resolve
+//! through [`display_bold_family`], where Forest instanced a dedicated
+//! Fraunces 700 while Teal keeps Instrument Serif's single weight and
+//! Monochrome's Geist takes its 600 instance.
 
 use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use egui::{Color32, Context, FontData, FontFamily, FontId, Response, Ui, Widget};
@@ -66,6 +70,17 @@ const FRAUNCES_HEADLINE: Face = Face {
     family: "Fraunces Headline",
     file: "Fraunces-Headline.ttf",
     bytes: include_bytes!("../assets/fonts/Fraunces-Headline.ttf"),
+};
+
+/// Fraunces at the metric figure's coordinates: wght 700, opsz 144,
+/// SOFT 30. The one bold display instance the components need (issue
+/// 08): the metric card's 56px figure and the editorial card's 24px
+/// headline, both of which the specs set in the display family at
+/// weight 700.
+const FRAUNCES_METRIC: Face = Face {
+    family: "Fraunces Metric",
+    file: "Fraunces-Metric.ttf",
+    bytes: include_bytes!("../assets/fonts/Fraunces-Metric.ttf"),
 };
 
 /// Fraunces italic for editorial pull-quotes: wght 400, opsz 22, SOFT 30.
@@ -136,6 +151,7 @@ const JETBRAINS_MONO: Face = Face {
 const FOREST_FACES: &[Face] = &[
     FRAUNCES_DISPLAY,
     FRAUNCES_HEADLINE,
+    FRAUNCES_METRIC,
     FRAUNCES_EDITORIAL,
     APTOS,
     APTOS_SEMI_BOLD,
@@ -209,6 +225,33 @@ pub fn install(theme: ThemeId, ctx: &Context) {
             }],
         ));
     }
+}
+
+// ---- the component display voices ----------------------------------------
+
+/// The display voice in bold (the specs' weight 700) per theme, as a
+/// named family. Two component styles set it: the metric card's 56px
+/// figure and the editorial card's 24px headline, each of which pairs
+/// the display family with body copy on the same surface.
+///
+/// Documented deviations, mirroring the specimen's: Forest instanced a
+/// dedicated wght 700, opsz 144, SOFT 30 Fraunces ("Fraunces Metric",
+/// added by issue 08); Teal's Instrument Serif ships one weight (the
+/// Teal book turns synthesis off, so no faux bold); Monochrome's Geist
+/// display uses its 600 instance, the nearest prepared Geist to the
+/// spec's 700, since one component pair did not justify a fourth Geist
+/// instance.
+pub fn display_bold_family_name(theme: ThemeId) -> &'static str {
+    match theme.face_group() {
+        FaceGroup::Forest => FRAUNCES_METRIC.family,
+        FaceGroup::Teal => INSTRUMENT.family,
+        FaceGroup::Mono => GEIST_SEMI_BOLD.family,
+    }
+}
+
+/// [`display_bold_family_name`] as a [`FontFamily::Name`].
+pub fn display_bold_family(theme: ThemeId) -> FontFamily {
+    FontFamily::Name(display_bold_family_name(theme).into())
 }
 
 // ---- the type styles ------------------------------------------------------
@@ -464,6 +507,23 @@ pub fn specimen_job(
     )
 }
 
+/// `text` in `font_id`, advanced by `tracking_em` after every glyph at
+/// an optional line height, in `color`: the same path
+/// [`specimen_job`] takes, for the component styles that are not one of
+/// the specimen's (the metric figure's −4% at 56px, the editorial
+/// headline's −2% at 24px). Unlike [`TrackedLabel`] this never
+/// uppercases: figures and headlines keep their case. The job wraps at
+/// the containing `Ui`'s wrap width, as any label does.
+pub fn tracked_text(
+    text: &str,
+    font_id: FontId,
+    tracking_em: f32,
+    line_height: Option<f32>,
+    color: Color32,
+) -> egui::text::LayoutJob {
+    tracked_job(text, font_id, tracking_em, line_height, color)
+}
+
 /// The eyebrow widget: a single-line label tracked open at the style's
 /// +0.24em, set in uppercase in `text-accent`, the brand's signature
 /// label. Use it with [`TypeStyle::Eyebrow`]'s font id and tracking.
@@ -521,7 +581,7 @@ impl Widget for TrackedLabel<'_> {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Color32, FontId};
+    use egui::{Color32, FontFamily, FontId};
 
     use crate::theme::ThemeId;
     use crate::tokens::tracking;
@@ -639,7 +699,7 @@ mod tests {
         }
     }
 
-    /// The three themes together install exactly the eleven prepared
+    /// The three themes together install exactly the twelve prepared
     /// faces from `assets/fonts/`, each theme's set free of duplicates.
     #[test]
     fn theme_faces_are_exactly_the_prepared_font_set() {
@@ -649,6 +709,7 @@ mod tests {
             ("Fraunces Display", "Fraunces-Display.ttf"),
             ("Fraunces Editorial", "Fraunces-EditorialItalic.ttf"),
             ("Fraunces Headline", "Fraunces-Headline.ttf"),
+            ("Fraunces Metric", "Fraunces-Metric.ttf"),
             ("Geist", "Geist-Regular.ttf"),
             ("Geist Medium", "Geist-Medium.ttf"),
             ("Geist SemiBold", "Geist-SemiBold.ttf"),
@@ -674,7 +735,61 @@ mod tests {
         union.sort_unstable();
         let mut expected = expected;
         expected.sort_unstable();
-        assert_eq!(union, expected, "the eleven prepared faces, no strays");
+        assert_eq!(union, expected, "the twelve prepared faces, no strays");
+    }
+
+    /// The bold display voice resolves per theme to a family that theme
+    /// installs: Fraunces Metric in Forest (the issue 08 instance at
+    /// wght 700), Instrument Serif in Teal (one weight, no faux bold)
+    /// and Geist SemiBold in Monochrome (the nearest prepared Geist to
+    /// the spec's 700).
+    #[test]
+    fn display_bold_resolves_to_an_installed_face_per_theme() {
+        let expected: &[(ThemeId, &str)] = &[
+            (ThemeId::Light, "Fraunces Metric"),
+            (ThemeId::Dark, "Fraunces Metric"),
+            (ThemeId::TealLight, "Instrument Serif"),
+            (ThemeId::TealDark, "Instrument Serif"),
+            (ThemeId::MonoLight, "Geist SemiBold"),
+            (ThemeId::MonoDark, "Geist SemiBold"),
+        ];
+        for (theme, family) in expected {
+            assert_eq!(super::display_bold_family_name(*theme), *family);
+            assert_eq!(
+                super::display_bold_family(*theme),
+                FontFamily::Name((*family).into())
+            );
+            let installed: Vec<&str> = theme.faces().iter().map(|face| face.family).collect();
+            assert!(
+                installed.contains(family),
+                "{}: display bold maps to {family}, which the theme does not install",
+                theme.name()
+            );
+        }
+    }
+
+    /// `tracked_text` lays out its text verbatim (no uppercasing, unlike
+    /// [`super::TrackedLabel`]) with the requested tracking in points
+    /// and optional line height: the metric figure's −4% at 56px and the
+    /// editorial headline's −2% at 24px go through it.
+    #[test]
+    fn tracked_text_keeps_case_and_carries_its_tracking() {
+        let job = super::tracked_text(
+            "714k",
+            FontId {
+                size: 56.0,
+                family: super::display_bold_family(ThemeId::Light),
+            },
+            -0.04,
+            Some(56.0),
+            Color32::BLACK,
+        );
+        assert_eq!(job.text, "714k", "figures keep their case");
+        assert_eq!(job.sections.len(), 1);
+        let format = &job.sections[0].format;
+        assert!((format.extra_letter_spacing - (-0.04 * 56.0)).abs() < 1e-4);
+        assert_eq!(format.line_height, Some(56.0));
+        assert_eq!(format.color, Color32::BLACK);
     }
 
     /// The per-theme face mapping follows the README table: Forest sets
@@ -808,9 +923,10 @@ mod tests {
     }
 
     /// `install` registers the theme's named families on a live context:
-    /// after a pass, egui lists every family the theme's styles
-    /// reference. The install is additive, so each theme's families
-    /// accumulate in the one context rather than replace each other.
+    /// after a pass, egui lists every family the theme's styles (and the
+    /// components' bold display voice) reference. The install is
+    /// additive, so each theme's families accumulate in the one context
+    /// rather than replace each other.
     #[test]
     fn install_registers_the_named_families_with_a_live_context() {
         let ctx = egui::Context::default();
@@ -820,13 +936,16 @@ mod tests {
             out.drop_without_applying_deltas();
             let out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 let families = ui.ctx().fonts(|fonts| fonts.families());
-                for style in TypeStyle::ALL {
-                    let family = style.family(*theme);
+                let mut referenced: Vec<egui::FontFamily> = TypeStyle::ALL
+                    .iter()
+                    .map(|style| style.family(*theme))
+                    .collect();
+                referenced.push(super::display_bold_family(*theme));
+                for family in referenced {
                     assert!(
                         families.contains(&family),
-                        "{}: {} resolves to an installed family ({family})",
-                        theme.name(),
-                        style.name()
+                        "{}: {family} resolves to an installed family",
+                        theme.name()
                     );
                     if !seen.contains(&family) {
                         seen.push(family);
@@ -835,9 +954,9 @@ mod tests {
             });
             out.drop_without_applying_deltas();
         }
-        // Additive across themes: eleven families, none of them dropped
+        // Additive across themes: twelve families, none of them dropped
         // by a later theme's install.
-        assert_eq!(seen.len(), 11, "every prepared family stays installed");
+        assert_eq!(seen.len(), 12, "every prepared family stays installed");
     }
 
     /// The FontId constructors resolve per theme without allocating

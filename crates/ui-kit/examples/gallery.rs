@@ -1,11 +1,13 @@
 //! The Vynatix gallery: a theme switcher, the type specimen, a palette
-//! swatch grid, the interaction states and the foundation specimens
-//! (spacing, radii, elevation). Run with `cargo run -p ui-kit --example
-//! gallery`. Each issue grows a section here.
+//! swatch grid, the interaction states, the foundation specimens
+//! (spacing, radii, elevation), the icons, the logo and the surface
+//! components (cards, metrics, editorial, glass). Run with `cargo run
+//! -p ui-kit --example gallery`. Each issue grows a section here.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
-use ui_kit::components::FocusRing;
+use ui_kit::components::liquid_glass::{glass_recipe, paint_glass, GlassThickness, GlassTint};
+use ui_kit::components::{Card, EditorialCard, FocusRing, LiquidGlass, MetricCard};
 use ui_kit::icon::{icon, icon_active, install as install_icons, IconSize};
 use ui_kit::icons::{Icon, CATEGORY_GROUPS};
 use ui_kit::logo::Logo;
@@ -568,6 +570,368 @@ fn logo_section(ui: &mut egui::Ui, theme: ThemeId) {
     )));
 }
 
+// ---- the surface components (issue 08) ------------------------------------
+
+/// A card variant specimen: the class name in mono, one line of what
+/// the variant is, per the Card preview.
+fn card_specimen(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &UiKitFlags,
+    class: &str,
+    description: &str,
+    card: Card,
+) {
+    let colors = theme.colors();
+    card.ui(ui, theme, flags, |ui| {
+        ui.set_width(spacing::SPACE_40 + spacing::SPACE_24);
+        ui.add(egui::Label::new(specimen_job(
+            class,
+            TypeStyle::Mono,
+            theme,
+            colors.text_body(),
+        )));
+        ui.add_space(spacing::SPACE_1);
+        ui.add(egui::Label::new(specimen_job(
+            description,
+            TypeStyle::Caption,
+            theme,
+            colors.text_muted(),
+        )));
+    });
+}
+
+/// The four card variants in the Card preview's two-column grid:
+/// elevated (the default), outlined, filled and interactive, the last
+/// one a real control to hover and tab to.
+fn cards_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
+    ui.label("Cards · four variants · radius-lg · padding 24");
+    ui.add_space(spacing::SPACE_2);
+    egui::Grid::new("surfaces-cards")
+        .num_columns(2)
+        .spacing([spacing::SPACE_5, spacing::SPACE_5])
+        .show(ui, |ui| {
+            card_specimen(
+                ui,
+                theme,
+                flags,
+                ".card",
+                "Elevated, the default: surface-container-low with shadow-l1.",
+                Card::new(),
+            );
+            ui.end_row();
+            card_specimen(
+                ui,
+                theme,
+                flags,
+                ".card--outlined",
+                "Surface with a 1px outline-variant border, no shadow.",
+                Card::new().outlined(),
+            );
+            card_specimen(
+                ui,
+                theme,
+                flags,
+                ".card--filled",
+                "Surface-container, no shadow.",
+                Card::new().filled().compact(),
+            );
+            ui.end_row();
+            card_specimen(
+                ui,
+                theme,
+                flags,
+                ".card--interactive",
+                "Lifts to surface-container and shadow-l2 on hover. Tab to it for the ring.",
+                Card::new().interactive(),
+            );
+            ui.end_row();
+            card_specimen(
+                ui,
+                theme,
+                flags,
+                ".card · large padding",
+                "The same elevated card at space-8, 32px, for pull-quotes and folios.",
+                Card::new().large(),
+            );
+            ui.end_row();
+        });
+}
+
+/// The metric trio: one specific, sourced number per card, per the
+/// MetricCard preview's own copy.
+fn metrics_group(ui: &mut egui::Ui, theme: ThemeId) {
+    ui.label("Metrics · one number each, sourced");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal(|ui| {
+        MetricCard::new(
+            "Trucks running our code",
+            "714k",
+            "Volvo FH, FM, FMX. April 2026 fleet count.",
+        )
+        .ui(ui, theme);
+        ui.add_space(spacing::SPACE_5);
+        MetricCard::new(
+            "Average engagement length",
+            "19 mo",
+            "Across 27 engagements since 2022.",
+        )
+        .ui(ui, theme);
+        ui.add_space(spacing::SPACE_5);
+        MetricCard::new(
+            "Senior people, percent",
+            "100",
+            "No juniors on client work. Ever.",
+        )
+        .unit("%")
+        .ui(ui, theme);
+    });
+}
+
+/// The editorial row: a case study, a field note and an open role,
+/// image areas as the placeholder tiles until photography exists.
+fn editorial_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
+    ui.label("Editorial · case study, field note, open role");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal(|ui| {
+        EditorialCard::new(
+            "Case study",
+            "Rebuilding the truck radio in sixteen weeks.",
+            "Three engineers, one designer, one product partner. Shipped to seven hundred thousand cabs by week thirty-one.",
+        )
+        .action("Read the case study")
+        .ui(ui, theme, flags);
+        ui.add_space(spacing::SPACE_5);
+        EditorialCard::new(
+            "Field notes",
+            "Premium isn't a price point. It's a discipline.",
+            "Why every Vynatix interface starts from a sixty-thirty-ten ratio, even when the brief asks for something louder.",
+        )
+        .action("Read the field note")
+        .ui(ui, theme, flags);
+        ui.add_space(spacing::SPACE_5);
+        EditorialCard::new(
+            "Open role",
+            "Senior platform engineer, Gothenburg.",
+            "Android Automotive, Kotlin, OTA pipelines. Permanent. Pay band published. No negotiation theatre.",
+        )
+        .action("Read the role")
+        .ui(ui, theme, flags);
+    });
+}
+
+/// One glass demo tile: a scene of palette content (display type, a
+/// tertiary dot, a primary block on the canvas scenes) with a pane over
+/// its lower part, carrying the pane's name, spec and use. The scene
+/// supplies the backdrop the tint and its opacity play against.
+struct GlassScene {
+    /// The scene's ground: `surface-container-high` for the material
+    /// tiles, the page canvas for the tint tiles.
+    fill: Color32,
+    /// Whether the scene carries the primary block (the canvas scenes).
+    with_block: bool,
+}
+
+/// The tile's pane: which pane to paint and what to call it.
+struct GlassPaneSpec {
+    thickness: GlassThickness,
+    tint: GlassTint,
+    name: String,
+}
+
+/// Paint one glass demo tile: the scene, then the pane over its lower
+/// part, chrome radius md, through the recipe so the specular edge and
+/// the L2 shadow ride along.
+fn glass_tile(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &UiKitFlags,
+    width: f32,
+    scene: GlassScene,
+    pane: GlassPaneSpec,
+) {
+    let colors = theme.colors();
+    let height = 212.0;
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    let radius = CornerRadius::same(radii::RADIUS_LG as u8);
+    ui.painter().rect_filled(rect, radius, scene.fill);
+    // The scene's art: display type and a dot, the palette content the
+    // web preview scrolls under its panes.
+    ui.painter().text(
+        rect.left_top() + Vec2::new(spacing::SPACE_2, -spacing::SPACE_1),
+        Align2::LEFT_TOP,
+        "Aa",
+        egui::FontId {
+            size: 128.0,
+            family: TypeStyle::Display.family(theme),
+        },
+        colors.primary,
+    );
+    ui.painter().circle_filled(
+        rect.right_top() + Vec2::new(-spacing::SPACE_4, spacing::SPACE_8),
+        spacing::SPACE_8,
+        colors.tertiary,
+    );
+    if scene.with_block {
+        ui.painter().rect_filled(
+            Rect::from_min_size(
+                rect.right_top(),
+                Vec2::new(spacing::SPACE_12, spacing::SPACE_10),
+            ),
+            CornerRadius::same(0),
+            colors.primary,
+        );
+    }
+    let pane_rect = Rect::from_min_max(
+        rect.left_bottom() + Vec2::new(spacing::SPACE_2, -96.0),
+        rect.right_bottom() - Vec2::new(spacing::SPACE_2, spacing::SPACE_2),
+    );
+    let recipe = glass_recipe(pane.thickness, pane.tint, theme, flags);
+    paint_glass(ui.painter(), pane_rect, radii::RADIUS_MD as u8, &recipe);
+    let text = pane_rect.left_top() + Vec2::new(spacing::SPACE_3, spacing::SPACE_3);
+    let line = spacing::SPACE_3 + 14.0;
+    ui.painter().text(
+        text,
+        Align2::LEFT_TOP,
+        pane.name,
+        egui::FontId {
+            size: 14.0,
+            family: TypeStyle::Headline4.family(theme),
+        },
+        recipe.label,
+    );
+    ui.painter().text(
+        text + Vec2::new(0.0, line),
+        Align2::LEFT_TOP,
+        format!(
+            "blur {} · sat {:.0}%",
+            pane.thickness.blur_px(),
+            pane.thickness.saturation_percent()
+        ),
+        egui::FontId {
+            size: 12.0,
+            family: TypeStyle::Mono.family(theme),
+        },
+        recipe.label,
+    );
+    ui.painter().text(
+        text + Vec2::new(0.0, line * 2.0),
+        Align2::LEFT_TOP,
+        pane.thickness.usage(),
+        egui::FontId {
+            size: 12.0,
+            family: TypeStyle::Caption.family(theme),
+        },
+        recipe.label,
+    );
+}
+
+/// The glass panes: the five thicknesses over palette content, then the
+/// three tints beside the reduced-transparency fallback, one live pane
+/// laid out as chrome, and the usage rules in the caption.
+fn glass_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
+    let colors = theme.colors();
+    ui.label("Liquid glass · five thicknesses · 1px specular edge · shadow-l2");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal(|ui| {
+        for thickness in GlassThickness::ALL {
+            glass_tile(
+                ui,
+                theme,
+                flags,
+                176.0,
+                GlassScene {
+                    fill: colors.surface_container_high,
+                    with_block: false,
+                },
+                GlassPaneSpec {
+                    thickness: *thickness,
+                    tint: GlassTint::Surface,
+                    name: sentence_case(thickness.name()),
+                },
+            );
+            ui.add_space(spacing::SPACE_3);
+        }
+    });
+
+    ui.add_space(spacing::SPACE_2);
+    ui.label("Tints and the fallback · regular thickness · over the page canvas");
+    ui.add_space(spacing::SPACE_1);
+    let solid_flags = UiKitFlags {
+        reduced_transparency: true,
+        ..Default::default()
+    };
+    let tints: &[(GlassTint, &str, &UiKitFlags)] = &[
+        (GlassTint::Surface, ".glass", flags),
+        (GlassTint::Primary, ".glass--primary", flags),
+        (GlassTint::Accent, ".glass--accent", flags),
+        (GlassTint::Surface, "Reduced transparency", &solid_flags),
+    ];
+    ui.horizontal(|ui| {
+        for (tint, name, pane_flags) in tints {
+            glass_tile(
+                ui,
+                theme,
+                pane_flags,
+                224.0,
+                GlassScene {
+                    fill: colors.background,
+                    with_block: true,
+                },
+                GlassPaneSpec {
+                    thickness: GlassThickness::Regular,
+                    tint: *tint,
+                    name: (*name).to_owned(),
+                },
+            );
+            ui.add_space(spacing::SPACE_3);
+        }
+    });
+
+    // One live pane, laid out as chrome with content in it; the host's
+    // reduced-transparency checkbox flips it solid in place.
+    ui.add_space(spacing::SPACE_2);
+    let recipe = LiquidGlass::new().recipe(theme, flags);
+    LiquidGlass::new().ui(ui, theme, flags, |ui| {
+        ui.set_width(spacing::SPACE_40 + spacing::SPACE_10);
+        ui.add(egui::Label::new(
+            egui::RichText::new("A pane as chrome, its labels in the recipe's colour")
+                .color(recipe.label)
+                .size(14.0)
+                .family(TypeStyle::Headline4.family(theme)),
+        ));
+    });
+
+    ui.add_space(spacing::SPACE_2);
+    ui.add(egui::Label::new(specimen_job(
+        "Chrome and overlays only: top app bars, sheets, popovers, modal headers. Never body content, and never two panes of the same thickness stacked. Under reduced transparency every pane turns solid, as the fourth tile shows. egui composites no backdrop blur: the tint and its opacity carry the glass, and the 1px specular edge marks the pane.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The components section: the surface components issue 08 adds, in
+/// the preview's own copy.
+fn components_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "Components · Surfaces · Gothenburg · 2026",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    cards_group(ui, theme, flags);
+    ui.add_space(spacing::SPACE_4);
+    metrics_group(ui, theme);
+    ui.add_space(spacing::SPACE_4);
+    editorial_group(ui, theme, flags);
+    ui.add_space(spacing::SPACE_4);
+    glass_group(ui, theme, flags);
+}
+
 impl eframe::App for Gallery {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
@@ -607,6 +971,8 @@ impl eframe::App for Gallery {
                 icons_section(ui, self.theme);
                 ui.add_space(spacing::SPACE_6);
                 logo_section(ui, self.theme);
+                ui.add_space(spacing::SPACE_6);
+                components_section(ui, self.theme, &self.flags);
                 ui.add_space(spacing::SPACE_6);
 
                 ui.add_space(spacing::SPACE_4);
