@@ -608,8 +608,10 @@ screenshot-ios app='rustnotes':
 # Type-check every crate for its real targets (rustnotes and hello-mobile
 # are each checked three ways: Android lib, iOS-sim bin, host desktop bin)
 # (the workspace can't be checked as a whole: ndk-sys only compiles for Android)
+# (ui-kit is pure egui with no platform glue, so the host check covers it)
 check:
     cargo check -p rustnotes-core
+    cargo check -p ui-kit
     cargo check -p rustnotes --lib --target aarch64-linux-android
     cargo check -p rustnotes --bin rustnotes --target aarch64-apple-ios-sim
     cargo check -p rustnotes --bin rustnotes
@@ -640,15 +642,16 @@ check-links:
 fmt:
     cargo fmt --all
 
-# Unit tests for the core crate (the host crate is platform glue — no tests)
+# Unit tests for the core and ui-kit crates (the host crate is platform glue — no tests)
 test:
     cargo test -p rustnotes-core
+    cargo test -p ui-kit
 
-# Format check, then clippy over all three crates on the host feature set
+# Format check, then clippy over all four crates on the host feature set
 # (the Android/iOS glue is additionally type-checked by `just check`)
 lint:
     cargo fmt --all -- --check
-    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile --all-targets -- -D warnings
+    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile -p ui-kit --all-targets -- -D warnings
 
 clean:
     rm -rf build

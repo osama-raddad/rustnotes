@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/rustnotes-core", "crates/rustnotes", "crates/hello-mobile"]
+members = [
+    "crates/rustnotes-core",
+    "crates/rustnotes",
+    "crates/hello-mobile",
+    "crates/ui-kit",
+]
 
 [workspace.dependencies]
 log = "0.4"

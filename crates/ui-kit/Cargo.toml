@@ -1,0 +1,15 @@
+[package]
+name = "ui-kit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95" # egui 0.36 floor
+description = "Vynatix design system as pure egui: generated tokens for all six themes, the themes, and the gallery demo surface"
+
+[dependencies]
+egui.workspace = true
+
+# The gallery example hosts itself on eframe the way crates/rustnotes does
+# on desktop: default fonts, the glow renderer and accesskit. A dev
+# dependency only — the kit itself is pure egui with no host.
+[dev-dependencies]
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit"] }
