@@ -1,8 +1,10 @@
 # Mobile-first layout system — design plan
 
 Status: **implemented for Rust Notes** in PR #5 (merged 2026-10-13), all
-seven phases. The eframe template has not adopted the module yet. Line
-numbers in "What exists today" describe the code *before* PR #5.
+seven phases. The eframe template (`examples/eframe-mobile`) was deleted in
+PR #10; the module's consumer is the app core itself, and the eframe host
+crate does not use it. Line numbers in "What exists today" describe the code
+*before* PR #5.
 
 ## As shipped
 
@@ -24,13 +26,14 @@ has been corrected in place; the differences in one table:
 | Info.plist | not planned | declares iPad and landscape orientations |
 | Type scale | caption 11, body 14, body-large 16, title 17, headline 22 | as planned; list snippets moved from 13 to 14 pt |
 
-Still open: the template adopting the module, the iOS soft-keyboard inset
-check, iPad landscape (the simulator could not be rotated during
-verification), and a shell feeding reduced motion.
+Still open: the iOS soft-keyboard inset check, iPad landscape (the simulator
+could not be rotated during verification), and a shell feeding reduced
+motion.
 
-Scope: a thin layout layer on top of egui 0.36 that both consumers in this
-repo can use: the Rust Notes core (`crates/rustnotes-core`) and the eframe
-template (`examples/eframe-mobile`). It covers three things and nothing
+Scope: a thin layout layer on top of egui 0.36 for the Rust Notes core
+(`crates/rustnotes-core`), its one consumer; the eframe template
+(`examples/eframe-mobile`), the second consumer when this was written, was
+deleted in PR #10. It covers three things and nothing
 else:
 
 1. **Density contract** — points come from the device's real density, not a
@@ -70,7 +73,8 @@ Rust Notes core (`crates/rustnotes-core/src/lib.rs`, branch
   (lines 450–451). The scaffold can rely on `ctx.content_rect()` without
   any shell change.
 
-eframe template (`examples/eframe-mobile/src/app.rs`, PR #3):
+eframe template (`examples/eframe-mobile/src/app.rs`, PR #3 — deleted in
+PR #10):
 
 - `orientation()` (line 98) compares `content_rect` height to width and
   branches portrait/landscape (lines 193–201). A 7-inch tablet in portrait
@@ -252,9 +256,10 @@ separate crate yet: the template is a standalone workspace and would need
 a path dependency into the main workspace, which breaks the "copy this
 folder out" property that makes the template useful. When the second
 consumer adopts the module, extract it to `crates/mobile-layout` and point
-both at it. As shipped, the template has not adopted it yet; the framework
-extraction plan (`docs/framework-extraction-plan.md`) makes
-`mobile-layout` a crate in its Phase 2, which settles this.
+both at it. As shipped, the template never adopted it and was itself deleted
+in PR #10; the framework extraction plan
+(`docs/framework-extraction-plan.md`), now superseded by PR #10, would have
+made `mobile-layout` a crate in its Phase 2.
 
 ## Phases
 

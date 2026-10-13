@@ -1,5 +1,11 @@
 # From Rust Notes to a mobile framework — extraction plan
 
+> **Status: superseded.** PR #10 (commit 2e31204) made eframe + winit the
+> host and deleted the hand-rolled shells this plan proposed to extract, so
+> the plan below was never implemented. It is kept as the historical record;
+> any future extraction would target the eframe host crate
+> (`crates/rustnotes`) instead.
+
 Status: proposal, 2026-10-13. Nothing here is implemented. Line numbers refer
 to `main` at `71b08f1`.
 
@@ -20,10 +26,10 @@ open question.
 | `crates/rustnotes-core/src/screens.rs` | 662 | example (list, editor, settings, two-pane) |
 | `crates/rustnotes-core/src/layout/` | 785 | framework (`mobile-layout`) |
 | `crates/rustnotes-core/src/notes.rs`, `util.rs` | 132 | example (SQLite, date formatting) |
-| `crates/rustnotes-android/` (`lib.rs` + `egl.rs`) | 599 | framework (`mobile-android`) |
-| `crates/rustnotes-ios/src/main.rs` | 607 | framework (`mobile-ios`) |
+| `crates/rustnotes-android/` (`lib.rs` + `egl.rs`) | 599 | framework (`mobile-android`) → deleted in PR #10 |
+| `crates/rustnotes-ios/src/main.rs` | 607 | framework (`mobile-ios`) → deleted in PR #10 |
 | `justfile`, `resources/`, `rust-toolchain.toml` | — | templates |
-| `examples/eframe-mobile/` | — | open question (see below) |
+| `examples/eframe-mobile/` | — | open question (see below) → deleted in PR #10 |
 
 The seam runs through `App` (`lib.rs:94–165`). Its fields sort cleanly:
 

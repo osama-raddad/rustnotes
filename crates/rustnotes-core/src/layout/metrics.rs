@@ -58,10 +58,14 @@ impl Metrics {
         ctx.all_styles_mut(move |s| {
             s.spacing.interact_size = Vec2::new(m.touch_target, m.touch_target);
             s.spacing.button_padding = Vec2::new(m.sp(3), m.sp(1));
-            s.text_styles.insert(TextStyle::Small, m.font(m.text.caption));
-            s.text_styles.insert(TextStyle::Body, m.font(m.text.body_large));
-            s.text_styles.insert(TextStyle::Button, m.font(m.text.body_large));
-            s.text_styles.insert(TextStyle::Heading, m.font(m.text.headline));
+            s.text_styles
+                .insert(TextStyle::Small, m.font(m.text.caption));
+            s.text_styles
+                .insert(TextStyle::Body, m.font(m.text.body_large));
+            s.text_styles
+                .insert(TextStyle::Button, m.font(m.text.body_large));
+            s.text_styles
+                .insert(TextStyle::Heading, m.font(m.text.headline));
         });
     }
 }

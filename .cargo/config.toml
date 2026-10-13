@@ -1,11 +1,15 @@
 # All generated artifacts live under build/ — cargo's target dir included
 # (relative paths here resolve against this file's parent, i.e. the root).
+# No absolute paths: the NDK linker/CC/AR are exported by the justfile from
+# ANDROID_HOME (default ~/Library/Android/sdk).
 [build]
 target-dir = "build/target"
 
-# Linker for the Android target (NDK r27, min API 24).
-# CC/AR for C dependencies (rusqlite bundled) are exported by the justfile.
+# Android target. The linker (NDK r27 clang, min API 24) is deliberately NOT
+# set here — the justfile exports CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER
+# so this file stays machine-independent. A bare
+# `cargo build --target aarch64-linux-android` outside `just` needs that
+# variable set (plus CC/AR for the bundled rusqlite).
 [target.aarch64-linux-android]
-linker = "/Users/osamaraddad/Library/Android/sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
 # 16 KB page alignment (required for Pixel-class 16 KB kernel devices)
 rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]

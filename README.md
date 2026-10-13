@@ -62,8 +62,11 @@ only what they lack on mobile.
   signed in to Xcode).
 
 Paths are defaulted for a macOS install under `~/Library/Android/sdk`; override
-with `ANDROID_HOME` if needed. The NDK linker path and the
-16 KB-page-alignment flag live in `.cargo/config.toml`.
+with `ANDROID_HOME` if needed. The `justfile` exports the NDK linker (and
+CC/AR) from `ANDROID_HOME`; `.cargo/config.toml` holds only the target dir and
+the 16 KB-page-alignment link flag — so a direct
+`cargo build --target aarch64-linux-android` outside `just` needs
+`CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` set.
 
 ## Build & run
 
@@ -85,6 +88,9 @@ just ios-device       # device .app (unsigned)
 just ios-install      # device: sign + install + launch on a connected iPhone
 just ios-profile      # refresh the 7-day device profile (see below)
 just check            # type-check core, Android lib and iOS binary
+just fmt              # cargo fmt --all
+just lint             # fmt --check, then clippy on both crates
+just test             # rustnotes-core unit tests
 ```
 
 Underneath, the recipes drive plain `cargo` plus the platform packagers
@@ -101,7 +107,7 @@ shared via git). Pick one from the Run/Debug dropdown:
 |---|---|
 | Run on Android (just run-android) | physical device if connected → else emulator (boots the first AVD if needed) |
 | Run on iOS (just run-ios) | connected iPhone (sign + install + launch) → else simulator (boots one if needed) |
-| Check all targets | `cargo check` for all three crates on their real targets |
+| Check all targets | `cargo check` for both crates on their real targets |
 
 The granular recipes (`just android`, `just ios-run`, `just ios-install`,
 …) remain available as plain `just` commands in the terminal, and

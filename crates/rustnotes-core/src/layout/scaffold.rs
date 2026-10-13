@@ -129,14 +129,30 @@ impl<'a> Scaffold<'a> {
 
         if let Some(f) = self.top_bar {
             let r = Rect::from_min_size(content.min, vec2(content.width(), m.bar_height));
-            bar(root, r, content.top() - full.top(), 0.0, BarLine::Bottom, pal, f);
+            bar(
+                root,
+                r,
+                content.top() - full.top(),
+                0.0,
+                BarLine::Bottom,
+                pal,
+                f,
+            );
             body_rect.min.y = r.bottom();
             rects.top_bar = Some(r);
         }
         if let Some(f) = self.bottom_bar {
             let top = (content.bottom() - m.bar_height).max(body_rect.min.y);
             let r = Rect::from_min_max(pos2(content.left(), top), content.right_bottom());
-            bar(root, r, 0.0, full.bottom() - content.bottom(), BarLine::Top, pal, f);
+            bar(
+                root,
+                r,
+                0.0,
+                full.bottom() - content.bottom(),
+                BarLine::Top,
+                pal,
+                f,
+            );
             body_rect.max.y = r.top();
             rects.bottom_bar = Some(r);
         }

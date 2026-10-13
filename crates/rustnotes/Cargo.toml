@@ -23,16 +23,16 @@ egui.workspace = true
 # with NativeActivity on Android, so features are spelled out per target.
 # `default_fonts` keeps egui's bundled font as the fallback if no system font
 # can be read.
-eframe = { version = "0.36", default-features = false, features = ["default_fonts"] }
+eframe = { workspace = true, features = ["default_fonts"] }
 
 # Renderer per platform: glow (OpenGL ES 3) on Android and desktop; wgpu
 # (Metal) on iOS, because eframe's glow path needs glutin, which has no iOS
 # backend.
 [target.'cfg(not(target_os = "ios"))'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["glow"] }
+eframe = { workspace = true, features = ["glow"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
+eframe = { workspace = true, features = ["wgpu"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
     "NSString",
@@ -53,14 +53,14 @@ objc2-ui-kit = { version = "0.3", features = [
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["android-native-activity"] }
+eframe = { workspace = true, features = ["android-native-activity"] }
 android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.14"
 jni = "0.22"
 
 # Linux desktop: with default features off nothing selects a winit backend.
 [target.'cfg(target_os = "linux")'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["x11", "wayland"] }
+eframe = { workspace = true, features = ["x11", "wayland"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 env_logger = "0.11"
