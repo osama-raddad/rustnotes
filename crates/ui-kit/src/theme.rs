@@ -179,8 +179,9 @@ impl ThemeId {
 
 /// One CSS layer set as a single egui shadow: egui paints one layer with
 /// unsigned blur/spread, so the widest layer stands in for the set and a
-/// negative spread (the monochrome shrink) clamps away.
-fn egui_shadow(layers: &[shadows::ShadowLayer]) -> egui::Shadow {
+/// negative spread (the monochrome shrink) clamps away. The kit's own
+/// visuals and the gallery's elevation specimens both go through here.
+pub fn egui_shadow(layers: &[shadows::ShadowLayer]) -> egui::Shadow {
     let widest = layers
         .iter()
         .max_by_key(|layer| layer.blur.round() as u32)

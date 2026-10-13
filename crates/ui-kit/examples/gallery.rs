@@ -1,10 +1,13 @@
-//! The Vynatix gallery: a theme switcher, the type specimen and a
-//! palette swatch grid over the kit's tokens. Run with `cargo run -p
-//! ui-kit --example gallery`. Each issue grows a section here.
+//! The Vynatix gallery: a theme switcher, the type specimen, a palette
+//! swatch grid, the interaction states and the foundation specimens
+//! (spacing, radii, elevation). Run with `cargo run -p ui-kit --example
+//! gallery`. Each issue grows a section here.
 
-use eframe::egui::{self, Color32, CornerRadius, Sense, Vec2};
+use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
-use ui_kit::theme::ThemeId;
+use ui_kit::components::FocusRing;
+use ui_kit::states::{self, UiKitFlags};
+use ui_kit::theme::{egui_shadow, ThemeId};
 use ui_kit::tokens::{radii, spacing, ThemeColors};
 use ui_kit::typography::{install, specimen_job, TrackedLabel, TypeStyle};
 
@@ -22,13 +25,19 @@ fn main() -> eframe::Result {
             let theme = ThemeId::Light;
             install(theme, &cc.egui_ctx);
             theme.apply(&cc.egui_ctx);
-            Ok(Box::new(Gallery { theme }))
+            Ok(Box::new(Gallery {
+                theme,
+                flags: UiKitFlags::default(),
+            }))
         }),
     )
 }
 
 struct Gallery {
     theme: ThemeId,
+    /// The kit flags this host passes down, standing in for the web
+    /// system's reduced-motion and reduced-transparency media queries.
+    flags: UiKitFlags,
 }
 
 /// A role name for display: strip the `md-sys-color-` prefix and set the
@@ -171,6 +180,233 @@ fn trim_float(value: f32) -> String {
         .to_owned()
 }
 
+/// One state specimen: a button-shaped rect at `scale`, its caption,
+/// and the focus ring when the state is focus.
+fn state_tile(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    caption: &str,
+    fill: Color32,
+    scale: f32,
+    text: Color32,
+    focused: bool,
+) {
+    let colors = theme.colors();
+    let size = Vec2::new(spacing::SPACE_24, spacing::SPACE_10);
+    ui.vertical(|ui| {
+        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        let body = Rect::from_center_size(rect.center(), size * scale);
+        let radius = CornerRadius::same(radii::RADIUS_MD as u8);
+        ui.painter().rect_filled(body, radius, fill);
+        if focused {
+            states::focus_ring_at(ui.painter(), rect, radius, theme);
+        }
+        ui.painter().text(
+            body.center(),
+            Align2::CENTER_CENTER,
+            "Start a project",
+            TypeStyle::Body.font_id(theme),
+            text,
+        );
+        ui.add_space(spacing::SPACE_1);
+        ui.add(egui::Label::new(specimen_job(
+            caption,
+            TypeStyle::Caption,
+            theme,
+            colors.text_muted(),
+        )));
+    });
+}
+
+/// The interaction states: hover, press, focus and disabled as
+/// specimens beside a control that really takes focus via Tab.
+fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "States · Hover, press, focus",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    let rest = colors.primary;
+    let hover = states::composite_over(states::hover_overlay(colors.on_primary), rest);
+    let pressed = states::composite_over(states::pressed_overlay(colors.on_primary), rest);
+    let disabled = states::disabled(colors.on_surface, colors.surface_container);
+
+    ui.horizontal(|ui| {
+        state_tile(ui, theme, "Rest", rest, 1.0, colors.on_primary, false);
+        ui.add_space(spacing::SPACE_2);
+        state_tile(
+            ui,
+            theme,
+            "Hover · 8% on-colour overlay",
+            hover,
+            1.0,
+            colors.on_primary,
+            false,
+        );
+        ui.add_space(spacing::SPACE_2);
+        state_tile(
+            ui,
+            theme,
+            "Pressed · 12% overlay · 98.5% scale · 100ms",
+            pressed,
+            states::PRESS_SCALE,
+            colors.on_primary,
+            false,
+        );
+        ui.add_space(spacing::SPACE_2);
+        state_tile(
+            ui,
+            theme,
+            "Focus · 2px ring · 2px offset · 4px halo · 120ms",
+            rest,
+            1.0,
+            colors.on_primary,
+            true,
+        );
+        ui.add_space(spacing::SPACE_2);
+        state_tile(
+            ui,
+            theme,
+            "Disabled · content 38% · container 12%",
+            disabled.container,
+            1.0,
+            disabled.content,
+            false,
+        );
+    });
+
+    ui.add_space(spacing::SPACE_2);
+    FocusRing::new().wrap(ui, theme, flags, |ui| {
+        ui.add(egui::Button::new("Tab to me"))
+    });
+    ui.add(egui::Label::new(specimen_job(
+        "Press Tab until the ring lands here. Focus is carried by the ring, not a colour change.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The foundations as specimens: the spacing scale, all eight radii and
+/// the active theme's five elevation levels.
+fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "Foundations · Spacing, radii, elevation",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    ui.label("Spacing · the approved scale · 4px base");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal_wrapped(|ui| {
+        for (name, value) in spacing::ALL {
+            ui.vertical(|ui| {
+                let (rect, _) = ui.allocate_exact_size(
+                    Vec2::new(spacing::SPACE_24, spacing::SPACE_2),
+                    Sense::hover(),
+                );
+                if *value > 0.0 {
+                    let bar = Rect::from_min_size(rect.min, Vec2::new(*value, rect.height()));
+                    ui.painter()
+                        .rect_filled(bar, CornerRadius::same(0), colors.primary);
+                }
+                ui.add(egui::Label::new(specimen_job(
+                    &format!("{name} · {}", trim_float(*value)),
+                    TypeStyle::Caption,
+                    theme,
+                    colors.text_muted(),
+                )));
+            });
+            ui.add_space(spacing::SPACE_2);
+        }
+    });
+
+    ui.add_space(spacing::SPACE_4);
+    ui.label("Radii · all eight");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal(|ui| {
+        for (name, value) in radii::ALL {
+            ui.vertical(|ui| {
+                let (rect, _) =
+                    ui.allocate_exact_size(Vec2::splat(spacing::SPACE_16), Sense::hover());
+                let radius = CornerRadius::same(value.min(255.0) as u8);
+                ui.painter().rect_stroke(
+                    rect,
+                    radius,
+                    egui::Stroke::new(1.0, colors.outline_variant),
+                    egui::StrokeKind::Outside,
+                );
+                ui.painter()
+                    .rect_filled(rect.shrink(1.0), radius, colors.surface_container_high);
+                ui.add(egui::Label::new(specimen_job(
+                    &format!("{} · {}", sentence_case(name), trim_float(*value)),
+                    TypeStyle::Caption,
+                    theme,
+                    colors.text_muted(),
+                )));
+            });
+            ui.add_space(spacing::SPACE_2);
+        }
+    });
+
+    ui.add_space(spacing::SPACE_4);
+    ui.label(format!("Elevation · L1 to L5 · {}", theme.name()));
+    ui.add_space(spacing::SPACE_2);
+    let shadows = theme.shadows();
+    let levels = [
+        ("L1", shadows.l1),
+        ("L2", shadows.l2),
+        ("L3", shadows.l3),
+        ("L4", shadows.l4),
+        ("L5", shadows.l5),
+    ];
+    ui.horizontal(|ui| {
+        for (level, layers) in levels {
+            ui.vertical(|ui| {
+                let (rect, _) = ui.allocate_exact_size(
+                    Vec2::new(spacing::SPACE_24, spacing::SPACE_24),
+                    Sense::hover(),
+                );
+                let card = Rect::from_center_size(
+                    rect.center(),
+                    Vec2::new(spacing::SPACE_16, spacing::SPACE_10),
+                );
+                let radius = CornerRadius::same(radii::RADIUS_LG as u8);
+                ui.painter().add(egui_shadow(layers).as_shape(card, radius));
+                ui.painter()
+                    .rect_filled(card, radius, colors.surface_container_low);
+                let caption = layers
+                    .first()
+                    .map(|layer| {
+                        format!(
+                            "{} · {} {} {} · {:.0}%",
+                            level,
+                            trim_float(layer.x),
+                            trim_float(layer.y),
+                            trim_float(layer.blur),
+                            layer.color.a() as f32 * 100.0 / 255.0,
+                        )
+                    })
+                    .unwrap_or_else(|| level.to_owned());
+                ui.add(egui::Label::new(specimen_job(
+                    &caption,
+                    TypeStyle::Caption,
+                    theme,
+                    colors.text_muted(),
+                )));
+            });
+            ui.add_space(spacing::SPACE_2);
+        }
+    });
+}
+
 impl eframe::App for Gallery {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
@@ -196,10 +432,18 @@ impl eframe::App for Gallery {
                     }
                 }
             });
+            ui.add_space(spacing::SPACE_1);
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.flags.reduced_motion, "Reduced motion");
+                ui.checkbox(&mut self.flags.reduced_transparency, "Reduced transparency");
+            });
 
             ui.add_space(spacing::SPACE_6);
             egui::ScrollArea::vertical().show(ui, |ui| {
                 type_section(ui, self.theme);
+                states_section(ui, self.theme, &self.flags);
+                foundations_section(ui, self.theme);
+                ui.add_space(spacing::SPACE_6);
 
                 ui.add_space(spacing::SPACE_4);
                 ui.label(format!("Colour roles · {}", self.theme.name()));
