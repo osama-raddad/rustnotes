@@ -1,9 +1,32 @@
 # Mobile-first layout system — design plan
 
-Status: proposal, 2026-10-13. Nothing here is implemented. Line numbers
-below refer to the branches named in each section (the egui migration on
-`worktree-docs-rendering-engine-research`, the template on
-`feat/eframe-mobile-template`), not to `main`.
+Status: **implemented for Rust Notes** in PR #5 (merged 2026-10-13), all
+seven phases. The eframe template has not adopted the module yet. Line
+numbers in "What exists today" describe the code *before* PR #5.
+
+## As shipped
+
+The design below held. Where the implementation differs, the section text
+has been corrected in place; the differences in one table:
+
+| Topic | Plan said | Shipped |
+|---|---|---|
+| iPad Pro 11-inch, portrait | two panes | **one pane**: 834 pt wide is under the 840 pt Expanded breakpoint, so it is Medium. Two panes show on the 13-inch in portrait (1032 pt) and on tablets in landscape |
+| Text scale | `ctx.set_zoom_factor` | multiplies the effective pixels-per-point passed to egui (`density × text_scale`), avoiding egui's zoom rect adjustment |
+| Appearance on iOS | `traitCollectionDidChange` | the shell polls `traitCollection.userInterfaceStyle` and `preferredContentSizeCategory` on its frame timer; the core ignores unchanged values |
+| Appearance API | `CoreEvent::Appearance` | `App::set_appearance(dark)` and `App::set_text_scale(s)` |
+| Transitions | two layers with transforms | two child UIs at a horizontal offset; `Scaffold` lays out relative to the rect it is given |
+| Reduced motion | maps to 0 ms | `App::set_reduce_motion` exists; no shell feeds it yet |
+| Routes | `Route::Editor(id)` | `Screen::Editor`; the note id stays in app state |
+| Bottom nav | `BottomNav` struct, a stack per tab | `bottom_nav()` function; tabs are Notes and Settings (a diagnostics page); only Notes has a stack |
+| Swipe to delete | `Sense::drag` rows, two-step confirm | pointer watcher (rows stay click-only so drag-to-scroll works); deletes on release past 40 %; the cross button and its two-tap confirm remain |
+| Android bottom inset | not planned | the JNI inset query now returns the system-bar bottom too, dropped while the keyboard is visible |
+| Info.plist | not planned | declares iPad and landscape orientations |
+| Type scale | caption 11, body 14, body-large 16, title 17, headline 22 | as planned; list snippets moved from 13 to 14 pt |
+
+Still open: the template adopting the module, the iOS soft-keyboard inset
+check, iPad landscape (the simulator could not be rotated during
+verification), and a shell feeding reduced motion.
 
 Scope: a thin layout layer on top of egui 0.36 that both consumers in this
 repo can use: the Rust Notes core (`crates/rustnotes-core`) and the eframe
@@ -229,9 +252,9 @@ separate crate yet: the template is a standalone workspace and would need
 a path dependency into the main workspace, which breaks the "copy this
 folder out" property that makes the template useful. When the second
 consumer adopts the module, extract it to `crates/mobile-layout` and point
-both at it; until then, the template keeps its own copy of the two files it
-needs (`size_class.rs`, `scaffold.rs`) with a header comment saying where
-the source of truth is.
+both at it. As shipped, the template has not adopted it yet; the framework
+extraction plan (`docs/framework-extraction-plan.md`) makes
+`mobile-layout` a crate in its Phase 2, which settles this.
 
 ## Phases
 
@@ -254,16 +277,17 @@ the soft keyboard must appear and the caret must stay visible above it.
 
 **Phase 3 — size classes and list–detail.** Rust Notes renders
 list–detail when `two_pane_ok()`; the template replaces its orientation
-branch with `WindowClass`. Acceptance: the iPad simulator shows list and
-editor side by side in both orientations; the iPhone 17 Pro in landscape
-(874 x 402 pt) still shows one pane.
+branch with `WindowClass`. Acceptance: the iPad Pro 13-inch simulator
+shows list and editor side by side in portrait (1032 pt wide); the iPad Pro
+11-inch in portrait (834 pt) correctly stays single-pane as Medium width;
+the iPhone 17 Pro in landscape (874 x 402 pt) still shows one pane.
 
 ## Decisions (resolved 2026-10-13)
 
 - **Tablets are in scope.** All three phases are planned; Phase 3 ships
   list–detail in Rust Notes and the `WindowClass` switch in the template,
-  verified on an iPad simulator in both orientations. Rust Notes gains a
-  tablet target with this plan.
+  verified on the iPad Pro 13-inch simulator in portrait. Rust Notes gains
+  a tablet target with this plan.
 - **Touch target is 48 points** on both platforms. Material's minimum,
   which also satisfies the iOS HIG's 44. The template's `TOUCH_TARGET`
   constant moves from 44 to 48 when it adopts `Metrics`.
@@ -299,13 +323,15 @@ impl<R: Clone + PartialEq> Nav<R> {
 }
 ```
 
-Mechanism: `ctx.animate_value_with_time(id, target, 0.25)` gives the
-progress; `show` creates two child UIs with `UiBuilder::max_rect` on
-`content_rect().translate(vec2(dx, 0))` and clips them, outgoing at
-`-0.3 * width * t` and incoming at `width * (1 - t)`, the Material
-"shared axis" feel. Reduced-motion preference maps to a 0 ms duration.
-Rust Notes: `Screen` becomes `Nav<Route>` with `Route::List` and
-`Route::Editor(id)`; `close_editor` becomes `pop`. The `Back` key handler
+Mechanism (as shipped): progress comes from egui's clock with an ease-out
+cubic over 250 ms; `show` creates two child UIs with `UiBuilder::max_rect`
+on the viewport rect offset sideways, outgoing at `-0.3 * width * t` and
+incoming at `width * (1 - t)`, the Material "shared axis" feel. `Scaffold`
+lays out relative to the rect it is given, so a screen needs no change to
+be drawn mid-slide. `App::set_reduce_motion` turns the slide off; no shell
+feeds it yet. Rust Notes: `Screen` became `Nav<Screen>` with `Screen::List`
+and `Screen::Editor`; `close_editor` became `pop`. Screens queue commands
+instead of touching the stack, because the stack is borrowed while it draws. The `Back` key handler
 already returns whether the event was consumed, so the Android shell keeps
 working unchanged.
 
@@ -326,18 +352,18 @@ Three layers, in order of precedence:
 2. **System appearance.** egui follows `ThemePreference::System` only when
    the shell reports the OS theme, and winit reports none on Android or iOS.
    The shells feed it directly: Android reads
-   `AndroidApp::config().ui_mode_night()` on resume and config change
-   (`uiMode` is already in `configChanges`), iOS reads
-   `traitCollection.userInterfaceStyle` in `traitCollectionDidChange`.
-   Both push `CoreEvent::Appearance(Dark | Light)`; the core calls
-   `ctx.options_mut(|o| o.fallback_theme = ..)`. Rust Notes gets a dark mode
-   out of this for free.
-3. **Text scale.** Android `fontScale` (`config()` exposes it; `fontScale`
-   is in `configChanges`) and iOS Dynamic Type (`preferredContentSizeCategory`)
-   map to `ctx.set_zoom_factor(scale)`, which egui applies to every text
-   style and spacing uniformly. Because zoom multiplies pixels-per-point,
-   the Phase 1 density contract must be set first and zoom applied after;
-   `set_viewport` keeps density, `set_text_scale` keeps zoom.
+   `AndroidApp::config().ui_mode_night()` every loop iteration (a cheap
+   local read), iOS polls `traitCollection.userInterfaceStyle` on its frame
+   timer. Both call `App::set_appearance(dark)`, which sets
+   `ctx.options_mut(|o| o.fallback_theme = ..)` only when it changed. Rust
+   Notes gets a dark mode out of this for free.
+3. **Text scale.** Android `fontScale` (not exposed by the NDK
+   configuration, so a JNI query on `Configuration.fontScale`, re-run on
+   config change) and iOS Dynamic Type (`preferredContentSizeCategory`,
+   mapped to a ratio) call `App::set_text_scale(s)`. The core multiplies the
+   effective pixels-per-point it hands egui by `s`, which scales text, bars
+   and targets uniformly without egui's zoom machinery; `set_viewport` keeps
+   density, `set_text_scale` keeps the multiplier.
 
 Acceptance: emulator with the system dark theme on shows the dark palette
 at launch and switches live when toggled in Settings; "Font size: largest"
@@ -349,18 +375,20 @@ on the iPhone simulator via Accessibility → Larger Text.
 **BottomNav** fills the scaffold's bottom slot:
 
 ```rust
-pub struct NavItem { pub icon: fn(&Painter, Rect, Color32), pub label: &'static str }
-pub struct BottomNav<'a> { items: &'a [NavItem], selected: &'a mut usize }
-impl BottomNav<'_> { pub fn show(self, ui: &mut Ui) -> Option<usize>; } // Some(i) when changed
+pub struct NavItem { pub label: &'static str, pub icon: fn(&Painter, Rect, Color32) }
+/// Some(i) when a tab other than `selected` was tapped.
+pub fn bottom_nav(ui: &mut Ui, items: &[NavItem], selected: usize,
+                  pal: &Palette, m: &Metrics) -> Option<usize>;
 ```
 
 Height is `Metrics::bar_height` (56) plus the bottom safe inset, which the
 scaffold already excludes from the body, so the bar paints its background
 over `viewport_rect` down to the screen edge and keeps its items inside
 `content_rect`. Items are `touch_target` wide at minimum and the active
-one gets the accent colour. Each tab owns its own `Nav<R>` stack so
-switching tabs preserves where the user was. Rust Notes has one tab; the
-component exists for the template and future screens (search, settings).
+one gets the accent colour. Rust Notes ships two tabs: Notes, which owns
+the `Nav` stack (so switching tabs preserves an open editor), and Settings,
+a read-only diagnostics page showing density, text scale, window size,
+size class and appearance.
 
 **Pull-to-refresh** is the one piece egui lacks a primitive for: a
 `ScrollArea` clamps at offset 0 and does not overscroll. The mechanism is
@@ -383,12 +411,14 @@ Two gestures, both with an axis lock so they do not fight drag-to-scroll:
 nothing is decided until the pointer has moved 8 points, then the larger
 axis wins for the rest of that touch.
 
-- **Swipe-to-delete on list rows.** The row is `Sense::drag()`; a
-  horizontal drag reveals a `danger`-coloured action behind the card by
-  translating the card's painted rect. Past 40% of the width on release
-  the delete fires (same two-step confirmation as today, with the revealed
-  action standing in for the first tap); otherwise it animates back.
-  Delete button and swipe coexist for one release, then the button goes.
+- **Swipe-to-delete on list rows.** Rows stay `Sense::click()`, because a
+  dragging row would swallow egui's drag-to-scroll; instead the list watches
+  the pointer from the press origin. A leftward drag reveals a
+  `danger`-coloured action behind the card by translating the card's
+  painted rect, and while it is locked horizontal the scroll area's drag
+  source is switched off. Past 40% of the width on release the delete fires
+  immediately; otherwise it animates back. The cross button and its
+  two-tap confirmation remain alongside.
 - **Edge swipe back (iOS).** A drag whose `press_origin().x` is within 20
   points of the left edge of `content_rect` drives `Nav::pop` interactively:
   the transition progress follows the finger, commits past 35% or on a
