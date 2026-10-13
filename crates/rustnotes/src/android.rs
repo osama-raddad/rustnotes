@@ -14,6 +14,10 @@ fn android_main(app: AndroidApp) {
             .with_max_level(log::LevelFilter::Info),
     );
     std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
+    // The manifest's singleTask keeps the process cached after a clean
+    // back-exit, so the next launch calls `android_main` again in this
+    // same process; the per-activity statics must not survive that.
+    reset_activity_state();
 
     let data_dir = app
         .internal_data_path()
@@ -25,6 +29,18 @@ fn android_main(app: AndroidApp) {
     if let Err(e) = crate::run(options, data_dir) {
         log::error!("eframe exited with error: {e}");
     }
+}
+
+/// Clear the per-activity state cached in this module. `APP` is not listed:
+/// `set_app` overwrites it right after this returns. The logger and panic
+/// hook are per-process and re-initializing them is a no-op.
+fn reset_activity_state() {
+    *REPORT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *LAST_QUERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    // A query queued on the Java thread of a dead activity never completes;
+    // left set, it would stop the new activity from querying at all.
+    IN_FLIGHT.store(false, Ordering::Release);
+    *BARS_LIGHT.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// A Mutex rather than a OnceLock: NativeActivity can call `android_main`
@@ -389,8 +405,12 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
     })
 }
 
-/// Back at the root of the app: finish the activity like a native app does.
-/// winit marks every key as handled, so the system would never do this.
+/// Finish the activity — called from `on_exit`, after
+/// `ViewportCommand::Close` has torn eframe's state down. The teardown this
+/// starts gives winit the window event it needs to exit the event loop (and
+/// with it `android_main`), after which the activity glue finishes and
+/// destroys the activity without blocking the Java main thread. winit marks
+/// every key as handled, so the system would never finish us on its own.
 pub(crate) fn finish_activity() {
     let Some(app) = app() else { return };
     let app2 = app.clone();

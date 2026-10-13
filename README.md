@@ -136,8 +136,11 @@ Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
   typing; CJK composition and autocorrect are not supported. On Android the
   idiomatic fix is GameActivity's `TextInputState`, which needs Java.
 - The Android manifest lists every configuration change in `configChanges`.
-  NativeActivity's `onDestroy` waits for `android_main` to return, which
-  eframe's event loop never does, so a relaunch would freeze the app.
+  Leaving via back at the root is clean now — the eframe loop exits and
+  `android_main` returns before the activity is finished — but a destroy
+  the system starts itself still stalls: NativeActivity's `onDestroy`
+  waits for `android_main` to return, which only our exit path ends, so
+  relaunching the cached process after such a destroy can freeze the app.
 - arm64-v8a only (add more ABIs in the `justfile`).
 - No search, no clipboard, no user-selectable theme — it's a demo of the pure-Rust stack,
   not a product.
