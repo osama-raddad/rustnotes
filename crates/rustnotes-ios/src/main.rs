@@ -472,7 +472,8 @@ impl RNViewController {
             // --- core app
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
             let dir = std::path::PathBuf::from(home).join("Documents");
-            let app = App::new(dir);
+            let mut app = App::new(dir);
+            app.set_edge_swipe_back(true); // UIKit has no system back gesture for us
 
             SHELL.with(|s| {
                 *s.borrow_mut() = Some(Shell {

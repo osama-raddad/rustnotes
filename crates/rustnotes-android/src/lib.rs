@@ -105,19 +105,19 @@ fn translate_key(code: u32, meta: u32) -> Option<CoreKey> {
 /// Post an async JNI query for the system-bar top inset on the Java main
 /// thread. Returns the receiver; poll it with `try_recv` from the main loop
 /// (never block on it — the Java thread may be parked in a lifecycle barrier).
-fn post_top_inset_query(app: &AndroidApp) -> std::sync::mpsc::Receiver<i32> {
-    let (tx, rx) = std::sync::mpsc::channel::<i32>();
+fn post_top_inset_query(app: &AndroidApp) -> std::sync::mpsc::Receiver<(i32, i32)> {
+    let (tx, rx) = std::sync::mpsc::channel::<(i32, i32)>();
     let app2 = app.clone();
     app.run_on_java_main_thread(Box::new(move || {
         let vm = unsafe { jni::JavaVM::from_raw(app2.vm_as_ptr().cast()) };
-        let res = vm.attach_current_thread(|env| -> jni::errors::Result<i32> {
+        let res = vm.attach_current_thread(|env| -> jni::errors::Result<(i32, i32)> {
             let activity = unsafe {
                 jni::objects::JObject::from_raw(
                     env,
                     app2.activity_as_ptr() as jni::sys::jobject,
                 )
             };
-            let r = (|| -> jni::errors::Result<i32> {
+            let r = (|| -> jni::errors::Result<(i32, i32)> {
                 let window = env
                     .call_method(
                         &activity,
@@ -159,14 +159,36 @@ fn post_top_inset_query(app: &AndroidApp) -> std::sync::mpsc::Receiver<i32> {
                         &[jni::JValue::from(sysbars)],
                     )?
                     .l()?;
-                Ok(env
+                let top = env
                     .get_field(&bars, jni::jni_str!("top"), jni::jni_sig!("I"))?
-                    .i()?)
+                    .i()?;
+                let bottom = env
+                    .get_field(&bars, jni::jni_str!("bottom"), jni::jni_sig!("I"))?
+                    .i()?;
+                // With the keyboard up the surface already resizes
+                // (adjustResize), so the gesture-bar inset must not count too.
+                let ime = env
+                    .call_static_method(
+                        &tclass,
+                        jni::jni_str!("ime"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )?
+                    .i()?;
+                let ime_visible = env
+                    .call_method(
+                        &insets,
+                        jni::jni_str!("isVisible"),
+                        jni::jni_sig!("(I)Z"),
+                        &[jni::JValue::from(ime)],
+                    )?
+                    .z()?;
+                Ok((top, if ime_visible { 0 } else { bottom }))
             })();
             std::mem::forget(activity);
             r
         });
-        let _ = tx.send(res.unwrap_or(0));
+        let _ = tx.send(res.unwrap_or((0, 0)));
     }));
     rx
 }
@@ -230,7 +252,7 @@ fn android_main(app: AndroidApp) {
     let mut egl: Option<Egl> = None;
     let mut destroyed = false;
     let mut input_pending = false;
-    let mut inset_rx: Option<std::sync::mpsc::Receiver<i32>> = None;
+    let mut inset_rx: Option<std::sync::mpsc::Receiver<(i32, i32)>> = None;
     let mut scale_rx: Option<std::sync::mpsc::Receiver<f32>> = None;
     let mut last_night: Option<bool> = None;
 
@@ -277,6 +299,7 @@ fn android_main(app: AndroidApp) {
                     if let Some(e) = egl.as_ref() {
                         let (w, h) = e.surface_size();
                         state.set_viewport(w, h, display_ppp(&app));
+                        inset_rx = Some(post_top_inset_query(&app));
                     }
                     state.dirty = true;
                 }
@@ -320,10 +343,10 @@ fn android_main(app: AndroidApp) {
         // Drain the async inset query when the Java thread gets to it.
         if let Some(rx) = inset_rx.take() {
             match rx.try_recv() {
-                Ok(v) => {
-                    let top = v.max(0) as f32;
-                    log::info!("system bar top inset: {top}");
-                    state.set_content_top(top);
+                Ok((top, bottom)) => {
+                    log::info!("system bar insets: top {top}, bottom {bottom}");
+                    state.set_content_top(top.max(0) as f32);
+                    state.set_content_bottom(bottom.max(0) as f32);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => inset_rx = Some(rx),
                 Err(_) => {}

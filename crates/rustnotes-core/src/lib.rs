@@ -15,7 +15,8 @@ use egui::{
     ViewportInfo,
 };
 use egui_glow::{Painter, ShaderVersion};
-use layout::{Metrics, Palette};
+use layout::{Metrics, Nav, Palette};
+use screens::{Cmd, Swipe};
 use notes::{Note, NotesDb};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,9 +67,49 @@ pub(crate) enum Screen {
     Editor,
 }
 
+/// Top-level destinations in the bottom navigation bar.
+#[derive(PartialEq, Clone, Copy)]
+pub(crate) enum Tab {
+    Notes,
+    Settings,
+}
+
+/// An iOS-style edge swipe in progress (drives an interactive pop).
+struct EdgeSwipe {
+    start_x: f32,
+    last_x: f32,
+    last_t: f64,
+    /// Horizontal velocity in points per second.
+    vel: f32,
+    dragging: bool,
+}
+
+/// How far from the left edge, in points, an edge swipe may start.
+const EDGE_ZONE: f32 = 20.0;
+/// Fraction of the width past which releasing commits the pop.
+const EDGE_COMMIT_FRACTION: f32 = 0.35;
+/// Release velocity, in points per second, that commits regardless of distance.
+const EDGE_COMMIT_VELOCITY: f32 = 600.0;
+
 pub struct App {
     db: NotesDb,
-    screen: Screen,
+    nav: Nav<Screen>,
+    tab: Tab,
+    /// Navigation changes queued by screens while drawing.
+    cmds: Vec<Cmd>,
+    /// Single-pane layout slides between screens; two-pane does not.
+    two_pane: bool,
+    reduce_motion: bool,
+    edge_swipe_enabled: bool,
+    edge: Option<EdgeSwipe>,
+    // Pull to refresh
+    pull_raw: f32,
+    pull_armed: bool,
+    pull_active: bool,
+    /// List scroll offset from the previous frame.
+    list_offset: f32,
+    // Swipe to delete
+    swipe: Option<Swipe>,
     notes: Vec<Note>,
     // Editor state
     edit_id: i64, // 0 = new, unsaved
@@ -149,7 +190,18 @@ impl App {
 
         App {
             db,
-            screen: Screen::List,
+            nav: Nav::new(Screen::List),
+            tab: Tab::Notes,
+            cmds: Vec::new(),
+            two_pane: false,
+            reduce_motion: false,
+            edge_swipe_enabled: false,
+            edge: None,
+            pull_raw: 0.0,
+            pull_armed: false,
+            pull_active: false,
+            list_offset: 0.0,
+            swipe: None,
             notes,
             edit_id: 0,
             buffer: String::new(),
@@ -255,6 +307,30 @@ impl App {
         }
     }
 
+    pub(crate) fn screen(&self) -> Screen {
+        *self.nav.top()
+    }
+
+    /// Seconds since start; the same clock egui sees in `RawInput.time`.
+    fn now(&self) -> f64 {
+        self.start.elapsed().as_secs_f64()
+    }
+
+    fn animate_nav(&self) -> bool {
+        !self.two_pane && !self.reduce_motion
+    }
+
+    /// Honour the OS "reduce motion" preference: screens change without sliding.
+    pub fn set_reduce_motion(&mut self, reduce: bool) {
+        self.reduce_motion = reduce;
+    }
+
+    /// iOS only: a swipe from the left edge pops the editor interactively.
+    /// Android keeps the system back gesture, which arrives as the back key.
+    pub fn set_edge_swipe_back(&mut self, enabled: bool) {
+        self.edge_swipe_enabled = enabled;
+    }
+
     // ---- editor ----------------------------------------------------------
 
     /// Save the buffer to the database and refresh the list. An empty new note
@@ -286,7 +362,8 @@ impl App {
 
     fn open_editor(&mut self, id: i64, plat: &dyn Platform) {
         log::info!("editor: open id={id}");
-        if self.screen == Screen::Editor {
+        let was_editor = self.screen() == Screen::Editor;
+        if was_editor {
             // Two-pane: switching notes saves the one being edited first.
             self.persist_buffer();
         }
@@ -300,7 +377,10 @@ impl App {
                 .map(|n| n.body.clone())
                 .unwrap_or_default()
         };
-        self.screen = Screen::Editor;
+        if !was_editor {
+            let (now, animate) = (self.now(), self.animate_nav());
+            self.nav.push(Screen::Editor, now, animate);
+        }
         self.focus_editor = true;
         plat.show_keyboard();
         self.keyboard_shown = true;
@@ -309,7 +389,12 @@ impl App {
 
     fn close_editor(&mut self, plat: &dyn Platform) {
         self.persist_buffer();
-        self.screen = Screen::List;
+        self.after_leaving_editor(plat);
+        let (now, animate) = (self.now(), self.animate_nav());
+        self.nav.pop(now, animate);
+    }
+
+    fn after_leaving_editor(&mut self, plat: &dyn Platform) {
         self.reset_list_scroll = true;
         plat.hide_keyboard();
         self.keyboard_shown = false;
@@ -318,7 +403,7 @@ impl App {
 
     /// Save without leaving the editor (used on app pause).
     pub fn save_current(&mut self) {
-        if self.screen != Screen::Editor || self.buffer.trim().is_empty() {
+        if self.screen() != Screen::Editor || self.buffer.trim().is_empty() {
             return;
         }
         let mut n = Note {
@@ -374,6 +459,25 @@ impl App {
         match ev {
             CoreEvent::TouchDown { x, y } => {
                 let p = self.pos(x, y);
+                if self.edge_swipe_enabled
+                    && self.tab == Tab::Notes
+                    && !self.two_pane
+                    && self.screen() == Screen::Editor
+                    && self.nav.can_pop()
+                    && !self.nav.is_animating()
+                    && p.x <= EDGE_ZONE
+                {
+                    // Claimed by the edge swipe: egui never sees this touch.
+                    let t = self.now();
+                    self.edge = Some(EdgeSwipe {
+                        start_x: p.x,
+                        last_x: p.x,
+                        last_t: t,
+                        vel: 0.0,
+                        dragging: false,
+                    });
+                    return true;
+                }
                 self.touch(TouchPhase::Start, p);
                 self.events.push(Event::PointerMoved(p));
                 self.events.push(Event::PointerButton {
@@ -386,12 +490,45 @@ impl App {
             }
             CoreEvent::TouchMove { x, y } => {
                 let p = self.pos(x, y);
+                if let Some(mut e) = self.edge.take() {
+                    let t = self.now();
+                    let dx = p.x - e.start_x;
+                    if !e.dragging && dx > 8.0 {
+                        e.dragging = self.nav.begin_drag();
+                        if !e.dragging {
+                            return true; // nothing to pop: drop the touch
+                        }
+                    }
+                    if e.dragging {
+                        let w = self.size_px[0] as f32 / self.ppp;
+                        e.vel = (p.x - e.last_x) / ((t - e.last_t) as f32).max(1e-3);
+                        self.nav.drag_to(dx / w.max(1.0));
+                    }
+                    e.last_x = p.x;
+                    e.last_t = t;
+                    self.edge = Some(e);
+                    return true;
+                }
                 self.touch(TouchPhase::Move, p);
                 self.events.push(Event::PointerMoved(p));
                 true
             }
             CoreEvent::TouchUp { x, y } => {
                 let p = self.pos(x, y);
+                if let Some(e) = self.edge.take() {
+                    if e.dragging {
+                        let w = self.size_px[0] as f32 / self.ppp;
+                        let commit = (p.x - e.start_x) / w.max(1.0) > EDGE_COMMIT_FRACTION
+                            || e.vel > EDGE_COMMIT_VELOCITY;
+                        let now = self.now();
+                        if commit {
+                            self.persist_buffer();
+                            self.after_leaving_editor(plat);
+                        }
+                        self.nav.end_drag(commit, now);
+                    }
+                    return true;
+                }
                 self.touch(TouchPhase::End, p);
                 self.events.push(Event::PointerButton {
                     pos: p,
@@ -404,6 +541,13 @@ impl App {
                 true
             }
             CoreEvent::TouchCancel => {
+                if let Some(e) = self.edge.take() {
+                    if e.dragging {
+                        let now = self.now();
+                        self.nav.end_drag(false, now);
+                    }
+                    return true;
+                }
                 self.touch(TouchPhase::Cancel, Pos2::ZERO);
                 self.events.push(Event::PointerGone);
                 true
@@ -413,7 +557,20 @@ impl App {
     }
 
     fn handle_key(&mut self, k: CoreKey, plat: &dyn Platform) -> bool {
-        if self.screen == Screen::Editor {
+        if self.tab == Tab::Settings {
+            // Back leaves Settings for Notes; anything else is not ours.
+            return if matches!(k, CoreKey::Back) {
+                self.tab = Tab::Notes;
+                self.dirty = true;
+                true
+            } else {
+                false
+            };
+        }
+        if self.nav.is_dragging() {
+            return true;
+        }
+        if self.screen() == Screen::Editor {
             match k {
                 CoreKey::Back => self.close_editor(plat),
                 CoreKey::Char(c) => self.events.push(Event::Text(c.to_string())),

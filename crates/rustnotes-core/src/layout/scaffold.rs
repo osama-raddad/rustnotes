@@ -109,8 +109,11 @@ impl<'a> Scaffold<'a> {
 
     pub fn show(self, root: &mut Ui, body: impl FnOnce(&mut Ui, WindowClass)) -> ScaffoldRects {
         let ctx = root.ctx().clone();
-        let full = ctx.viewport_rect();
-        let content = ctx.content_rect();
+        // Relative to the UI we were given: a navigation transition hands us
+        // a viewport-sized rect shifted sideways, and everything follows it.
+        let full = root.max_rect();
+        let shift = full.min - ctx.viewport_rect().min;
+        let content = ctx.content_rect().translate(shift);
         let class = WindowClass::of(&ctx);
         let (pal, m) = (self.pal, self.m);
 
