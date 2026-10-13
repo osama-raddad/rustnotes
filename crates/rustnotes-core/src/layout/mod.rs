@@ -1,0 +1,21 @@
+//! Mobile-first layout layer over egui.
+//!
+//! - [`Metrics`]: spacing, bar height, touch target and type scale, in points.
+//! - [`WindowClass`]: Material width/height size classes from the viewport.
+//! - [`Palette`]: colour tokens with a light and a dark instance.
+//! - [`Scaffold`]: safe-area frame with top bar, body, bottom bar and FAB.
+//!
+//! Everything is expressed in points; the shells supply the OS pixels-per-point
+//! so a 48-point target is the same physical size on every device.
+
+mod metrics;
+mod palette;
+mod scaffold;
+mod size_class;
+mod widgets;
+
+pub use metrics::{Metrics, TextScale};
+pub use palette::Palette;
+pub use scaffold::{bar, BarLine, Scaffold, ScaffoldRects};
+pub use size_class::{SizeClass, WindowClass};
+pub use widgets::{add_button, back_button, bar_title};

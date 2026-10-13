@@ -74,6 +74,25 @@ impl log::Log for IosLogger {
     fn flush(&self) {}
 }
 
+/// UIContentSizeCategory -> text scale (Apple's Dynamic Type body ratios,
+/// rounded). "L" is the default.
+fn content_size_scale(category: &str) -> f32 {
+    let c = category.trim_start_matches("UICTContentSizeCategory");
+    match c {
+        "XS" => 0.82,
+        "S" => 0.88,
+        "M" => 0.94,
+        "L" => 1.0,
+        "XL" => 1.12,
+        "XXL" => 1.24,
+        "XXXL" => 1.36,
+        "AccessibilityM" => 1.6,
+        "AccessibilityL" => 1.9,
+        "AccessibilityXL" | "AccessibilityXXL" | "AccessibilityXXXL" => 2.0,
+        _ => 1.0,
+    }
+}
+
 fn ios_log_init() {
     static LOGGER: IosLogger = IosLogger;
     let _ = log::set_logger(&LOGGER);
@@ -347,11 +366,28 @@ impl RNViewController {
             });
             self.rn_apply_insets();
         }
+        self.rn_poll_appearance();
         with_shell(|s| {
             s.app.tick();
             if s.app.dirty {
                 s.render();
             }
+        });
+    }
+
+    /// Feed the OS appearance and Dynamic Type size to the core. Polled
+    /// (cheap trait-collection reads); the core ignores unchanged values.
+    fn rn_poll_appearance(&self) {
+        let Some(view) = self.view() else { return };
+        let (dark, scale) = unsafe {
+            let tc: Retained<AnyObject> = msg_send![&*view, traitCollection];
+            let style: isize = msg_send![&*tc, userInterfaceStyle];
+            let cat: Retained<NSString> = msg_send![&*tc, preferredContentSizeCategory];
+            (style == 2, content_size_scale(&cat.to_string()))
+        };
+        with_shell(|s| {
+            s.app.set_appearance(dark);
+            s.app.set_text_scale(scale);
         });
     }
 
@@ -459,7 +495,7 @@ impl RNViewController {
                 let (w, h) = s.surface_size_px();
                 match s.app.attach_gl(Arc::new(make_gl())) {
                     Ok(()) => {
-                        s.app.set_viewport(w, h);
+                        s.app.set_viewport(w, h, Some(s.scale));
                         nslog(&format!("renderer {w}x{h}, font: {}", s.app.font_source()));
                     }
                     Err(e) => nslog(&format!("renderer init failed: {e}")),
@@ -541,7 +577,7 @@ impl RNViewController {
                     nslog(&format!("FBO incomplete: 0x{status:x}"));
                 }
                 let (w, h) = s.surface_size_px();
-                s.app.set_viewport(w, h);
+                s.app.set_viewport(w, h, Some(s.scale));
                 s.app.dirty = true;
             });
         }
