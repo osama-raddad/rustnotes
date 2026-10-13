@@ -48,7 +48,7 @@ jobs:
       - run: brew install just
       # Android SDK; ANDROID_HOME is preset on macos runners (and exported
       # by this action) — the justfile derives the NDK toolchain from it
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - run: sdkmanager --install "ndk;27.1.12297006"
       # rust + aarch64-linux-android / aarch64-apple-ios{,-sim} come from
       # rust-toolchain.toml; the Apple targets are preinstalled on macos.

@@ -249,4 +249,4 @@ test:
 # Android/iOS glue is additionally type-checked by `just check`)
 lint:
     cargo fmt --all -- --check
-    cargo clippy -p rustnotes-core -p rustnotes
+    cargo clippy -p rustnotes-core -p rustnotes --all-targets

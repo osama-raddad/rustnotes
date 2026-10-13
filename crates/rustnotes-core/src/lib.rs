@@ -591,7 +591,7 @@ mod tests {
     /// covering the screen between begin_pass/end_pass, so list widgets are
     /// real, hit-testable widgets.
     fn run_pass(app: &mut App, ctx: &egui::Context, events: Vec<Event>, t: f64) {
-        let mut raw = frame(events, t);
+        let raw = frame(events, t);
         let screen = raw.screen_rect.unwrap();
         ctx.begin_pass(raw);
         let mut root = egui::Ui::new(
