@@ -7,11 +7,15 @@ layer over the OS windowing/input APIs.
 
 > Session log: [docs/worklog-2026-10-12.md](docs/worklog-2026-10-12.md) — how
 > this was built and debugged in one day, with every bug and measurement.
+>
+> Renderer research: [docs/rendering-engine-research-2026-10-12.md](docs/rendering-engine-research-2026-10-12.md)
+> — open-source engines evaluated to replace the hand-rolled GL renderer
+> (recommendation: egui + egui_glow; parley + swash for a text-only swap).
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │                        rustnotes-core (shared)                     │
-│  App state machine · UI layout/drawing · word wrap · SQLite notes  │
+│  App state machine · egui UI (painted via egui_glow) · SQLite notes │
 ├────────────────────────────────┬───────────────────────────────────┤
 │ Android shell                  │ iOS shell (100% Rust, objc2)      │
 │  android-activity/NativeActivity│  UIApplicationMain from fn main() │
@@ -27,14 +31,16 @@ layer over the OS windowing/input APIs.
 
 - Note list with title (first line), snippet, and dates
 - Create / edit / delete (tap ✕ twice within 2 s to confirm)
-- Word-wrapped plain-text editor with blinking cursor, tap-to-place-cursor
+- Word-wrapped plain-text editor (egui `TextEdit`): blinking cursor,
+  tap-to-place-cursor, drag selection
 - Scrolling list and editor, auto-scroll to keep the cursor visible
 - Notes persisted in SQLite across restarts (autosave on pause/destroy)
 - Correct status-bar/safe-area and keyboard inset handling on both platforms
 
 ## Prerequisites
 
-- Rust (`rustup target add aarch64-linux-android`)
+- Rust 1.95+ (pinned to 1.99.0 by `rust-toolchain.toml`; egui 0.36 needs it)
+  with `rustup target add aarch64-linux-android aarch64-apple-ios-sim`
 - Android SDK with build-tools 35, platform android-35, platform-tools
 - Android NDK r27+ (`~/Library/Android/sdk/ndk/27.1.12297006`)
 - Java (for `keytool`/`apksigner`)
@@ -114,8 +120,10 @@ Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
   The idiomatic fix would be GameActivity's `TextInputState` or a thin Kotlin
   layer.
 - arm64-v8a only (add more ABIs in the `justfile`).
-- No text selection, no search, no themes — it's a demo of the pure-Rust
-  stack, not a product.
+- No search, no themes, no clipboard — it's a demo of the pure-Rust stack,
+  not a product.
+- Dragging inside the editor selects text (egui `TextEdit`); long notes
+  scroll by moving the cursor, not by swiping.
 
 ## Project layout
 
@@ -128,7 +136,7 @@ crate because xbuild reads it from the working directory.
 
 | Path | Purpose |
 |---|---|
-| `crates/rustnotes-core/` | Shared: App state machine, neutral events, UI drawing, renderer, storage |
+| `crates/rustnotes-core/` | Shared: App state machine, neutral events → egui input, egui UI + egui_glow painter, storage |
 | `crates/rustnotes-android/` | Android shell: NativeActivity, EGL FFI, input translation, JNI insets |
 | `crates/rustnotes-ios/` | iOS shell: objc2 classes, EAGL+CAEAGLLayer, keyboard, frame loop |
 | `resources/AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs |
