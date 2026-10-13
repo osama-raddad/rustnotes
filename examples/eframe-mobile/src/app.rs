@@ -94,10 +94,10 @@ impl MobileApp {
     /// Portrait vs landscape, from the area safe for content.
     /// `ctx.content_rect()` is the viewport minus `safe_area_insets`, which
     /// egui-winit fills on iOS (notch, home indicator). On Android
-    /// `raw_input_hook` fills them from NativeActivity's content rect; on
-    /// Android 15+ edge-to-edge that rect is the whole window, so the bars
-    /// are not excluded there (see `android::safe_area_insets`). Desktop has
-    /// no insets.
+    /// `raw_input_hook` fills them from the root view's `WindowInsets`
+    /// (system bars, display cutout and keyboard), which is correct under
+    /// Android 15+'s enforced edge-to-edge (see `android::safe_area_insets`).
+    /// Desktop has no insets.
     fn orientation(ctx: &egui::Context) -> Orientation {
         let rect = ctx.content_rect();
         if rect.height() >= rect.width() {
@@ -228,8 +228,7 @@ impl eframe::App for MobileApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         // Safe area: egui-winit only fills this on iOS. Setting it here makes
         // `ctx.content_rect()` (layout and orientation) respect it.
-        let screen = raw_input.screen_rect.unwrap_or_else(|| ctx.viewport_rect());
-        if let Some(insets) = crate::android::safe_area_insets(screen, ctx.pixels_per_point()) {
+        if let Some(insets) = crate::android::safe_area_insets(ctx, ctx.pixels_per_point()) {
             raw_input.safe_area_insets = Some(insets);
         }
 

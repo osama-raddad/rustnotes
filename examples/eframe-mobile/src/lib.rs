@@ -63,7 +63,7 @@ fn android_main(app: android_activity::AndroidApp) {
     // and nothing persists. The app's private files dir survives relaunches.
     options.persistence_path = app.internal_data_path().map(|dir| dir.join("app.ron"));
     // Keep a handle for per-frame queries egui-winit does not forward
-    // (content rect for safe-area insets, night mode for Theme::System).
+    // (window insets via JNI for the safe area, night mode for Theme::System).
     android::set_app(app.clone());
     // winit needs the AndroidApp handle to build its event loop.
     options.android_app = Some(app);
@@ -78,7 +78,9 @@ fn android_main(app: android_activity::AndroidApp) {
 pub(crate) mod android {
     use android_activity::ndk::configuration::UiModeNight;
     use android_activity::AndroidApp;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
+    use std::time::{Duration, Instant};
 
     /// Set in `android_main` before eframe starts. A Mutex rather than a
     /// OnceLock: NativeActivity can call `android_main` again in the same
@@ -93,27 +95,191 @@ pub(crate) mod android {
         APP.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    /// Safe-area insets in points, derived from NativeActivity's content
-    /// rect (window pixels) versus the viewport. egui-winit only fills
-    /// `RawInput::safe_area_insets` on iOS, so Android needs this.
+    /// Window insets in pixels, as last reported by the platform.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    struct InsetsPx {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
+    static INSETS: Mutex<Option<InsetsPx>> = Mutex::new(None);
+    static LAST_QUERY: Mutex<Option<Instant>> = Mutex::new(None);
+    static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+    /// How often to re-ask while frames are being drawn. Insets change on
+    /// rotation, keyboard show/hide and cutout changes, all of which also
+    /// produce frames, so polling at frame time is enough.
+    const REQUERY: Duration = Duration::from_millis(250);
+
+    /// Safe-area insets in points for `RawInput::safe_area_insets`.
     ///
-    /// Limitation: the content rect is the content view's frame inside the
-    /// window. On Android 15+ with targetSdk 35, edge-to-edge is enforced
-    /// and the content view fills the whole window, so this reports zero
-    /// insets for the status and navigation bars there. Getting real system
-    /// bar insets on those devices needs JNI (`View.getRootWindowInsets`) or
-    /// a theme with `windowOptOutEdgeToEdgeEnforcement`.
-    pub(crate) fn safe_area_insets(screen: egui::Rect, ppp: f32) -> Option<egui::SafeAreaInsets> {
-        let rect = app()?.content_rect();
-        if rect.right <= rect.left || rect.bottom <= rect.top || ppp <= 0.0 {
-            return None; // not reported yet
+    /// egui-winit only fills them on iOS. On Android the reliable source is
+    /// the root view's `WindowInsets`: with targetSdk 35 Android 15+
+    /// enforces edge-to-edge, so the content view (and NativeActivity's
+    /// content rect) covers the whole window, and `adjustResize` no longer
+    /// shrinks it for the keyboard. The query therefore takes the union of
+    /// system bars and display cutout on every side, and the larger of the
+    /// navigation bar and the keyboard at the bottom.
+    ///
+    /// The query runs on the Java main thread (views may only be touched
+    /// there); the result is cached and a repaint requested when it changes,
+    /// so the first frame may lay out without insets for one frame.
+    pub(crate) fn safe_area_insets(
+        ctx: &egui::Context,
+        ppp: f32,
+    ) -> Option<egui::SafeAreaInsets> {
+        maybe_query(ctx);
+        let px = (*INSETS.lock().unwrap_or_else(|e| e.into_inner()))?;
+        if ppp <= 0.0 {
+            return None;
         }
         Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
-            left: (rect.left as f32 / ppp).max(0.0),
-            top: (rect.top as f32 / ppp).max(0.0),
-            right: (screen.width() - rect.right as f32 / ppp).max(0.0),
-            bottom: (screen.height() - rect.bottom as f32 / ppp).max(0.0),
+            left: px.left.max(0) as f32 / ppp,
+            top: px.top.max(0) as f32 / ppp,
+            right: px.right.max(0) as f32 / ppp,
+            bottom: px.bottom.max(0) as f32 / ppp,
         }))
+    }
+
+    fn maybe_query(ctx: &egui::Context) {
+        if IN_FLIGHT.load(Ordering::Acquire) {
+            return;
+        }
+        let now = Instant::now();
+        {
+            let mut last = LAST_QUERY.lock().unwrap_or_else(|e| e.into_inner());
+            if last.is_some_and(|t| now.duration_since(t) < REQUERY) {
+                return;
+            }
+            *last = Some(now);
+        }
+        let Some(app) = app() else { return };
+        IN_FLIGHT.store(true, Ordering::Release);
+        let ctx = ctx.clone();
+        let app2 = app.clone();
+        app.run_on_java_main_thread(Box::new(move || {
+            let res = query_insets(&app2);
+            IN_FLIGHT.store(false, Ordering::Release);
+            match res {
+                Ok(Some(px)) => {
+                    let mut cur = INSETS.lock().unwrap_or_else(|e| e.into_inner());
+                    if *cur != Some(px) {
+                        log::info!("window insets: {px:?}");
+                        *cur = Some(px);
+                        ctx.request_repaint();
+                    }
+                }
+                Ok(None) => {} // view not attached yet; try again next frame
+                Err(e) => log::warn!("window insets query failed: {e}"),
+            }
+        }));
+    }
+
+    /// `decorView.getRootWindowInsets()`, read on the Java main thread.
+    /// API 30+: `WindowInsets.Type` masks. API 24-29: the deprecated
+    /// `getSystemWindowInset*` getters, which already include the keyboard.
+    fn query_insets(app: &AndroidApp) -> jni::errors::Result<Option<InsetsPx>> {
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        vm.attach_current_thread(|env| -> jni::errors::Result<Option<InsetsPx>> {
+            let activity = unsafe {
+                jni::objects::JObject::from_raw(env, app.activity_as_ptr() as jni::sys::jobject)
+            };
+            let r = (|| -> jni::errors::Result<Option<InsetsPx>> {
+                let window = env
+                    .call_method(
+                        &activity,
+                        jni::jni_str!("getWindow"),
+                        jni::jni_sig!("()Landroid/view/Window;"),
+                        &[],
+                    )?
+                    .l()?;
+                let decor = env
+                    .call_method(
+                        &window,
+                        jni::jni_str!("getDecorView"),
+                        jni::jni_sig!("()Landroid/view/View;"),
+                        &[],
+                    )?
+                    .l()?;
+                let insets = env
+                    .call_method(
+                        &decor,
+                        jni::jni_str!("getRootWindowInsets"),
+                        jni::jni_sig!("()Landroid/view/WindowInsets;"),
+                        &[],
+                    )?
+                    .l()?;
+                if insets.is_null() {
+                    return Ok(None);
+                }
+
+                // API 30+.
+                let modern = (|| -> jni::errors::Result<InsetsPx> {
+                    let types = env.find_class(jni::jni_str!("android/view/WindowInsets$Type"))?;
+                    let bars = env
+                        .call_static_method(&types, jni::jni_str!("systemBars"), jni::jni_sig!("()I"), &[])?
+                        .i()?;
+                    let cutout = env
+                        .call_static_method(&types, jni::jni_str!("displayCutout"), jni::jni_sig!("()I"), &[])?
+                        .i()?;
+                    let ime = env
+                        .call_static_method(&types, jni::jni_str!("ime"), jni::jni_sig!("()I"), &[])?
+                        .i()?;
+                    let sys = env
+                        .call_method(
+                            &insets,
+                            jni::jni_str!("getInsets"),
+                            jni::jni_sig!("(I)Landroid/graphics/Insets;"),
+                            &[jni::JValue::from(bars | cutout)],
+                        )?
+                        .l()?;
+                    let kb = env
+                        .call_method(
+                            &insets,
+                            jni::jni_str!("getInsets"),
+                            jni::jni_sig!("(I)Landroid/graphics/Insets;"),
+                            &[jni::JValue::from(ime)],
+                        )?
+                        .l()?;
+                    let left = env.get_field(&sys, jni::jni_str!("left"), jni::jni_sig!("I"))?.i()?;
+                    let top = env.get_field(&sys, jni::jni_str!("top"), jni::jni_sig!("I"))?.i()?;
+                    let right = env.get_field(&sys, jni::jni_str!("right"), jni::jni_sig!("I"))?.i()?;
+                    let bottom = env.get_field(&sys, jni::jni_str!("bottom"), jni::jni_sig!("I"))?.i()?;
+                    let kb_bottom = env.get_field(&kb, jni::jni_str!("bottom"), jni::jni_sig!("I"))?.i()?;
+                    Ok(InsetsPx {
+                        left,
+                        top,
+                        right,
+                        bottom: bottom.max(kb_bottom),
+                    })
+                })();
+                match modern {
+                    Ok(px) => Ok(Some(px)),
+                    Err(_) => {
+                        // API < 30: WindowInsets$Type does not exist.
+                        env.exception_clear();
+                        let left = env
+                            .call_method(&insets, jni::jni_str!("getSystemWindowInsetLeft"), jni::jni_sig!("()I"), &[])?
+                            .i()?;
+                        let top = env
+                            .call_method(&insets, jni::jni_str!("getSystemWindowInsetTop"), jni::jni_sig!("()I"), &[])?
+                            .i()?;
+                        let right = env
+                            .call_method(&insets, jni::jni_str!("getSystemWindowInsetRight"), jni::jni_sig!("()I"), &[])?
+                            .i()?;
+                        let bottom = env
+                            .call_method(&insets, jni::jni_str!("getSystemWindowInsetBottom"), jni::jni_sig!("()I"), &[])?
+                            .i()?;
+                        Ok(Some(InsetsPx { left, top, right, bottom }))
+                    }
+                }
+            })();
+            // The activity reference belongs to NativeActivity; never release it.
+            std::mem::forget(activity);
+            r
+        })
     }
 
     /// The OS dark-mode setting. winit's `Window::theme()` is None on

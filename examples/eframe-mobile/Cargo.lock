@@ -1602,6 +1602,7 @@ dependencies = [
  "eframe",
  "egui",
  "env_logger",
+ "jni",
  "log",
  "rust-i18n",
  "serde",

@@ -42,11 +42,10 @@ listed eframe target.
   kept to show the font fallback working.
 - **Safe area and system theme on mobile.** egui-winit only reports safe-area
   insets on iOS and winit reports no OS theme on Android or iOS. On Android
-  `MobileApp::raw_input_hook` derives insets from NativeActivity's content
-  rect and follows the configuration's night mode. On Android 15+ (enforced
-  edge-to-edge with targetSdk 35) the content rect is the whole window, so
-  the status and navigation bars are not inset there. On iOS the `System`
-  theme falls back to dark.
+  `MobileApp::raw_input_hook` reads the root view's `WindowInsets` through
+  JNI (system bars, display cutout, and the keyboard, which `adjustResize` no
+  longer handles under Android 15+'s enforced edge-to-edge) and follows the
+  configuration's night mode. On iOS the `System` theme falls back to dark.
 - **Persistence path set explicitly.** eframe has no default storage
   directory on Android or iOS, so `android_main` points it at the app's
   internal data dir and `main.rs` at `$HOME/Documents` on iOS.
