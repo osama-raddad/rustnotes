@@ -1503,6 +1503,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hello-mobile"
+version = "0.1.0"
+dependencies = [
+ "android-activity",
+ "eframe",
+ "egui",
+ "env_logger",
+ "log",
+ "rustnotes",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

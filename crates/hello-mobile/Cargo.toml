@@ -1,0 +1,40 @@
+[package]
+name = "hello-mobile"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95" # egui 0.36 floor
+description = "Minimal second consumer of the rustnotes host: the generalization proof for the extraction plan's Q2"
+
+# One crate, two shapes, mirroring rustnotes: Android's NativeActivity
+# loads the cdylib and calls `android_main`; iOS and desktop run the
+# binary in src/main.rs.
+[lib]
+name = "hello_mobile"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "hello-mobile"
+path = "src/main.rs"
+
+[dependencies]
+# THE point of this crate: the host, consumed as a framework. Default
+# features are off so this crate's own `android_main` (src/lib.rs) is the
+# only one linked; see rustnotes' Cargo.toml for the symbol-collision
+# rationale. And there is deliberately NO rustnotes-core dependency
+# anywhere here — that is the generalization proof.
+rustnotes = { path = "../rustnotes", default-features = false }
+log.workspace = true
+egui.workspace = true
+# The bin's `eframe::Result` return type only; renderer features arrive
+# through rustnotes' own target-scoped eframe deps (features unify).
+eframe.workspace = true
+
+# Desktop only: the iOS binary logs through the host's panic hook (NSLog)
+# instead — same scoping as rustnotes.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+env_logger = "0.11"
+
+# The lib's `android_main` signature; winit gets the AndroidApp through
+# the host's `start`, which sets `options.android_app` itself.
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }

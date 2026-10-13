@@ -27,15 +27,18 @@
 //! `ui`) plus the four identity consts (window title, desktop data dir,
 //! Android data-dir fallback, logcat tag). `Host<A>`, [`run`],
 //! [`native_options`] and `data_dir<A>` are generic over it, so a second
-//! app implements the trait for its own type in its own crate. The impl
-//! for `rustnotes_core::App` lives here and not in core because the
+//! app implements the trait for its own type in its own crate —
+//! `android::start` is its Android entry (the `android_main` symbol is
+//! app identity, so it lives in the app's crate), while desktop and iOS
+//! enter through [`run`] plus a few lines of the app's own main.rs. The
+//! impl for `rustnotes_core::App` lives here and not in core because the
 //! dependency arrow points host→core: core cannot name a host trait, let
 //! alone implement it. Within this crate the concrete app is aliased to
 //! `NotesApp`, keeping the bare name `App` for the trait — mirroring how
 //! eframe names the thing it runs.
 
 #[cfg(target_os = "android")]
-mod android;
+pub mod android;
 #[cfg(target_os = "ios")]
 mod ios;
 
