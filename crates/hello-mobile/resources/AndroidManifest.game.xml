@@ -4,13 +4,19 @@
      Diff vs the NativeActivity manifest is exactly the backend's needs:
      the activity class (GameActivity ships as Java — androidx.games:
      games-activity 4.4.0, dexed into the APK, so hasCode flips to true)
-     and its configChanges list (from the android-activity project's own
-     GameActivity example manifests; recreation is SAFE under this glue —
-     it re-enters android_main with fresh state — so the NativeActivity
-     manifest's full anti-recreate list is not required). Everything else
-     is the same matched set: package, label, icon, extractNativeLibs,
-     singleTask, adjustResize and the android.app.lib_name meta-data
-     (GameActivity reads the same name to load the cdylib). -->
+     and its configChanges list — the short list android-activity's own
+     GameActivity example manifests use, where the NativeActivity
+     manifest's full anti-recreate list guards an ANR that is
+     NativeActivity-specific. What is actually known about recreation
+     under this glue: it re-enters android_main with statics that persist
+     and reset on re-entry (android.rs set_app) — runtime behaviour is
+     unobserved, the build crashes pre-window (README's opt-in section).
+     Everything else is the same matched set: package, label, icon,
+     extractNativeLibs, adjustResize and the android.app.lib_name
+     meta-data (GameActivity reads the same name to load the cdylib);
+     singleTask is kept as repo convention — its NativeActivity rationale
+     (the relaunch deadlock) is NA-specific, and GameActivity's docs
+     don't require it. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.hellomobile"
     android:versionCode="1"

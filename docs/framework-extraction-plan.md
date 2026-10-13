@@ -149,7 +149,10 @@ and each a framework responsibility:
 - iOS startup requires adapter-supported wgpu limits, not egui-wgpu's
   WebGPU defaults — otherwise eframe exits at startup on Metal.
 - The manifest and packaging are a matched set: the full `configChanges`
-  list (a missed entry recreates the activity and ANRs), edge-to-edge
+  list (a missed entry recreates the activity and ANRs — a
+  NativeActivity-specific failure mode; the GameActivity variant ships
+  the backend's documented short list instead, recreation handled by
+  that glue, unverified at runtime until launch works), edge-to-edge
   under targetSdk 35, `extractNativeLibs` with zipalign and 16 KB page
   alignment.
 - Panics must route somewhere visible: logcat with a forced backtrace on
@@ -393,9 +396,9 @@ step. What building it found that the record above didn't predict:
   supported line), sha256-pinned in the justfile — because the AAR's
   pom declares **no dependencies at all**, which is false: its bytecode
   `extends androidx.appcompat.app.AppCompatActivity` and references
-  `androidx.core`. Upstream's own eframe example (rust-mobile
-  `agdk-eframe`) declares `appcompat:1.7.0` by hand, confirming the pom
-  is simply wrong. `android-install`'s hardcoded
+  `androidx.core`. Upstream's own GameActivity example (rust-mobile's
+  examples, `agdk-mainloop` today) declares `appcompat:1.7.0` by hand,
+  confirming the pom is simply wrong. `android-install`'s hardcoded
   `$pkg/android.app.NativeActivity` component had to learn the flavor
   too — `am start` names the class or launches nothing.
 - The dex-only packaging step is real but not sufficient — the wave's
@@ -419,3 +422,12 @@ step. What building it found that the record above didn't predict:
   compile_error!s `accesskit` under NativeActivity, and GA is its only
   Android route — one more reason the switch decision (Q4) is worth
   taking with a real app's needs on the table.
+- One escape route past the wall exists outside this repo's pipeline:
+  xbuild 0.2.0's `manifest.yaml` `android.gradle: true` mode drives a
+  bundled AGP 7.3.0 project (its `android.dependencies` become gradle
+  `implementation` lines) — that is the mini-AGP this pipeline declined
+  to build, and the concrete probe route for whoever takes Q4 with a
+  real CJK need (it needs gradle on PATH, a JDK AGP 7.3 accepts, a
+  temporary default-features swap since xbuild cannot
+  `--no-default-features`, and possibly a lower targetSdk for the
+  probe).

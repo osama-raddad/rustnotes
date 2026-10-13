@@ -139,6 +139,9 @@ app-identity app:
 # ride into a signed APK. Note the AAR's pom declares NO dependencies —
 # false comfort: its bytecode extends androidx.appcompat.app.AppCompatActivity
 # (see the plan addendum; the runtime consequence is recorded there).
+# Bump = update BOTH sites: the sha256 appears here (comment) and in the
+# shasum check below; a version bump that touches one leaves the other
+# pinning the old digest.
 [private]
 android-aar:
     #!/bin/zsh
@@ -185,6 +188,11 @@ android-stage app='rustnotes' activity='native':
         ;;
     game)
         just android-aar
+        # Build-time disclosure, in-recipe: this APK installs and then
+        # dies at launch (missing androidx closure — README's opt-in
+        # section has the wall). Warned, not refused: check-links' GA
+        # legs and the probe surface depend on the build succeeding.
+        echo "NOTE: activity=game APKs crash at launch until the androidx java closure is packaged — see README 'Android: the GameActivity opt-in'. NativeActivity is the launchable backend." >&2
         feats="android-game-activity${entry:+,$entry}"
         cargo build -p "$crate" --lib --target aarch64-linux-android --release \
             --no-default-features --features "$feats"
@@ -251,8 +259,11 @@ keystore app='rustnotes':
 # `zipalign -f -p 4` below for that app, or 16 KB-kernel devices stop
 # launching it. Each manifest variant is otherwise a matched set (full
 # configChanges list + hasCode="false" + NativeActivity, or GameActivity's
-# shorter list + hasCode="true" + dex) — copied verbatim per app, because
-# a missed configChanges entry recreates the activity and ANRs.
+# shorter backend-documented list + hasCode="true" + dex) — copied verbatim
+# per app. The ANR rationale is the NA variant's: there, a missed
+# configChanges entry recreates the activity and NativeActivity's destroy
+# waits on android_main. The GA variant's short list is what the backend's
+# own example manifests document — recreation is handled by that glue.
 android app='rustnotes' activity='native': (keystore app) (android-stage app activity)
     #!/bin/zsh
     set -euo pipefail
@@ -334,7 +345,10 @@ run-android app='rustnotes' activity='native':
 
 # Release APK via xbuild (auto-signed, targetSdk 35). xbuild runs per crate,
 # so cd into the app's crate dir — the dir name equals the app key for every
-# app in the identity table.
+# app in the identity table. NativeActivity only: xbuild has no GameActivity
+# path (no --no-default-features passthrough, no games-activity support), so
+# the opt-in does not reach these recipes — see README 'Android: the
+# GameActivity opt-in'.
 android-x app='rustnotes':
     #!/bin/zsh
     set -euo pipefail
@@ -347,6 +361,7 @@ android-x app='rustnotes':
 # in every app-facing recipe — with device first, `just android-run
 # app=hello-mobile` would bind the whole token to the DEVICE (just binds
 # positional tokens whole) and silently keep packaging rustnotes.
+# NativeActivity only, same xbuild limitation as android-x above.
 android-run app='rustnotes' device='adb:emulator-5554':
     #!/bin/zsh
     set -euo pipefail

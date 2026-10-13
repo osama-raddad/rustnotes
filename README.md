@@ -211,12 +211,14 @@ panic hook (Console.app on a device); other log output is stderr via
   The Android fix is the GameActivity opt-in (see above): wired, packaged,
   and currently blocked at launch by its hidden androidx dependency —
   NativeActivity stays the default.
-- The Android manifest lists every configuration change in `configChanges`.
-  Leaving via back at the root is clean now — the eframe loop exits and
-  `android_main` returns before the activity is finished — but a destroy
-  the system starts itself still stalls: NativeActivity's `onDestroy`
-  waits for `android_main` to return, which only our exit path ends, so
-  relaunching the cached process after such a destroy can freeze the app.
+- The NativeActivity manifest lists every configuration change in
+  `configChanges` (the GameActivity variant instead ships the backend's
+  shorter, example-documented list). Leaving via back at the root is
+  clean now — the eframe loop exits and `android_main` returns before
+  the activity is finished — but a destroy the system starts itself
+  still stalls: NativeActivity's `onDestroy` waits for `android_main` to
+  return, which only our exit path ends, so relaunching the cached
+  process after such a destroy can freeze the app.
 - arm64-v8a only (add more ABIs in the `justfile`).
 - No search, no clipboard, no user-selectable theme — it's a demo of the pure-Rust stack,
   not a product.
