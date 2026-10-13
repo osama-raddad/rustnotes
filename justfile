@@ -376,7 +376,7 @@ android-run app='rustnotes' device='adb:emulator-5554':
 # devicectl install / xcodebuild with unrelated errors.
 [private]
 ios-device-id:
-    @xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/){print $j; exit}}}'
+    @xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/){print $j; exit}}}'
 
 # Fail unless exactly one iOS simulator is booted. Shared by ios-run and
 # screenshot-ios: simctl's `booted` selector silently picks an arbitrary one
