@@ -1,5 +1,9 @@
 # Rendering engine research — 2026-10-12
 
+> **Outcome (2026-10-13):** this survey led to adopting egui; hosting was
+> later settled on eframe itself (PR #10) rather than the hand-rolled
+> shells this document assumed. Kept as the record of the evaluation.
+
 Question: is there an open-source engine that can replace the hand-rolled
 renderer and text pipeline in `rustnotes-core`?
 

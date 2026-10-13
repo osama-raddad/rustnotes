@@ -10,11 +10,23 @@ use crate::layout::{
     self, add_button, back_button, bar_title, bottom_nav, icon_notes, icon_settings, BarLine,
     Metrics, Nav, NavItem, Palette, Scaffold, WindowClass,
 };
-use crate::{notes, util, App, Screen, Tab, DELETE_ARM_WINDOW, EDITOR_ID};
+use crate::{debounce, notes, App, DebounceAction, Screen, Tab, DELETE_ARM_WINDOW, EDITOR_ID};
 use egui::{
     pos2, vec2, Align, Align2, Id, Layout, Rect, ScrollArea, Sense, Shape, Stroke, Ui, UiBuilder,
 };
 use std::time::Instant;
+
+/// Inputs the settings diagnostics depend on, as a cache key (NIT-2): the
+/// rows are rebuilt only when one of these changes, not every frame.
+#[derive(PartialEq)]
+pub(crate) struct DiagKey {
+    px_bits: Option<u32>,
+    zoom_bits: u32,
+    w_bits: u32,
+    h_bits: u32,
+    class: WindowClass,
+    theme: egui::Theme,
+}
 
 /// Pull distance, in points, past which releasing triggers a refresh.
 const PULL_THRESHOLD: f32 = 64.0;
@@ -47,7 +59,9 @@ pub(crate) struct Swipe {
 
 enum ListAction {
     Open(i64),
-    Delete(usize),
+    /// Which note's delete cross was tapped (MED-1: keyed by id, not row
+    /// index, so a reorder between the two taps can't retarget the delete).
+    Delete(i64),
 }
 
 const TABS: [NavItem; 2] = [
@@ -102,6 +116,10 @@ impl App {
     /// Root of the UI for one frame. The host calls this from `eframe::App::ui`.
     pub fn ui(&mut self, root: &mut Ui) {
         let ctx = root.ctx().clone();
+        // NIT-3: two clocks — egui's `time` (this one) drives nav animation
+        // because it steps with painted frames; `Instant` drives the
+        // delete-arm window and the autosave debounce, which must elapse
+        // (and fire) with no input at all. Don't mix them.
         self.time = ctx.input(|i| i.time);
         let pal = Palette::of(&ctx);
         let m = Metrics::DEFAULT;
@@ -142,6 +160,21 @@ impl App {
                     self.tab = t;
                 }
             }
+        }
+
+        // ---- autosave (HIGH-2) ------------------------------------------
+        // The TextEdit wrote into `buffer` while the editor drew; a diff
+        // against the previous frame's snapshot records the edit time.
+        if self.buffer != self.last_seen_buffer {
+            self.last_seen_buffer.clone_from(&self.buffer);
+            self.last_edit = Some(Instant::now());
+        }
+        match debounce(self.last_edit, self.dirty(), Instant::now()) {
+            DebounceAction::Save => self.autosave(),
+            // Repaint after the remaining quiet period so the save fires
+            // even with no further input.
+            DebounceAction::Wait(left) => ctx.request_repaint_after(left),
+            DebounceAction::None => {}
         }
     }
 
@@ -276,35 +309,54 @@ impl App {
         let mut tab = None;
         let ctx = root.ctx().clone();
         let vp = ctx.viewport_rect();
-        let rows: [(&str, String); 7] = [
-            (
-                "Display scale",
-                format!(
-                    "{:.2} px per point",
-                    ctx.native_pixels_per_point().unwrap_or(1.0)
+        // NIT-2: rebuild the rows only when an input value changed, not
+        // every frame.
+        let key = DiagKey {
+            px_bits: ctx.native_pixels_per_point().map(f32::to_bits),
+            zoom_bits: ctx.zoom_factor().to_bits(),
+            w_bits: vp.width().to_bits(),
+            h_bits: vp.height().to_bits(),
+            class,
+            theme: ctx.theme(),
+        };
+        if !matches!(&self.diag, Some((k, _)) if *k == key) {
+            let rows: Vec<(&str, String)> = vec![
+                (
+                    "Display scale",
+                    format!(
+                        "{:.2} px per point",
+                        ctx.native_pixels_per_point().unwrap_or(1.0)
+                    ),
                 ),
-            ),
-            ("Text scale", format!("{:.2}x", ctx.zoom_factor())),
-            (
-                "Window",
-                format!("{:.0} x {:.0} pt", vp.width(), vp.height()),
-            ),
-            (
-                "Size class",
-                format!("{:?} width, {:?} height", class.width, class.height),
-            ),
-            (
-                "Layout",
-                if class.two_pane_ok() {
-                    "two-pane"
-                } else {
-                    "single-pane"
-                }
-                .to_string(),
-            ),
-            ("Appearance", format!("{:?}", ctx.theme())),
-            ("Version", env!("CARGO_PKG_VERSION").to_string()),
-        ];
+                ("Text scale", format!("{:.2}x", ctx.zoom_factor())),
+                (
+                    "Window",
+                    format!("{:.0} x {:.0} pt", vp.width(), vp.height()),
+                ),
+                (
+                    "Size class",
+                    format!("{:?} width, {:?} height", class.width, class.height),
+                ),
+                (
+                    "Layout",
+                    if class.two_pane_ok() {
+                        "two-pane"
+                    } else {
+                        "single-pane"
+                    }
+                    .to_string(),
+                ),
+                ("Appearance", format!("{:?}", ctx.theme())),
+                ("Version", env!("CARGO_PKG_VERSION").to_string()),
+            ];
+            self.diag = Some((key, rows));
+        }
+        // HIGH-1b: the live storage state is one cheap row, always fresh.
+        let storage = match &self.db_error {
+            Some(e) => format!("error: {e}"),
+            None => "ok".to_owned(),
+        };
+        let diag = self.diag.as_ref().map(|(_, r)| r.as_slice()).unwrap_or(&[]);
         Scaffold::new(pal, m)
             .limit_body_width()
             .top_bar(|u| {
@@ -313,7 +365,11 @@ impl App {
             .bottom_bar(|u| tab = tab_bar(u, Tab::Settings, pal, m))
             .show(root, |ui, _| {
                 ui.add_space(m.sp(2));
-                for (label, value) in &rows {
+                let rows = diag
+                    .iter()
+                    .map(|(l, v)| (*l, v))
+                    .chain(std::iter::once(("Storage", &storage)));
+                for (label, value) in rows {
                     let (row, _) = ui.allocate_exact_size(
                         vec2(ui.available_width(), m.touch_target + 8.0),
                         Sense::hover(),
@@ -348,15 +404,26 @@ impl App {
     }
 
     fn delete_note(&mut self, id: i64) {
-        self.db.delete(id);
+        if let Err(e) = self.db.delete(id) {
+            // NotesDb::delete already logged; keep the UI state.
+            self.db_error = Some(format!("{}: {e}", crate::DB_DELETE_ERR));
+        } else {
+            self.clear_error_if(crate::DB_DELETE_ERR);
+        }
         if self.screen() == Screen::Editor && self.edit_id == id {
             // Two-pane: the open note was deleted.
             let now = self.now();
             self.nav.pop(now, false);
             self.buffer.clear();
+            self.loaded_body.clear();
+            self.last_seen_buffer.clear();
+            self.last_edit = None;
             self.edit_id = 0;
         }
-        self.notes = self.db.list();
+        // MED-1: any delete invalidates a pending confirm, and the re-list
+        // below rebuilds ids/dates.
+        self.armed_delete = None;
+        self.refresh_notes();
     }
 
     fn list_body(&mut self, ui: &mut Ui, pal: &Palette, m: &Metrics, selected: Option<i64>) {
@@ -405,7 +472,8 @@ impl App {
             self.pull_active = false;
             if self.pull_raw >= PULL_THRESHOLD {
                 log::info!("pull to refresh");
-                self.notes = self.db.list();
+                // Refresh (also clears the armed delete — MED-1).
+                self.refresh_notes();
             }
             self.pull_raw = 0.0;
         }
@@ -435,6 +503,23 @@ impl App {
             ui.add_space(pull);
         }
 
+        // HIGH-1b: with rows on screen but storage failing (typically a
+        // save error carried out of the editor), keep a persistent hint
+        // above the list instead of failing silently.
+        if !self.notes.is_empty() && self.db_error.is_some() {
+            let (strip, _) = ui.allocate_exact_size(
+                vec2(ui.available_width(), m.touch_target * 0.6),
+                Sense::hover(),
+            );
+            ui.painter().text(
+                strip.center(),
+                Align2::CENTER_CENTER,
+                "Storage error — some changes may not be saved",
+                m.font(m.text.caption),
+                pal.danger,
+            );
+        }
+
         let mut scroll = ScrollArea::vertical()
             .id_salt("list")
             .auto_shrink(false)
@@ -451,6 +536,8 @@ impl App {
         }
 
         let notes = &self.notes;
+        let dates = &self.row_dates;
+        let db_error = self.db_error.as_deref();
         let armed_delete = self.armed_delete;
         let mut swipe = self.swipe.take();
         let mut action: Option<ListAction> = None;
@@ -476,7 +563,7 @@ impl App {
                 }
             }
 
-            for (idx, note) in notes.iter().enumerate() {
+            for (note, date) in notes.iter().zip(dates) {
                 let (row, _) = ui.allocate_exact_size(vec2(w, row_h), Sense::hover());
                 let card =
                     Rect::from_min_size(pos2(row.left() + card_m, row.top()), vec2(card_w, card_h));
@@ -487,7 +574,7 @@ impl App {
                     Rect::from_center_size(del_c, vec2(m.touch_target + 4.0, m.touch_target + 4.0));
                 let del_resp = ui.interact(del_hit, Id::new(("del", note.id)), Sense::click());
                 if del_resp.clicked() {
-                    action = Some(ListAction::Delete(idx));
+                    action = Some(ListAction::Delete(note.id));
                 } else if row_resp.clicked() {
                     action = Some(ListAction::Open(note.id));
                 }
@@ -552,7 +639,7 @@ impl App {
                 };
                 p.rect_filled(card, m.corner, fill);
 
-                let armed = matches!(armed_delete, Some((i, _)) if i == idx);
+                let armed = matches!(armed_delete, Some((id, _)) if id == note.id);
                 p.circle_filled(del_c, del_r, if armed { pal.danger } else { pal.danger_bg });
                 let k = del_r * 0.45;
                 let cross = if armed { pal.on_accent } else { pal.danger };
@@ -588,7 +675,9 @@ impl App {
                 p.text(
                     pos2(tx + text_w, card.bottom() - card_pad),
                     Align2::RIGHT_BOTTOM,
-                    util::format_note_date(note.updated),
+                    // Cached when the list loaded (MED-5), not reformatted
+                    // per row per frame.
+                    date,
                     m.font(m.text.caption),
                     pal.text_faint,
                 );
@@ -598,20 +687,39 @@ impl App {
             if notes.is_empty() {
                 let mid = view.top() + view.height() * 0.4;
                 let p = ui.painter();
-                let t1 = p.text(
-                    pos2(view.center().x, mid),
-                    Align2::CENTER_TOP,
-                    "No notes yet",
-                    m.font(m.text.headline),
-                    pal.text_weak,
-                );
-                p.text(
-                    pos2(view.center().x, t1.bottom() + m.sp(1)),
-                    Align2::CENTER_TOP,
-                    "Tap + to write one",
-                    m.font(m.text.body_large),
-                    pal.text_faint,
-                );
+                if let Some(_err) = db_error {
+                    // HIGH-1b: the read failed — say so, instead of the
+                    // misleading "no notes" empty state.
+                    let t1 = p.text(
+                        pos2(view.center().x, mid),
+                        Align2::CENTER_TOP,
+                        "Couldn't load notes",
+                        m.font(m.text.headline),
+                        pal.danger,
+                    );
+                    p.text(
+                        pos2(view.center().x, t1.bottom() + m.sp(1)),
+                        Align2::CENTER_TOP,
+                        "Storage error — see Settings",
+                        m.font(m.text.body_large),
+                        pal.text_faint,
+                    );
+                } else {
+                    let t1 = p.text(
+                        pos2(view.center().x, mid),
+                        Align2::CENTER_TOP,
+                        "No notes yet",
+                        m.font(m.text.headline),
+                        pal.text_weak,
+                    );
+                    p.text(
+                        pos2(view.center().x, t1.bottom() + m.sp(1)),
+                        Align2::CENTER_TOP,
+                        "Tap + to write one",
+                        m.font(m.text.body_large),
+                        pal.text_faint,
+                    );
+                }
             }
         });
         self.list_offset = out.state.offset.y;
@@ -623,15 +731,15 @@ impl App {
         }
         match action {
             Some(ListAction::Open(id)) => self.cmds.push(Cmd::OpenNote(id)),
-            Some(ListAction::Delete(idx)) => {
-                // Two taps within 2 s on the cross confirms the delete.
+            Some(ListAction::Delete(id)) => {
+                // Two taps within 2 s on the cross confirms the delete,
+                // matched by note id (MED-1) so a reorder between taps
+                // cannot retarget it.
                 match self.armed_delete.take() {
-                    Some((i, t)) if i == idx && t.elapsed() < DELETE_ARM_WINDOW => {
-                        if let Some(id) = self.notes.get(idx).map(|n| n.id) {
-                            self.delete_note(id);
-                        }
+                    Some((armed_id, t)) if armed_id == id && t.elapsed() < DELETE_ARM_WINDOW => {
+                        self.delete_note(id);
                     }
-                    _ => self.armed_delete = Some((idx, Instant::now())),
+                    _ => self.armed_delete = Some((id, Instant::now())),
                 }
             }
             None => {}
@@ -640,6 +748,24 @@ impl App {
 
     fn editor_body(&mut self, ui: &mut Ui, pal: &Palette, m: &Metrics) {
         let id = Id::new(EDITOR_ID);
+        // HIGH-1b: a small persistent indicator while the last save failed,
+        // so "saved" cannot silently be a lie.
+        // TODO(verify-on-device): confirm the strip reads as persistent
+        // (not a flash) next to the soft keyboard, and that it clears after
+        // a successful retry.
+        if self.db_error.is_some() {
+            let (strip, _) = ui.allocate_exact_size(
+                vec2(ui.available_width(), m.touch_target * 0.6),
+                Sense::hover(),
+            );
+            ui.painter().text(
+                strip.center(),
+                Align2::CENTER_CENTER,
+                "Save failed — changes not stored",
+                m.font(m.text.caption),
+                pal.danger,
+            );
+        }
         if std::mem::take(&mut self.focus_editor) {
             // The widget id is shared by every note, so replace the stored
             // cursor/selection with "caret at the end of this note".

@@ -1,12 +1,13 @@
 use super::{Metrics, Palette};
-use egui::{pos2, vec2, Align2, Id, Rect, Response, Sense, Stroke, Ui};
+use egui::{pos2, vec2, Align2, Rect, Response, Sense, Stroke, Ui};
 
 /// Chevron on the left of a bar. The hit area is the full bar height by
 /// `touch_target + 4` wide.
 pub fn back_button(ui: &mut Ui, pal: &Palette, m: &Metrics) -> Response {
     let bar = ui.max_rect();
     let hit = Rect::from_min_size(bar.left_top(), vec2(m.touch_target + 4.0, bar.height()));
-    let resp = ui.interact(hit, Id::new("layout.back"), Sense::click());
+    // Scoped to the hosting bar so two of these in one frame cannot collide.
+    let resp = ui.interact(hit, ui.auto_id_with("back"), Sense::click());
     let c = pos2(bar.left() + 28.0, bar.center().y);
     let stroke = Stroke::new(3.0, pal.text);
     let p = ui.painter();
@@ -23,7 +24,7 @@ pub fn add_button(ui: &mut Ui, pal: &Palette, m: &Metrics) -> Response {
         pos2(bar.right() - m.sp(3) - d / 2.0, bar.center().y),
         vec2(d, d),
     );
-    let resp = ui.interact(btn.expand(8.0), Id::new("layout.add"), Sense::click());
+    let resp = ui.interact(btn.expand(8.0), ui.auto_id_with("add"), Sense::click());
     let p = ui.painter();
     p.rect_filled(btn, d * 0.35, pal.accent);
     let c = btn.center();

@@ -17,15 +17,18 @@ pub struct WindowClass {
 }
 
 impl WindowClass {
+    /// Non-finite dimensions classify as [`SizeClass::Compact`]: when the
+    /// number cannot be trusted, fall back to the smallest layout rather
+    /// than the most expansive one.
     pub fn from_points(w: f32, h: f32) -> Self {
-        let width = if w < 600.0 {
+        let width = if !w.is_finite() || w < 600.0 {
             SizeClass::Compact
         } else if w < 840.0 {
             SizeClass::Medium
         } else {
             SizeClass::Expanded
         };
-        let height = if h < 480.0 {
+        let height = if !h.is_finite() || h < 480.0 {
             SizeClass::Compact
         } else if h < 900.0 {
             SizeClass::Medium
@@ -80,5 +83,42 @@ mod tests {
         let c = WindowClass::from_points(744.0, 1133.0);
         assert_eq!(c.width, SizeClass::Medium);
         assert!(!c.two_pane_ok());
+    }
+
+    /// The thresholds are `<`, so a device sitting exactly on one (600 pt,
+    /// 840 pt, 480 pt, 900 pt) lands in the bigger class.
+    #[test]
+    fn boundaries_land_in_the_bigger_class() {
+        let c = WindowClass::from_points(600.0, 480.0);
+        assert_eq!((c.width, c.height), (SizeClass::Medium, SizeClass::Medium));
+        let c = WindowClass::from_points(840.0, 900.0);
+        assert_eq!(
+            (c.width, c.height),
+            (SizeClass::Expanded, SizeClass::Expanded)
+        );
+        let c = WindowClass::from_points(599.0, 479.0);
+        assert_eq!(
+            (c.width, c.height),
+            (SizeClass::Compact, SizeClass::Compact)
+        );
+        let c = WindowClass::from_points(839.0, 899.0);
+        assert_eq!((c.width, c.height), (SizeClass::Medium, SizeClass::Medium));
+    }
+
+    /// NaN (or infinity) is a number we cannot trust: Compact, never
+    /// Expanded, so a degenerate frame cannot flip on two panes.
+    #[test]
+    fn non_finite_input_is_compact() {
+        let c = WindowClass::from_points(f32::NAN, f32::NAN);
+        assert_eq!(c.width, SizeClass::Compact);
+        assert_eq!(c.height, SizeClass::Compact);
+        assert!(!c.two_pane_ok());
+
+        let c = WindowClass::from_points(f32::INFINITY, 800.0);
+        assert_eq!(c.width, SizeClass::Compact, "infinity is not Expanded");
+        assert!(!c.two_pane_ok());
+
+        let c = WindowClass::from_points(400.0, f32::NAN);
+        assert_eq!(c.height, SizeClass::Compact);
     }
 }

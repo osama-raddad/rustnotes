@@ -9,6 +9,8 @@ debug.keystore
 !.idea/jsonSchemas.xml
 !.idea/schemas/
 /.claude/worktrees/
+.DS_Store
+xcuserdata/
 
 # Local research/orchestration scratch, not part of the repo
 /reports/

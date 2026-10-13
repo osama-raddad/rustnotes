@@ -18,6 +18,10 @@ mod scaffold;
 mod size_class;
 mod widgets;
 
+// TODO(framework-extraction): `icon_notes`/`icon_settings` are notes-app
+// concepts exported from the layout crate; keep the icon *type*
+// (`fn(&Painter, Rect, Color32)`) here and move the painters to the app
+// crate.
 pub use bottom_nav::{bottom_nav, icon_notes, icon_settings, NavItem};
 pub use metrics::{Metrics, TextScale};
 pub use nav::Nav;

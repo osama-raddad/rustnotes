@@ -12,3 +12,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 lto = true
 strip = true
 codegen-units = 1
+# No unwinding through JNI (Android) / ObjC (iOS) frames; smaller binaries.
+# Tests run under the dev profile, so they keep unwinding.
+panic = "abort"
