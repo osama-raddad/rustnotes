@@ -1,5 +1,15 @@
 # Rust Notes — the single build file. No .sh scripts; every pipeline is a
 # recipe. Run `just` alone to list them.
+#
+# The packaging recipes are generalized over apps: every app-facing recipe
+# takes an `app` parameter (default 'rustnotes') whose value is at once the
+# cargo package name, the crates/ dir name, and the app-identity key — one
+# string doing triple duty. `just android` is exactly `just android
+# app=rustnotes`: same paths, same package id, same pipeline as before the
+# second app existed. Everything the key alone can't tell a recipe (cdylib
+# lib name, Android package, label, keystore, resources dir, …) comes from
+# the app-identity table below — the embryo of the endpoint CLI's per-app
+# config (plan Q5 gates extracting it any further).
 
 homedir   := env_var('HOME')
 sdk       := env_var_or_default('ANDROID_HOME', homedir + '/Library/Android/sdk')
@@ -11,10 +21,6 @@ host      := if os() == 'macos' { 'darwin-x86_64' } else { 'linux-x86_64' }
 toolchain := sdk + '/ndk/27.1.12297006/toolchains/llvm/prebuilt/' + host + '/bin'
 bt        := sdk + '/build-tools/35.0.0'
 platform  := sdk + '/platforms/android-35/android.jar'
-ks        := 'debug.keystore'
-apk       := 'build/rustnotes.apk'
-ios_app   := 'build/ios/Rust Notes.app'
-ios_id    := 'com.osamaraddad.rustnotes.ios'
 
 # NDK toolchain on PATH (xbuild's cc-rs resolves llvm-ar by name), C env for
 # bundled SQLite (rusqlite) in cargo builds, and the Android linker — exported
@@ -27,78 +33,183 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER := toolchain + '/aarch64-linux-
 default:
     @just --list
 
-# ---- Android ---------------------------------------------------------------
+# ---- app identity -----------------------------------------------------------
 
-# Cross-compile the cdylib and stage it for packaging (rust-toolchain.toml
-# already installs the aarch64-linux-android target — no rustup call needed)
+# The identity table: everything the packaging recipes know about an app
+# beyond its `app` key. Emits shell assignments, one per line, for eval:
+#   key          the app key, normalized (see below) — recipes use $key for
+#                artifact paths (build/$key.apk) so both spellings of the
+#                argument produce the same artifacts
+#   crate        cargo package name (-p); equals the app key by construction
+#   cdylib       lib name without the lib/ prefix and .so suffix — NOT always
+#                the crate name: hello-mobile's Cargo [lib] name is
+#                hello_mobile, so its jniLib is libhello_mobile.so
+#   bin          cargo bin name (the iOS bundle executable / desktop run)
+#   android_pkg  Android package id — a matched set with the `package` attr
+#                in the app's AndroidManifest.xml AND the App impl's
+#                ANDROID_DATA_DIR_FALLBACK, which encodes the package name in
+#                its path. A mismatched pair is a silent bug (the app
+#                installs and launches, then "falls back" into a directory
+#                Android doesn't own); the Rust trait cannot enforce it, so
+#                this table is the one place all three meet.
+#   label        display label; doubles as the iOS .app dir name (space
+#                included: "Rust Notes.app")
+#   ios_bundle   iOS bundle id (repo convention: android pkg + ".ios")
+#   res          the app's resources dir (AndroidManifest.xml + Info.plist);
+#                rustnotes' lives at the repo root for backward compat,
+#                later apps under crates/<app>/resources — asymmetry kept,
+#                resolved when the endpoint CLI owns per-app config
+#   ks / ks_alias / ks_dname
+#                the app's OWN debug keystore file, alias, and dname — see
+#                the keystore recipe for why files, not one file with two
+#                aliases
+# The key may be spelled two ways on the command line — `just android
+# hello-mobile` and `just android app=hello-mobile` — because just binds
+# the `app=…` token whole as a positional argument; the prefix is stripped
+# here, once, and `$key` (never `{{app}}`) names artifacts.
+# Recipes consume this in the two-step form:
+#   cfg=$(just app-identity "{{app}}"); eval "$cfg"
+# never `eval "$(just app-identity …)"` — under set -euo pipefail the
+# assignment aborts on an unknown app, whereas the eval-string form would
+# swallow the failure and eval an empty string into defaults-from-nothing.
 [private]
-android-stage:
-    cargo build -p rustnotes --lib --target aarch64-linux-android --release
-    rm -rf build/apk
-    mkdir -p build/apk/lib/arm64-v8a
-    cp build/target/aarch64-linux-android/release/librustnotes.so build/apk/lib/arm64-v8a/
+app-identity app:
+    #!/bin/zsh
+    key="{{app}}"
+    key=${key#app=}
+    case "$key" in
+    rustnotes)
+        echo "key='rustnotes'"
+        echo "crate='rustnotes'"
+        echo "cdylib='rustnotes'"
+        echo "bin='rustnotes'"
+        echo "android_pkg='com.osamaraddad.rustnotes'"
+        echo "label='Rust Notes'"
+        echo "ios_bundle='com.osamaraddad.rustnotes.ios'"
+        echo "res='resources'"
+        echo "ks='debug.keystore'"
+        echo "ks_alias='rustnotes'"
+        echo "ks_dname='CN=Rust Notes Debug,O=Rust,C=US'"
+        ;;
+    hello-mobile)
+        echo "key='hello-mobile'"
+        echo "crate='hello-mobile'"
+        echo "cdylib='hello_mobile'"
+        echo "bin='hello-mobile'"
+        echo "android_pkg='com.example.hellomobile'"
+        echo "label='Hello Mobile'"
+        echo "ios_bundle='com.example.hellomobile.ios'"
+        echo "res='crates/hello-mobile/resources'"
+        echo "ks='hello-mobile.debug.keystore'"
+        echo "ks_alias='hellomobile'"
+        echo "ks_dname='CN=Hello Mobile Debug,O=Rust,C=US'"
+        ;;
+    *)
+        echo "ERROR: unknown app '{{app}}' (expected 'rustnotes' or 'hello-mobile')." >&2
+        exit 1
+        ;;
+    esac
 
-# Preflight keytool (a JDK — macOS ships none) and mint the debug keystore
-# atomically (temp file + mv), so a missing JDK or a killed keytool fails
-# here — before the long cross-build — instead of deep inside apksigner.
+# ---- Android ----------------------------------------------------------------
+
+# Cross-compile the app's cdylib and stage it for packaging
+# (rust-toolchain.toml already installs the aarch64-linux-android target —
+# no rustup call needed — for every app). build/apk stays a single shared
+# staging dir, wiped per run exactly as when there was one app: only one
+# app is packaged at a time, and a stale lib from the other app must never
+# ride along into the zip.
 [private]
-keystore:
+android-stage app='rustnotes':
     #!/bin/zsh
     set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    cargo build -p "$crate" --lib --target aarch64-linux-android --release
+    rm -rf build/apk
+    mkdir -p build/apk/lib/arm64-v8a
+    cp "build/target/aarch64-linux-android/release/lib$cdylib.so" build/apk/lib/arm64-v8a/
+
+# Preflight keytool (a JDK — macOS ships none) and mint the app's debug
+# keystore atomically (temp file + mv), so a missing JDK or a killed keytool
+# fails here — before the long cross-build — instead of deep inside
+# apksigner. One keystore FILE per app, not one file with an alias per app:
+# keytool rewrites the whole keystore file, non-atomically, for every
+# genkeypair — a shared file would put a live keystore (the other app's
+# signing key!) under that rewrite and break the temp-file+mv atomicity this
+# recipe exists to provide. Per-app files also re-mint independently.
+[private]
+keystore app='rustnotes':
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
     command -v keytool >/dev/null || { echo "ERROR: keytool (a JDK) is required for debug signing — e.g. brew install --cask temurin."; exit 1; }
-    if [ ! -f "{{ks}}" ]; then
-        tmp="{{ks}}.tmp.$$"
+    if [ ! -f "$ks" ]; then
+        tmp="$ks.tmp.$$"
         trap 'rm -f "$tmp"' EXIT
-        keytool -genkeypair -keystore "$tmp" -alias rustnotes \
+        keytool -genkeypair -keystore "$tmp" -alias "$ks_alias" \
             -keyalg RSA -keysize 2048 -validity 10000 -storepass android \
-            -keypass android -dname "CN=Rust Notes Debug,O=Rust,C=US"
-        mv "$tmp" "{{ks}}"
+            -keypass android -dname "$ks_dname"
+        mv "$tmp" "$ks"
     fi
 
-# Release APK: cargo -> aapt2 -> zip -> zipalign -> apksigner (targetSdk 35).
+# Release APK for any app: cargo -> aapt2 -> zip -> zipalign -> apksigner
+# (targetSdk 35 — enforced by the aapt2 flags here, mirrored by every app's
+# manifest; min-sdk 24 likewise).
 #
-# 16 KB coupling: extractNativeLibs="true" (AndroidManifest.xml) + the
-# DEFLATE-compressed .so stored by `zip` + `zipalign -f 4` form one matched
-# set — the loader never mmaps the lib from inside the APK, and what 16 KB
-# kernels actually check is the ELF's p_align (16384, from the rustflags in
-# .cargo/config.toml). Flipping the manifest to extractNativeLibs="false"
-# (uncompressed .so) requires `zip -0 -X` + `zipalign -f -p 4` below, or
-# 16 KB-kernel devices stop launching the app.
-android: keystore android-stage
-    "{{bt}}/aapt2" link -o build/rustnotes.unsigned.apk \
-        --manifest resources/AndroidManifest.xml -I "{{platform}}" \
+# 16 KB coupling, per app: extractNativeLibs="true" (the app's
+# AndroidManifest.xml under $res) + the DEFLATE-compressed .so stored by
+# `zip` + `zipalign -f 4` form one matched set — the loader never mmaps the
+# lib from inside the APK, and what 16 KB kernels actually check is the
+# ELF's p_align (16384, from the rustflags in .cargo/config.toml, which
+# being global covers every app's cdylib). Flipping ANY app's manifest to
+# extractNativeLibs="false" (uncompressed .so) requires `zip -0 -X` +
+# `zipalign -f -p 4` below for that app, or 16 KB-kernel devices stop
+# launching it. The manifest is otherwise the same matched set as ever
+# (full configChanges list, hasCode="false", NativeActivity) — copied
+# verbatim per app, because a missed configChanges entry recreates the
+# activity and ANRs.
+android app='rustnotes': (keystore app) (android-stage app)
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    "{{bt}}/aapt2" link -o "build/$key.unsigned.apk" \
+        --manifest "$res/AndroidManifest.xml" -I "{{platform}}" \
         --min-sdk-version 24 --target-sdk-version 35
-    cd build/apk && zip -qrX ../rustnotes.unsigned.apk lib
-    "{{bt}}/zipalign" -f 4 build/rustnotes.unsigned.apk build/rustnotes.aligned.apk
-    "{{bt}}/apksigner" sign --ks "{{ks}}" --ks-key-alias rustnotes \
+    (cd build/apk && zip -qrX "../$key.unsigned.apk" lib)
+    "{{bt}}/zipalign" -f 4 "build/$key.unsigned.apk" "build/$key.aligned.apk"
+    "{{bt}}/apksigner" sign --ks "$ks" --ks-key-alias "$ks_alias" \
         --ks-pass pass:android --key-pass pass:android \
-        --out "{{apk}}" build/rustnotes.aligned.apk
-    @echo "==> {{apk}}"
+        --out "build/$key.apk" "build/$key.aligned.apk"
+    echo "==> build/$key.apk"
 
 # APK + install & launch on an adb target (default: first connected device).
 # Falls back to uninstall+install when the signature changed (e.g. after
 # switching between the xbuild and keystore pipelines — clears app data).
-android-install serial='':
+android-install app='rustnotes' serial='':
     #!/bin/zsh
     set -euo pipefail
-    just android
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    just android "$key"
     s="{{serial}}"
     if [ -z "$s" ]; then
         s=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1; exit}')
     fi
     [ -n "$s" ] || { echo "ERROR: no adb device connected."; exit 1; }
     echo "==> target: $s"
-    adb -s "$s" install -r "{{apk}}" || (adb -s "$s" uninstall com.osamaraddad.rustnotes && adb -s "$s" install "{{apk}}")
-    adb -s "$s" shell am start -n com.osamaraddad.rustnotes/android.app.NativeActivity
+    adb -s "$s" install -r "build/$key.apk" || (adb -s "$s" uninstall "$android_pkg" && adb -s "$s" install "build/$key.apk")
+    adb -s "$s" shell am start -n "$android_pkg/android.app.NativeActivity"
 
 # Run on a connected Android device (physical first, then emulator); if none,
 # boot the first AVD and run there.
-run-android:
+run-android app='rustnotes':
     #!/bin/zsh
     set -euo pipefail
     s=$(adb devices -l 2>/dev/null | awk '{if($2=="device"){if(/usb:/&&!p)p=$1;else if(!e)e=$1}}END{print p?p:e}')
     if [ -n "$s" ]; then
-        just android-install "$s"
+        just android-install "{{app}}" "$s"
         exit 0
     fi
     emu="{{sdk}}/emulator/emulator"
@@ -116,16 +227,26 @@ run-android:
         sleep 2
     done
     [ "$ok" = 1 ] || { echo "ERROR: emulator did not boot within 180s."; exit 1; }
-    just android-install "$s"
+    just android-install "{{app}}" "$s"
 
-# Release APK via xbuild (auto-signed, targetSdk 35)
-android-x:
-    cd crates/rustnotes && x build --platform android --arch arm64 --release --format apk
+# Release APK via xbuild (auto-signed, targetSdk 35). xbuild runs per crate,
+# so cd into the app's crate dir — the dir name equals the app key for every
+# app in the identity table.
+android-x app='rustnotes':
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    cd "crates/$key" && x build --platform android --arch arm64 --release --format apk
 
 # xbuild: deploy + launch + stream logs (Ctrl-C detaches; app keeps running)
 # (--device implies --platform; x rejects passing both)
-android-run device='adb:emulator-5554':
-    cd crates/rustnotes && x run --device {{device}} --arch arm64 --release
+android-run device='adb:emulator-5554' app='rustnotes':
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    cd "crates/$key" && x run --device {{device}} --arch arm64 --release
 
 # ---- iOS --------------------------------------------------------------------
 
@@ -134,42 +255,64 @@ android-run device='adb:emulator-5554':
 # devicectl install / xcodebuild with unrelated errors.
 [private]
 ios-device-id:
-    @xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/){print $j; exit}}}'
+    @xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/){print $j; exit}}}'
 
-# Cross-compile and assemble the .app bundle. IPHONEOS_DEPLOYMENT_TARGET
-# mirrors MinimumOSVersion (13.0) in resources/Info.plist — without it the
-# effective iOS floor floats on cc-rs/objc2 defaults at build time.
+# Fail unless exactly one iOS simulator is booted. Shared by ios-run and
+# screenshot-ios: simctl's `booted` selector silently picks an arbitrary one
+# of many, and a wrong-device install or screenshot is worse than a clear
+# error.
 [private]
-ios-build target:
-    IPHONEOS_DEPLOYMENT_TARGET=13.0 cargo build -p rustnotes --bin rustnotes --target {{target}} --release
-    rm -rf build/ios
-    mkdir -p "{{ios_app}}"
-    cp build/target/{{target}}/release/rustnotes "{{ios_app}}/rustnotes"
-    cp resources/Info.plist "{{ios_app}}/Info.plist"
-
-# Simulator .app bundle (ad-hoc signed)
-ios: (ios-build 'aarch64-apple-ios-sim')
-    codesign --force --sign - --timestamp=none "{{ios_app}}"
-    @echo "==> {{ios_app}}"
-
-# .app + install & launch on the booted iOS simulator (exactly one — a silent
-# wrong-device install is worse than a clear error).
-ios-run: ios
+ios-one-booted-sim:
     #!/bin/zsh
     set -euo pipefail
     n=$(xcrun simctl list devices booted 2>/dev/null | grep -c Booted || true)
     [ "$n" -eq 1 ] || { echo "ERROR: expected exactly one booted iOS simulator, found $n — boot exactly one and rerun."; exit 1; }
-    xcrun simctl install booted "{{ios_app}}"
-    xcrun simctl launch booted {{ios_id}}
+
+# Cross-compile and assemble the app's .app bundle. IPHONEOS_DEPLOYMENT_TARGET
+# mirrors MinimumOSVersion (13.0) in the app's Info.plist — without it the
+# effective iOS floor floats on cc-rs/objc2 defaults at build time. build/ios
+# stays one shared dir, wiped per build as before: one app bundles at a time,
+# and the .app of the other app must not survive the wipe.
+[private]
+ios-build app target:
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    IPHONEOS_DEPLOYMENT_TARGET=13.0 cargo build -p "$crate" --bin "$bin" --target {{target}} --release
+    rm -rf build/ios
+    mkdir -p "build/ios/$label.app"
+    cp "build/target/{{target}}/release/$bin" "build/ios/$label.app/$bin"
+    cp "$res/Info.plist" "build/ios/$label.app/Info.plist"
+
+# Simulator .app bundle (ad-hoc signed)
+ios app='rustnotes': (ios-build app 'aarch64-apple-ios-sim')
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    codesign --force --sign - --timestamp=none "build/ios/$label.app"
+    echo "==> build/ios/$label.app"
+
+# .app + install & launch on the booted iOS simulator (exactly one — see
+# ios-one-booted-sim).
+ios-run app='rustnotes': (ios app)
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    just ios-one-booted-sim
+    xcrun simctl install booted "build/ios/$label.app"
+    xcrun simctl launch booted "$ios_bundle"
 
 # Run on a connected iPhone; if none, run on the simulator (booting the first
 # available iPhone simulator if needed).
-run-ios:
+run-ios app='rustnotes':
     #!/bin/zsh
     set -euo pipefail
     dev="${DEVICE:-$(just ios-device-id)}"
     if [ -n "$dev" ]; then
-        DEVICE="$dev" just ios-install
+        DEVICE="$dev" just ios-install "{{app}}"
         exit 0
     fi
     echo "==> no iPhone connected — simulator"
@@ -181,20 +324,33 @@ run-ios:
         xcrun simctl bootstatus "$udid" -b
     fi
     open -a Simulator
-    just ios-run
+    just ios-run "{{app}}"
 
 # Device build (unsigned — `just ios-install` signs + installs + launches)
-ios-device: (ios-build 'aarch64-apple-ios')
-    @echo "==> {{ios_app}} (unsigned — run 'just ios-install')"
-
-# Sign the device .app with a provisioning profile covering {{ios_id}} and
-# the identity whose certificate the profile embeds. Override with
-# IDENTITY='<name-or-hash>' / PROFILE=path.
-[private]
-ios-sign:
+ios-device app='rustnotes': (ios-build app 'aarch64-apple-ios')
     #!/bin/zsh
     set -euo pipefail
-    app="{{ios_app}}"
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    echo "==> build/ios/$label.app (unsigned — run 'just ios-install app=$key')"
+
+# Sign the device .app with a provisioning profile covering the app's iOS
+# bundle id and the identity whose certificate the profile embeds. Override
+# with IDENTITY='<name-or-hash>' / PROFILE=path.
+#
+# RUSTNOTES-ONLY, by explicit design: the profile story below is welded to
+# tools/ios-profile-helper, whose pbxproj bakes
+# com.osamaraddad.rustnotes.ios. Guarded per app so a second app fails with
+# the reason, never by attempting to sign with a rustnotes profile. Per-app
+# profile minting is the endpoint CLI's to build (plan addendum).
+[private]
+ios-sign app='rustnotes':
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    [ "$key" = "rustnotes" ] || { echo "ERROR: ios-sign supports only app=rustnotes today: the profile helper (tools/ios-profile-helper) bakes com.osamaraddad.rustnotes.ios into its pbxproj, so no profile for another app's bundle id can be minted or matched here. Per-app profiles are the endpoint CLI's profile story — see docs/framework-extraction-plan.md."; exit 1; }
+    app="build/ios/$label.app"
     profdir="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
     [ -d "$profdir" ] || profdir="$HOME/Library/MobileDevice/Provisioning Profiles"
     tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -210,7 +366,7 @@ ios-sign:
             security cms -D -i "$p" > "$tmp/profile.plist" 2>/dev/null || continue
             appid=$(plutil -extract Entitlements.application-identifier raw -o - "$tmp/profile.plist" 2>/dev/null) || continue
             rest=${appid#*.} # strip team id: TEAMID.bundle.id → bundle.id (TEAMID.* → *)
-            [ "$rest" = "{{ios_id}}" ] || [ "$rest" = "*" ] || continue
+            [ "$rest" = "$ios_bundle" ] || [ "$rest" = "*" ] || continue
             exp=$(plutil -extract ExpirationDate raw -o - "$tmp/profile.plist" 2>/dev/null) || continue
             # plutil prints "YYYY-MM-DD HH:MM:SS +0000" — normalize both
             # sides to comparable UTC integers (a plain string compare
@@ -222,7 +378,7 @@ ios-sign:
         done
     fi
     if [ -z "$profile" ]; then
-        echo "ERROR: no provisioning profile covering {{ios_id}} in:"
+        echo "ERROR: no provisioning profile covering $ios_bundle in:"
         echo "  $profdir"
         echo "Fix: run 'just ios-profile' (rebuilds the bundled throwaway Xcode"
         echo "project, tools/ios-profile-helper, to mint a fresh 7-day personal-team"
@@ -253,30 +409,74 @@ ios-sign:
     codesign --force --sign "$signer" --entitlements "$tmp/entitlements.plist" --timestamp=none "$app"
     codesign --verify "$app"
 
-# Refresh the 7-day development profile for {{ios_id}}: rebuild the throwaway
-# Xcode project (tools/ios-profile-helper) with automatic signing. Run when
-# ios-install reports no valid profile. iPhone connected once.
+# Refresh the 7-day development profile: rebuild the throwaway Xcode project
+# (tools/ios-profile-helper) with automatic signing. Run when ios-install
+# reports no valid profile. iPhone connected once.
 # The helper project bakes a personal DEVELOPMENT_TEAM into its pbxproj; the
 # command-line override below beats pbxproj settings, so contributors pass
 # TEAM=<their-team-id> (or export TEAM) without editing anything checked in.
-ios-profile TEAM=env_var_or_default('TEAM', 'P86GBGS2B7'):
+# RUSTNOTES-ONLY, same coupling as ios-sign: the helper's pbxproj also bakes
+# com.osamaraddad.rustnotes.ios as the profiled bundle id.
+ios-profile app='rustnotes' TEAM=env_var_or_default('TEAM', 'P86GBGS2B7'):
     #!/bin/zsh
     set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    [ "$key" = "rustnotes" ] || { echo "ERROR: ios-profile supports only app=rustnotes today: tools/ios-profile-helper's pbxproj bakes com.osamaraddad.rustnotes.ios, so it cannot mint a profile for another app's bundle id. Per-app profiles are the endpoint CLI's profile story — see docs/framework-extraction-plan.md."; exit 1; }
     dev="${DEVICE:-$(just ios-device-id)}"
     [ -n "$dev" ] || { echo "ERROR: no connected device — profile refresh needs the iPhone once."; exit 1; }
     xcodebuild -project tools/ios-profile-helper/ios.xcodeproj -scheme ios \
         -destination "id=$dev" -allowProvisioningUpdates \
         -allowProvisioningDeviceRegistration DEVELOPMENT_TEAM="{{TEAM}}" build
 
-# .app + sign + install + launch on a connected iPhone (DEVICE=<uuid> to pick)
-ios-install: ios-device ios-sign
+# .app + sign + install + launch on a connected iPhone (DEVICE=<uuid> to
+# pick). Device signing is rustnotes-only until profiles are per-app — the
+# ios-sign guard fires with the reason if another app reaches here.
+ios-install app='rustnotes': (ios-device app) (ios-sign app)
     #!/bin/zsh
     set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
     dev="${DEVICE:-$(just ios-device-id)}"
     [ -n "$dev" ] || { echo "ERROR: no connected device — plug in and trust the iPhone."; exit 1; }
     echo "==> device: $dev"
-    xcrun devicectl device install app --device "$dev" "{{ios_app}}"
-    xcrun devicectl device process launch --device "$dev" "{{ios_id}}"
+    xcrun devicectl device install app --device "$dev" "build/ios/$label.app"
+    xcrun devicectl device process launch --device "$dev" "$ios_bundle"
+
+# ---- screenshots --------------------------------------------------------------
+
+# Capture the Android screen to build/screenshot-<app>-android.png — the
+# per-device comparison the extraction plan does by hand today (launch with
+# `just android-install app=<app>` first, then screenshot). Serial
+# resolution identical to android-install: explicit param, else the first
+# `adb devices` device, clear error if none. `adb exec-out`, never
+# `adb shell`: the shell's pty converts LF to CRLF and corrupts the PNG.
+screenshot-android app='rustnotes' serial='':
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    s="{{serial}}"
+    if [ -z "$s" ]; then
+        s=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1; exit}')
+    fi
+    [ -n "$s" ] || { echo "ERROR: no adb device connected."; exit 1; }
+    mkdir -p build
+    adb -s "$s" exec-out screencap -p > "build/screenshot-$key-android.png"
+    echo "==> build/screenshot-$key-android.png"
+
+# Capture the booted iOS simulator's screen to build/screenshot-<app>-ios.png
+# (launch with `just ios-run app=<app>` first). Same exactly-one-booted-sim
+# guard as ios-run: simctl's `booted` is arbitrary when several run.
+screenshot-ios app='rustnotes':
+    #!/bin/zsh
+    set -euo pipefail
+    cfg=$(just app-identity "{{app}}")
+    eval "$cfg"
+    just ios-one-booted-sim
+    mkdir -p build
+    xcrun simctl io booted screenshot "build/screenshot-$key-ios.png"
+    echo "==> build/screenshot-$key-ios.png"
 
 # ---- misc -------------------------------------------------------------------
 

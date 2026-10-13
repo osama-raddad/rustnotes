@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.hellomobile"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <application
+        android:label="Hello Mobile"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:hasCode="false"
+        android:allowBackup="true"
+        android:extractNativeLibs="true"
+        android:enableOnBackInvokedCallback="false"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <activity
+            android:name="android.app.NativeActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|touchscreen|density|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|mcc|mnc|grammaticalGender"
+            android:windowSoftInputMode="adjustResize">
+
+            <!-- Name of the cdylib inside jniLibs, without lib prefix / .so suffix.
+                 The crate name is hello-mobile, but its Cargo [lib] name — what
+                 actually names libhello_mobile.so — is hello_mobile. This must
+                 stay a matched set with the justfile identity table's cdylib. -->
+            <meta-data android:name="android.app.lib_name" android:value="hello_mobile" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
