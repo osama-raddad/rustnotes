@@ -9,9 +9,17 @@ use std::time::{Duration, Instant};
 /// NativeActivity loads `librustnotes.so` and calls this on its own thread.
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
+    start::<rustnotes_core::App>(app);
+}
+
+/// Android bootstrap, generic over the embedded [`crate::App`]. Everything
+/// here is framework — logger, panic hook, data-dir resolution, entry into
+/// eframe; the app-specific values (logcat tag, data-dir fallback, window
+/// title) ride the trait's consts.
+pub(crate) fn start<A: crate::App>(app: AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default()
-            .with_tag("rustnotes")
+            .with_tag(A::ANDROID_LOG_TAG)
             .with_max_level(log::LevelFilter::Info),
     );
     // Capture the backtrace too: the default hook prints it to stderr, which
@@ -22,23 +30,23 @@ fn android_main(app: AndroidApp) {
         log::error!("panic: {info}\n{backtrace}");
     }));
 
-    // `internalDataPath` is set before `android_main` runs; the hard-coded
-    // fallback is the same directory for this package and stays writable by
-    // the app uid (`/data/local/tmp`, the old fallback, is owned by shell
-    // and would fail every DB operation).
+    // `internalDataPath` is set before `android_main` runs; the trait's
+    // fallback is that same directory for this package and stays writable
+    // by the app uid (`/data/local/tmp`, the old fallback, is owned by
+    // shell and would fail every DB operation).
     let data_dir = app
         .internal_data_path()
-        .unwrap_or_else(|| std::path::PathBuf::from("/data/data/com.osamaraddad.rustnotes/files"));
+        .unwrap_or_else(|| std::path::PathBuf::from(A::ANDROID_DATA_DIR_FALLBACK));
     set_app(app.clone());
     // Prime the config query now, so insets/night/font-scale are already
     // known when eframe draws its first frames: the answer arrives
     // asynchronously on the Java main thread, otherwise those first frames
     // render with no safe-area insets at all.
     post_query(None);
-    let mut options = crate::native_options();
+    let mut options = crate::native_options::<A>();
     // winit needs the AndroidApp handle to build its event loop.
     options.android_app = Some(app);
-    if let Err(e) = crate::run(options, data_dir) {
+    if let Err(e) = crate::run::<A>(options, data_dir) {
         log::error!("eframe exited with error: {e}");
     }
 }
