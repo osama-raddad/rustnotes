@@ -15,19 +15,27 @@ pub struct NotesDb {
     conn: Connection,
 }
 
+/// Schema shared by the on-disk store and the in-memory fallback.
+const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    body TEXT NOT NULL,
+    updated INTEGER NOT NULL
+)";
+
 impl NotesDb {
     pub fn open(data_dir: &Path) -> rusqlite::Result<NotesDb> {
         let _ = std::fs::create_dir_all(data_dir);
         let conn = Connection::open(data_dir.join("notes.db"))?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                body TEXT NOT NULL,
-                updated INTEGER NOT NULL
-            )",
-            [],
-        )?;
+        conn.execute(SCHEMA, [])?;
         Ok(NotesDb { conn })
+    }
+
+    /// An always-empty store for when the on-disk database cannot be opened
+    /// (see [`crate::App::new`]). Only an out-of-memory process fails here.
+    pub(crate) fn open_in_memory() -> NotesDb {
+        let conn = Connection::open_in_memory().expect("open in-memory notes store");
+        conn.execute(SCHEMA, []).expect("create in-memory notes table");
+        NotesDb { conn }
     }
 
     pub fn list(&self) -> Vec<Note> {
@@ -51,23 +59,32 @@ impl NotesDb {
         }
     }
 
+    /// Persist `note`. Errors are logged, not swallowed: a save that failed
+    /// silently looks exactly like one that worked, which is how notes get
+    /// lost. `id` and `updated` only change when the row really landed.
     pub fn save(&self, note: &mut Note) {
         let now = util::now_epoch();
-        if note.id == 0 {
-            let ok = self.conn.execute(
-                "INSERT INTO notes (body, updated) VALUES (?1, ?2)",
-                params![note.body, now],
-            );
-            if ok.is_ok() {
-                note.id = self.conn.last_insert_rowid();
-            }
+        let result = if note.id == 0 {
+            self.conn
+                .execute(
+                    "INSERT INTO notes (body, updated) VALUES (?1, ?2)",
+                    params![note.body, now],
+                )
+                .map(|_| {
+                    note.id = self.conn.last_insert_rowid();
+                })
         } else {
-            let _ = self.conn.execute(
-                "UPDATE notes SET body=?1, updated=?2 WHERE id=?3",
-                params![note.body, now, note.id],
-            );
+            self.conn
+                .execute(
+                    "UPDATE notes SET body=?1, updated=?2 WHERE id=?3",
+                    params![note.body, now, note.id],
+                )
+                .map(|_| ())
+        };
+        match result {
+            Ok(()) => note.updated = now,
+            Err(e) => log::error!("notes: save id={} failed: {e}", note.id),
         }
-        note.updated = now;
     }
 
     pub fn delete(&self, id: i64) {

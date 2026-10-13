@@ -169,7 +169,22 @@ impl App {
         ctx: &egui::Context,
         system_font: Option<(Vec<u8>, String)>,
     ) -> App {
-        let db = NotesDb::open(&data_dir).expect("open notes database");
+        // A database that cannot be opened (corrupt file, unwritable disk)
+        // must not panic: on Android that crashes every launch, and each
+        // relaunch crashes again — a loop only a reinstall (and data loss)
+        // fixes. Fall back to an in-memory store so the app still runs, and
+        // leave the on-disk file untouched: the notes in it may yet be
+        // recoverable, and a session of throwaway notes beats a brick.
+        let db = match NotesDb::open(&data_dir) {
+            Ok(db) => db,
+            Err(e) => {
+                log::error!(
+                    "cannot open notes database in {}: {e}; continuing with an in-memory store",
+                    data_dir.display()
+                );
+                NotesDb::open_in_memory()
+            }
+        };
         let notes = db.list();
         log::info!("loaded {} notes from {}", notes.len(), data_dir.display());
 
