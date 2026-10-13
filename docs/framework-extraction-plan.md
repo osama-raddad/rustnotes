@@ -169,7 +169,10 @@ no-Gradle pipeline gains a packaging step. Recommendation: keep
 NativeActivity as the framework default (keycode + dead-key accents
 work), ship the GameActivity path as a documented opt-in, and take the
 decision when a real app needs CJK; it sets what kind of apps the
-framework can host.
+framework can host. *(2026-10-13: the opt-in is built — see the
+"GameActivity opt-in" addendum for what it found, including why launch
+is still blocked: the dex is the cheap half of GameActivity's Java
+cost.)*
 
 ## Open questions
 
@@ -343,3 +346,76 @@ pipeline. What generalizing exposed:
   its keys are the CLI's per-app fields, its two rows the first two
   consumers. Q5 (name and home) stays the gate on promoting it from a
   justfile recipe to anything compiled.
+
+## Addendum: the GameActivity opt-in, as built (2026-10-13)
+
+The §"Still open" recommendation shipped: NativeActivity stays the
+default (byte-equivalent pipeline), GameActivity is a documented opt-in —
+a cargo feature that SWAPS the backend, an `activity=game` flavor through
+every packaging recipe, a manifest variant per app, and a pinned-AAR dex
+step. What building it found that the record above didn't predict:
+
+- The backend must swap, never add, and the type system enforces it for
+  us: `android-activity` compile_error!s when both backend features are
+  on AND when neither is — loud by upstream design. So the opt-in is
+  `--no-default-features --features android-game-activity` (plus
+  re-adding `android-entry` for rustnotes), and the NA default lives in
+  `default` where it keeps every pre-existing build identical.
+- `hello-mobile` must carry its own mirror feature: it declares
+  `android-activity` itself (its `android_main` signature) and consumes
+  rustnotes with `default-features = false`, so the host's default never
+  reaches it — the backend choice travels one crate at a time. The
+  identity table gained one row for the same reason: `entry`, the feature
+  that re-adds an app's own `android_main` under `--no-default-features`
+  (`android-entry` for rustnotes, empty for hello-mobile). The backend
+  itself is deliberately NOT in the table — a build flavor, not an app
+  fact.
+- The glue needed no code split. android-activity presents the same
+  `AndroidApp` under both backends — same `android_main` re-entry on
+  activity recreation (the statics-reset rationale holds verbatim), same
+  `run_on_java_main_thread`, same borrowed activity pointer — so
+  `android.rs` took comment updates only. Building the GA cdylib also
+  revealed android-activity compiles its vendored C++ glue via cc-rs
+  (the justfile's NDK-PATH export covers it; a bare `cargo build`
+  outside `just` fails to find `aarch64-linux-android-clang++`).
+- The exact activity class is `com.google.androidgamesdk.GameActivity`
+  — `androidgamesdk`, not the `androidgames` the README examples
+  shorthand — and the AAR's own manifest is NOT a template (it declares
+  only `minSdkVersion 21`, no activity): the app's manifest must declare
+  the activity itself, and the configChanges list came from
+  android-activity's own GameActivity examples
+  (`orientation|screenSize|screenLayout|keyboardHidden` — shorter than
+  NA's, legitimately: this glue survives recreation by design).
+  `hasCode="true"` is spelled out (not left to the default) so the
+  variant's diff against the NA manifest is exactly the backend's needs.
+- The supply-chain pin matters more than expected:
+  `androidx.games:games-activity:4.4.0` (android-activity 0.6.1's
+  supported line), sha256-pinned in the justfile — because the AAR's
+  pom declares **no dependencies at all**, which is false: its bytecode
+  `extends androidx.appcompat.app.AppCompatActivity` and references
+  `androidx.core`. Upstream's own eframe example (rust-mobile
+  `agdk-eframe`) declares `appcompat:1.7.0` by hand, confirming the pom
+  is simply wrong. `android-install`'s hardcoded
+  `$pkg/android.app.NativeActivity` component had to learn the flavor
+  too — `am start` names the class or launches nothing.
+- The dex-only packaging step is real but not sufficient — the wave's
+  hard stop. Proven on the emulator, rung by rung: dexing just
+  games-activity's classes.jar installs and dies at
+  `ClassNotFoundException: androidx.appcompat.app.AppCompatActivity`;
+  resolving the true closure Gradle-style (43 artifacts from appcompat
+  1.7.0's tree, kotlin included) and dexing all of it gets through class
+  loading (verified with an `app_process` harness outside the app
+  machinery) and dies one wall later, at `NoClassDefFoundError:
+  androidx.appcompat.R$drawable` — appcompat's R classes and resources
+  (attrs, drawables, the AppCompat themes) require the aapt2
+  resource-merge pipeline that is Gradle's actual product. That is the
+  boundary: a no-Gradle GA path needs a mini-AGP (Maven resolve + res
+  compile/link + R.java + javac + d8), which is the endpoint CLI's
+  problem, not a justfile recipe's. The ladder rung reached: builds,
+  signs, verifies, installs, launches, crashes with the missing class
+  named; IME proof (soft keyboard, `dumpsys input_method`, `adb shell
+  input text`) remains the residual manual test behind that wall.
+- AccessKit remains the unlocked follow-on, still not enabled: eframe
+  compile_error!s `accesskit` under NativeActivity, and GA is its only
+  Android route — one more reason the switch decision (Q4) is worth
+  taking with a real app's needs on the table.
