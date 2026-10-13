@@ -1,8 +1,11 @@
 # Mobile-first layout system — design plan
 
-Status: **implemented for Rust Notes** in PR #5 (merged 2026-10-13), all
-seven phases. The eframe template has not adopted the module yet. Line
-numbers in "What exists today" describe the code *before* PR #5.
+Status: **implemented** in PR #5 (merged 2026-10-13), all seven phases, in
+`crates/rustnotes-core/src/layout/`. The second consumer this plan was
+written for — the eframe template, `examples/eframe-mobile` — was deleted
+by PR #10, so the module now has a single consumer; extract it to a crate
+only when a real second one appears. Line numbers in "What exists today"
+describe the code *before* PR #5.
 
 ## As shipped
 
@@ -14,9 +17,9 @@ has been corrected in place; the differences in one table:
 | iPad Pro 11-inch, portrait | two panes | **one pane**: 834 pt wide is under the 840 pt Expanded breakpoint, so it is Medium. Two panes show on the 13-inch in portrait (1032 pt) and on tablets in landscape |
 | Text scale | `ctx.set_zoom_factor` | multiplies the effective pixels-per-point passed to egui (`density × text_scale`), avoiding egui's zoom rect adjustment |
 | Appearance on iOS | `traitCollectionDidChange` | the shell polls `traitCollection.userInterfaceStyle` and `preferredContentSizeCategory` on its frame timer; the core ignores unchanged values |
-| Appearance API | `CoreEvent::Appearance` | `App::set_appearance(dark)` and `App::set_text_scale(s)` |
+| Appearance API | `CoreEvent::Appearance` | was `App::set_appearance(dark)` / `App::set_text_scale(s)`; PR #10 removed both — appearance and text scale now reach egui through the host's `raw_input_hook` (`fallback_theme`, zoom) |
 | Transitions | two layers with transforms | two child UIs at a horizontal offset; `Scaffold` lays out relative to the rect it is given |
-| Reduced motion | maps to 0 ms | `App::set_reduce_motion` exists; no shell feeds it yet |
+| Reduced motion | maps to 0 ms | `App::set_reduce_motion`; the host now feeds it |
 | Routes | `Route::Editor(id)` | `Screen::Editor`; the note id stays in app state |
 | Bottom nav | `BottomNav` struct, a stack per tab | `bottom_nav()` function; tabs are Notes and Settings (a diagnostics page); only Notes has a stack |
 | Swipe to delete | `Sense::drag` rows, two-step confirm | pointer watcher (rows stay click-only so drag-to-scroll works); deletes on release past 40 %; the cross button and its two-tap confirm remain |
@@ -24,13 +27,13 @@ has been corrected in place; the differences in one table:
 | Info.plist | not planned | declares iPad and landscape orientations |
 | Type scale | caption 11, body 14, body-large 16, title 17, headline 22 | as planned; list snippets moved from 13 to 14 pt |
 
-Still open: the template adopting the module, the iOS soft-keyboard inset
-check, iPad landscape (the simulator could not be rotated during
-verification), and a shell feeding reduced motion.
+Still open: the iOS soft-keyboard inset check and iPad landscape (the
+simulator could not be rotated during verification).
 
-Scope: a thin layout layer on top of egui 0.36 that both consumers in this
-repo can use: the Rust Notes core (`crates/rustnotes-core`) and the eframe
-template (`examples/eframe-mobile`). It covers three things and nothing
+Scope: a thin layout layer on top of egui 0.36. It was designed when this
+repo had two consumers — the Rust Notes core (`crates/rustnotes-core`)
+and the eframe template (`examples/eframe-mobile`, deleted by PR #10) —
+and is now used only by the core. It covers three things and nothing
 else:
 
 1. **Density contract** — points come from the device's real density, not a
@@ -70,7 +73,9 @@ Rust Notes core (`crates/rustnotes-core/src/lib.rs`, branch
   (lines 450–451). The scaffold can rely on `ctx.content_rect()` without
   any shell change.
 
-eframe template (`examples/eframe-mobile/src/app.rs`, PR #3):
+eframe template (`examples/eframe-mobile/src/app.rs`, PR #3) — *historical:
+deleted by PR #10; kept as the record of the second consumer this plan was
+written for*:
 
 - `orientation()` (line 98) compares `content_rect` height to width and
   branches portrait/landscape (lines 193–201). A 7-inch tablet in portrait
@@ -82,9 +87,9 @@ eframe template (`examples/eframe-mobile/src/app.rs`, PR #3):
 - The safe area is `content_rect().shrink(16.0)` (line 186), hand-rolled
   again.
 
-The common defect: both consumers decide layout from the wrong inputs
-(pixel width, aspect ratio) and repeat the safe-area and spacing arithmetic
-per screen.
+The common defect at the time: both consumers decided layout from the wrong
+inputs (pixel width, aspect ratio) and repeated the safe-area and spacing
+arithmetic per screen.
 
 ## Goals
 
@@ -167,7 +172,7 @@ keeps the phone single-pane. Orientation stays available through
 
 What each class means for the two apps:
 
-| Width class | Rust Notes | Template demo |
+| Width class | Rust Notes | Template demo (historical — deleted by PR #10) |
 |---|---|---|
 | Compact (phones in portrait) | list *or* editor, full width | settings above content |
 | Medium (small tablets, unfolded foldables) | list with wider cards; editor with a max line width | settings and content side by side at 1:2 |
@@ -204,11 +209,11 @@ impl<'a> Scaffold<'a> {
 1. Paint `background` over `viewport_rect()` so the notch and home-indicator
    strips take the screen colour (today's `ui()` does this by hand).
 2. Take `content_rect()`; in Rust Notes this already excludes the status
-   bar and the keyboard because the shells feed `safe_area_insets`. In the
-   eframe template it does **not** on Android: egui-winit 0.36 populates
-   `safe_area_insets` only under `cfg(target_os = "ios")` (the PR #3 review
-   found this), so the template has to derive top/bottom insets from
-   `AndroidApp::content_rect()` against the window size and push them into
+   bar and the keyboard because the host feeds `safe_area_insets`. On
+   Android egui-winit does not do this: 0.36 populates `safe_area_insets`
+   only under `cfg(target_os = "ios")` (the PR #3 review found this), which
+   is exactly why the host crate carries its own JNI inset queries
+   (`crates/rustnotes/src/android.rs`) and pushes the insets into
    `RawInput` itself. The scaffold reads `content_rect()` either way.
 3. Allocate the top bar at the top of the content rect, the bottom bar at
    the bottom, the FAB over the body's bottom-right corner, and hand the
@@ -248,13 +253,10 @@ replacing the ad-hoc `style_mut` blocks in both `App::new` functions.
 
 `crates/rustnotes-core/src/layout/` with `mod.rs`, `size_class.rs`,
 `scaffold.rs`, `metrics.rs`. It depends only on `egui`. It is **not** a
-separate crate yet: the template is a standalone workspace and would need
-a path dependency into the main workspace, which breaks the "copy this
-folder out" property that makes the template useful. When the second
-consumer adopts the module, extract it to `crates/mobile-layout` and point
-both at it. As shipped, the template has not adopted it yet; the framework
-extraction plan (`docs/framework-extraction-plan.md`) makes
-`mobile-layout` a crate in its Phase 2, which settles this.
+separate crate: since PR #10 deleted the template, the module has exactly
+one consumer — `rustnotes-core` itself — and there is no second workspace
+to point at it. Extract it to `crates/mobile-layout` only when a real
+second consumer appears.
 
 ## Phases
 
@@ -276,21 +278,24 @@ the soft keyboard must appear and the caret must stay visible above it.
 (Android proves nothing here: `adjustResize` shrinks the surface itself.)
 
 **Phase 3 — size classes and list–detail.** Rust Notes renders
-list–detail when `two_pane_ok()`; the template replaces its orientation
-branch with `WindowClass`. Acceptance: the iPad Pro 13-inch simulator
+list–detail when `two_pane_ok()` (the template-side half — replacing its
+orientation branch with `WindowClass` — never shipped; the template was
+deleted by PR #10). Acceptance: the iPad Pro 13-inch simulator
 shows list and editor side by side in portrait (1032 pt wide); the iPad Pro
 11-inch in portrait (834 pt) correctly stays single-pane as Medium width;
 the iPhone 17 Pro in landscape (874 x 402 pt) still shows one pane.
 
 ## Decisions (resolved 2026-10-13)
 
-- **Tablets are in scope.** All three phases are planned; Phase 3 ships
-  list–detail in Rust Notes and the `WindowClass` switch in the template,
-  verified on the iPad Pro 13-inch simulator in portrait. Rust Notes gains
-  a tablet target with this plan.
+- **Tablets are in scope.** All three phases are planned; Phase 3 shipped
+  list–detail in Rust Notes (the `WindowClass` switch in the template never
+  happened — the template was deleted by PR #10), verified on the iPad Pro
+  13-inch simulator in portrait. Rust Notes gains a tablet target with this
+  plan.
 - **Touch target is 48 points** on both platforms. Material's minimum,
-  which also satisfies the iOS HIG's 44. The template's `TOUCH_TARGET`
-  constant moves from 44 to 48 when it adopts `Metrics`.
+  which also satisfies the iOS HIG's 44. (The template's 44-point
+  `TOUCH_TARGET` would have moved to 48 with `Metrics`; moot since the
+  template's deletion.)
 - **Android follows the system "Display size" setting.** Density comes
   from `config().density()`, so the UI scales with the user's
   accessibility preference exactly as native apps do. Consequence for
@@ -328,8 +333,8 @@ cubic over 250 ms; `show` creates two child UIs with `UiBuilder::max_rect`
 on the viewport rect offset sideways, outgoing at `-0.3 * width * t` and
 incoming at `width * (1 - t)`, the Material "shared axis" feel. `Scaffold`
 lays out relative to the rect it is given, so a screen needs no change to
-be drawn mid-slide. `App::set_reduce_motion` turns the slide off; no shell
-feeds it yet. Rust Notes: `Screen` became `Nav<Screen>` with `Screen::List`
+be drawn mid-slide. `App::set_reduce_motion` turns the slide off; the host
+now feeds it. Rust Notes: `Screen` became `Nav<Screen>` with `Screen::List`
 and `Screen::Editor`; `close_editor` became `pop`. Screens queue commands
 instead of touching the stack, because the stack is borrowed while it draws. The `Back` key handler
 already returns whether the event was consumed, so the Android shell keeps

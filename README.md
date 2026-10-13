@@ -7,11 +7,14 @@ and winit host it on Android, iOS and desktop, and one small host crate adds
 only what they lack on mobile.
 
 > Session log: [docs/worklog-2026-10-12.md](docs/worklog-2026-10-12.md) — how
-> this was built and debugged in one day, with every bug and measurement.
+> this was built and debugged in one day, with every bug and measurement
+> (day one: the hand-rolled EGL/fontdue stack; replaced next day by
+> egui + eframe — PR #10).
 >
 > Renderer research: [docs/rendering-engine-research-2026-10-12.md](docs/rendering-engine-research-2026-10-12.md)
 > — open-source engines evaluated to replace the hand-rolled GL renderer
-> (recommendation: egui + egui_glow; parley + swash for a text-only swap).
+> (recommendation: egui + egui_glow; parley + swash for a text-only swap;
+> led to adopting egui — hosting later settled on eframe itself, PR #10).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -36,7 +39,9 @@ only what they lack on mobile.
 - Word-wrapped plain-text editor (egui `TextEdit`): blinking cursor,
   tap-to-place-cursor, drag selection
 - Scrolling list and editor, auto-scroll to keep the cursor visible
-- Notes persisted in SQLite across restarts (autosave on pause/destroy)
+- Notes persisted in SQLite across restarts — saved when the editor closes
+  or switches, ~1.5 s after typing stops, on Android focus loss, and on iOS
+  app backgrounding (`WillResignActive`/`DidEnterBackground` observers)
 - Correct status-bar/safe-area and keyboard inset handling on both platforms
 - Native-size layout: the OS pixels-per-point sets the scale, Android
   "Display size" / font scale and iOS Dynamic Type scale the UI, and the
@@ -44,12 +49,15 @@ only what they lack on mobile.
 - Window size classes: tablets get a list–detail two-pane layout; phones in
   landscape stay single-pane
 - Slide transitions between screens, an iOS edge-swipe back, swipe-to-delete,
-  pull-to-refresh, and a bottom navigation bar with a Settings diagnostics tab
+  pull-to-refresh, and a bottom navigation bar with a Settings diagnostics
+  tab (density, size class, appearance — and DB/storage errors)
 
 ## Prerequisites
 
-- Rust 1.95+ (pinned to 1.99.0 by `rust-toolchain.toml`; egui 0.36 needs it)
-  with `rustup target add aarch64-linux-android aarch64-apple-ios-sim`
+- Rust 1.95+ (pinned to 1.99.0 by `rust-toolchain.toml`; egui 0.36 needs
+  it) — the mobile targets (`aarch64-linux-android`, `aarch64-apple-ios`,
+  `aarch64-apple-ios-sim`) are installed automatically by
+  `rust-toolchain.toml`, so no manual `rustup target add` is needed
 - Android SDK with build-tools 35, platform android-35, platform-tools
 - Android NDK r27+ (`~/Library/Android/sdk/ndk/27.1.12297006`)
 - Java (for `keytool`/`apksigner`)
@@ -64,6 +72,11 @@ only what they lack on mobile.
 Paths are defaulted for a macOS install under `~/Library/Android/sdk`; override
 with `ANDROID_HOME` if needed. The NDK linker path and the
 16 KB-page-alignment flag live in `.cargo/config.toml`.
+
+The NDK path itself derives from `ANDROID_HOME`, but the packaging recipes
+are still macOS-only: they call `keytool`, `security`, `plutil` and
+`open -a Simulator`, and select the NDK's darwin toolchain tag. Only the
+desktop `cargo run -p rustnotes` loop is cross-platform.
 
 ## Build & run
 
@@ -101,7 +114,7 @@ shared via git). Pick one from the Run/Debug dropdown:
 |---|---|
 | Run on Android (just run-android) | physical device if connected → else emulator (boots the first AVD if needed) |
 | Run on iOS (just run-ios) | connected iPhone (sign + install + launch) → else simulator (boots one if needed) |
-| Check all targets | `cargo check` for all three crates on their real targets |
+| Check all targets | `cargo check` for both crates on their real targets (core, Android lib, iOS binary) |
 
 The granular recipes (`just android`, `just ios-run`, `just ios-install`,
 …) remain available as plain `just` commands in the terminal, and
@@ -111,8 +124,10 @@ Each config prepends `~/.cargo/bin`, the Android platform-tools, and Homebrew
 to `PATH` before calling `just`, so they work even when the IDE is launched
 from the Dock (GUI apps don't inherit your shell profile).
 
-Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
-`xcrun simctl spawn booted log show --predicate 'process == "rustnotes"'`).
+Logs: Android `adb logcat -s rustnotes`. iOS: panics go through an NSLog
+panic hook (Console.app on a device); other log output is stderr via
+`env_logger`, so view it attached to the process — Xcode, or
+`xcrun simctl launch --console`.
 
 ## Testing notes (emulator)
 
@@ -127,11 +142,13 @@ Logs: Android `adb logcat -s rustnotes`; iOS NSLog (visible in Console.app or
 
 - Text input has no IME composing on either platform (NativeActivity on
   Android; winit's UIKeyInput view on iOS), so it works for basic Latin
-  typing; CJK composition and autocorrect are not supported. On Android the
-  idiomatic fix is GameActivity's `TextInputState`, which needs Java.
+  typing; CJK composition, autocorrect and emoji input are not supported.
+  The real fix on Android is eframe's `android-game-activity` feature.
 - The Android manifest lists every configuration change in `configChanges`.
-  NativeActivity's `onDestroy` waits for `android_main` to return, which
-  eframe's event loop never does, so a relaunch would freeze the app.
+  The in-app exit path now closes the eframe event loop cleanly
+  (`ViewportCommand::Close`); what remains is a system-initiated activity
+  destroy (e.g. "Don't keep activities"), which still depends on upstream
+  winit.
 - arm64-v8a only (add more ABIs in the `justfile`).
 - No search, no clipboard, no user-selectable theme — it's a demo of the pure-Rust stack,
   not a product.
