@@ -3,7 +3,12 @@
 
 homedir   := env_var('HOME')
 sdk       := env_var_or_default('ANDROID_HOME', homedir + '/Library/Android/sdk')
-toolchain := sdk + '/ndk/27.1.12297006/toolchains/llvm/prebuilt/darwin-x86_64/bin'
+# Host tag of the NDK prebuilt dir, derived at recipe time (just's os()
+# beats shelling out to `uname -s`; the NDK ships no darwin-aarch64
+# prebuilt — both Intel and Apple-Silicon Macs use darwin-x86_64, under
+# Rosetta — so this stays two-way, macOS/Linux).
+host      := if os() == 'macos' { 'darwin-x86_64' } else { 'linux-x86_64' }
+toolchain := sdk + '/ndk/27.1.12297006/toolchains/llvm/prebuilt/' + host + '/bin'
 bt        := sdk + '/build-tools/35.0.0'
 platform  := sdk + '/platforms/android-35/android.jar'
 ks        := 'debug.keystore'
@@ -16,34 +21,60 @@ ios_id    := 'com.osamaraddad.rustnotes.ios'
 export PATH := toolchain + ':' + env_var('PATH')
 export CC_aarch64_linux_android := toolchain + '/aarch64-linux-android24-clang'
 export AR_aarch64_linux_android := toolchain + '/llvm-ar'
+# Linker for cargo's Android target — env only, so .cargo/config.toml stays
+# free of machine-specific paths; works wherever the NDK actually is, since
+# `sdk` honors ANDROID_HOME.
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER := toolchain + '/aarch64-linux-android24-clang'
 
 default:
     @just --list
 
 # ---- Android ---------------------------------------------------------------
 
-# Cross-compile the cdylib and stage it for packaging
+# Cross-compile the cdylib and stage it for packaging (rust-toolchain.toml
+# already installs the aarch64-linux-android target — no rustup call needed)
 [private]
 android-stage:
-    @rustup target add aarch64-linux-android
     cargo build -p rustnotes --lib --target aarch64-linux-android --release
     rm -rf build/apk
     mkdir -p build/apk/lib/arm64-v8a
     cp build/target/aarch64-linux-android/release/librustnotes.so build/apk/lib/arm64-v8a/
 
-# Release APK: cargo -> aapt2 -> zip -> zipalign -> apksigner (targetSdk 35)
-android: android-stage
-    {{bt}}/aapt2 link -o build/rustnotes.unsigned.apk \
-        --manifest resources/AndroidManifest.xml -I {{platform}} \
+# Preflight keytool (a JDK — macOS ships none) and mint the debug keystore
+# atomically (temp file + mv), so a missing JDK or a killed keytool fails
+# here — before the long cross-build — instead of deep inside apksigner.
+[private]
+keystore:
+    #!/bin/zsh
+    set -euo pipefail
+    command -v keytool >/dev/null || { echo "ERROR: keytool (a JDK) is required for debug signing — e.g. brew install --cask temurin."; exit 1; }
+    if [ ! -f "{{ks}}" ]; then
+        tmp="{{ks}}.tmp.$$"
+        trap 'rm -f "$tmp"' EXIT
+        keytool -genkeypair -keystore "$tmp" -alias rustnotes \
+            -keyalg RSA -keysize 2048 -validity 10000 -storepass android \
+            -keypass android -dname "CN=Rust Notes Debug,O=Rust,C=US"
+        mv "$tmp" "{{ks}}"
+    fi
+
+# Release APK: cargo -> aapt2 -> zip -> zipalign -> apksigner (targetSdk 35).
+#
+# 16 KB coupling: extractNativeLibs="true" (AndroidManifest.xml) + the
+# DEFLATE-compressed .so stored by `zip` + `zipalign -f 4` form one matched
+# set — the loader never mmaps the lib from inside the APK, and what 16 KB
+# kernels actually check is the ELF's p_align (16384, from the rustflags in
+# .cargo/config.toml). Flipping the manifest to extractNativeLibs="false"
+# (uncompressed .so) requires `zip -0 -X` + `zipalign -f -p 4` below, or
+# 16 KB-kernel devices stop launching the app.
+android: keystore android-stage
+    "{{bt}}/aapt2" link -o build/rustnotes.unsigned.apk \
+        --manifest resources/AndroidManifest.xml -I "{{platform}}" \
         --min-sdk-version 24 --target-sdk-version 35
-    cd build/apk && zip -qr ../rustnotes.unsigned.apk lib
-    {{bt}}/zipalign -f 4 build/rustnotes.unsigned.apk build/rustnotes.aligned.apk
-    @test -f {{ks}} || keytool -genkeypair -keystore {{ks}} -alias rustnotes \
-        -keyalg RSA -keysize 2048 -validity 10000 -storepass android \
-        -keypass android -dname "CN=Rust Notes Debug,O=Rust,C=US"
-    {{bt}}/apksigner sign --ks {{ks}} --ks-key-alias rustnotes \
+    cd build/apk && zip -qrX ../rustnotes.unsigned.apk lib
+    "{{bt}}/zipalign" -f 4 build/rustnotes.unsigned.apk build/rustnotes.aligned.apk
+    "{{bt}}/apksigner" sign --ks "{{ks}}" --ks-key-alias rustnotes \
         --ks-pass pass:android --key-pass pass:android \
-        --out {{apk}} build/rustnotes.aligned.apk
+        --out "{{apk}}" build/rustnotes.aligned.apk
     @echo "==> {{apk}}"
 
 # APK + install & launch on an adb target (default: first connected device).
@@ -59,7 +90,7 @@ android-install serial='':
     fi
     [ -n "$s" ] || { echo "ERROR: no adb device connected."; exit 1; }
     echo "==> target: $s"
-    adb -s "$s" install -r {{apk}} || (adb -s "$s" uninstall com.osamaraddad.rustnotes && adb -s "$s" install {{apk}})
+    adb -s "$s" install -r "{{apk}}" || (adb -s "$s" uninstall com.osamaraddad.rustnotes && adb -s "$s" install "{{apk}}")
     adb -s "$s" shell am start -n com.osamaraddad.rustnotes/android.app.NativeActivity
 
 # Run on a connected Android device (physical first, then emulator); if none,
@@ -79,14 +110,17 @@ run-android:
     nohup "$emu" -avd "$avd" >/dev/null 2>&1 & disown
     adb wait-for-device
     s=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1; exit}')
+    [ -n "$s" ] || { echo "ERROR: emulator started but adb lost it."; exit 1; }
+    ok=0
     for i in {1..90}; do
         b=$(adb -s "$s" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-        if [ "$b" = "1" ]; then break; fi
+        if [ "$b" = "1" ]; then ok=1; break; fi
         sleep 2
     done
+    [ "$ok" = 1 ] || { echo "ERROR: emulator did not boot within 180s."; exit 1; }
     just android-install "$s"
 
-# Release APK via xbuild (auto-signed, targetSdk 33)
+# Release APK via xbuild (auto-signed, targetSdk 35)
 android-x:
     cd crates/rustnotes && x build --platform android --arch arm64 --release --format apk
 
@@ -97,10 +131,19 @@ android-run device='adb:emulator-5554':
 
 # ---- iOS --------------------------------------------------------------------
 
-# Cross-compile and assemble the .app bundle
+# Echo the UUID of the first *connected* iPhone. devicectl's "available"
+# state also lists paired-but-offline devices, which would fail later inside
+# devicectl install / xcodebuild with unrelated errors.
+[private]
+ios-device-id:
+    @xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/){print $j; exit}}}'
+
+# Cross-compile and assemble the .app bundle. IPHONEOS_DEPLOYMENT_TARGET
+# mirrors MinimumOSVersion (13.0) in resources/Info.plist — without it the
+# effective iOS floor floats on cc-rs/objc2 defaults at build time.
 [private]
 ios-build target:
-    cargo build -p rustnotes --bin rustnotes --target {{target}} --release
+    IPHONEOS_DEPLOYMENT_TARGET=13.0 cargo build -p rustnotes --bin rustnotes --target {{target}} --release
     rm -rf build/ios
     mkdir -p "{{ios_app}}"
     cp build/target/{{target}}/release/rustnotes "{{ios_app}}/rustnotes"
@@ -111,8 +154,13 @@ ios: (ios-build 'aarch64-apple-ios-sim')
     codesign --force --sign - --timestamp=none "{{ios_app}}"
     @echo "==> {{ios_app}}"
 
-# .app + install & launch on the booted iOS simulator
+# .app + install & launch on the booted iOS simulator (exactly one — a silent
+# wrong-device install is worse than a clear error).
 ios-run: ios
+    #!/bin/zsh
+    set -euo pipefail
+    n=$(xcrun simctl list devices booted 2>/dev/null | grep -c Booted || true)
+    [ "$n" -eq 1 ] || { echo "ERROR: expected exactly one booted iOS simulator, found $n — boot exactly one and rerun."; exit 1; }
     xcrun simctl install booted "{{ios_app}}"
     xcrun simctl launch booted {{ios_id}}
 
@@ -121,7 +169,7 @@ ios-run: ios
 run-ios:
     #!/bin/zsh
     set -euo pipefail
-    dev=$(xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"||$i=="available"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/){print $j; exit}}}')
+    dev="${DEVICE:-$(just ios-device-id)}"
     if [ -n "$dev" ]; then
         DEVICE="$dev" just ios-install
         exit 0
@@ -158,7 +206,7 @@ ios-sign:
     if [ -n "$profile" ]; then
         security cms -D -i "$profile" > "$tmp/profile.plist"
     else
-        now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        now=$(date -u +%Y%m%d%H%M%S)
         for p in "$profdir"/*.mobileprovision(om); do
             [ -e "$p" ] || continue
             security cms -D -i "$p" > "$tmp/profile.plist" 2>/dev/null || continue
@@ -166,6 +214,10 @@ ios-sign:
             rest=${appid#*.} # strip team id: TEAMID.bundle.id → bundle.id (TEAMID.* → *)
             [ "$rest" = "{{ios_id}}" ] || [ "$rest" = "*" ] || continue
             exp=$(plutil -extract ExpirationDate raw -o - "$tmp/profile.plist" 2>/dev/null) || continue
+            # plutil prints "YYYY-MM-DD HH:MM:SS +0000" — normalize both
+            # sides to comparable UTC integers (a plain string compare
+            # pits ' ' against 'T' at position 10).
+            exp=$(date -ju -f '%Y-%m-%d %H:%M:%S %z' "$exp" +%Y%m%d%H%M%S) || continue
             [[ "$exp" > "$now" ]] || continue
             profile="$p"
             break
@@ -204,22 +256,25 @@ ios-sign:
     codesign --verify "$app"
 
 # Refresh the 7-day development profile for {{ios_id}}: rebuild the throwaway
-# Xcode project (tools/ios-profile-helper, team pre-set) with automatic signing.
-# Run when ios-install reports no valid profile. iPhone connected once.
-ios-profile:
+# Xcode project (tools/ios-profile-helper) with automatic signing. Run when
+# ios-install reports no valid profile. iPhone connected once.
+# The helper project bakes a personal DEVELOPMENT_TEAM into its pbxproj; the
+# command-line override below beats pbxproj settings, so contributors pass
+# TEAM=<their-team-id> (or export TEAM) without editing anything checked in.
+ios-profile TEAM=env_var_or_default('TEAM', 'P86GBGS2B7'):
     #!/bin/zsh
     set -euo pipefail
-    dev="${DEVICE:-$(xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"||$i=="available"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/){print $j; exit}}}')}"
+    dev="${DEVICE:-$(just ios-device-id)}"
     [ -n "$dev" ] || { echo "ERROR: no connected device — profile refresh needs the iPhone once."; exit 1; }
     xcodebuild -project tools/ios-profile-helper/ios.xcodeproj -scheme ios \
         -destination "id=$dev" -allowProvisioningUpdates \
-        -allowProvisioningDeviceRegistration build
+        -allowProvisioningDeviceRegistration DEVELOPMENT_TEAM="{{TEAM}}" build
 
 # .app + sign + install + launch on a connected iPhone (DEVICE=<uuid> to pick)
 ios-install: ios-device ios-sign
     #!/bin/zsh
     set -euo pipefail
-    dev="${DEVICE:-$(xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"||$i=="available"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/){print $j; exit}}}')}"
+    dev="${DEVICE:-$(just ios-device-id)}"
     [ -n "$dev" ] || { echo "ERROR: no connected device — plug in and trust the iPhone."; exit 1; }
     echo "==> device: $dev"
     xcrun devicectl device install app --device "$dev" "{{ios_app}}"
@@ -227,9 +282,22 @@ ios-install: ios-device ios-sign
 
 # ---- misc -------------------------------------------------------------------
 
-# Type-check all three crates for their real targets
-# (the workspace can't be checked as a whole: ndk-sys only compiles for Android)
+# Type-check both crates for their real targets (core host+Android+iOS-sim,
+# host-crate desktop binary)
 check:
     cargo check -p rustnotes-core
     cargo check -p rustnotes --lib --target aarch64-linux-android
     cargo check -p rustnotes --bin rustnotes --target aarch64-apple-ios-sim
+    cargo check -p rustnotes --bin rustnotes
+
+test:
+    cargo test --workspace
+
+lint:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+fmt:
+    cargo fmt --all
+
+clean:
+    rm -rf build

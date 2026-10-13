@@ -9,3 +9,6 @@ debug.keystore
 !.idea/jsonSchemas.xml
 !.idea/schemas/
 /.claude/worktrees/
+.DS_Store
+xcuserdata/
+.orchestration/

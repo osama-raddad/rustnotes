@@ -19,48 +19,56 @@ path = "src/main.rs"
 rustnotes-core = { path = "../rustnotes-core" }
 log.workspace = true
 egui.workspace = true
-# eframe's default feature set includes `accesskit`, which refuses to build
-# with NativeActivity on Android, so features are spelled out per target.
-# `default_fonts` keeps egui's bundled font as the fallback if no system font
-# can be read.
-eframe = { version = "0.36", default-features = false, features = ["default_fonts"] }
+# Turning off eframe's default features disables egui-winit's accesskit
+# *integration*, which is what refuses to build with NativeActivity on
+# Android, so features are spelled out per target. (The accesskit crate
+# itself is still compiled everywhere — egui depends on it unconditionally;
+# only the winit wiring is feature-gated.) `default_fonts` keeps egui's
+# bundled font as the fallback if no system font can be read.
+eframe = { workspace = true, features = ["default_fonts"] }
 
 # Renderer per platform: glow (OpenGL ES 3) on Android and desktop; wgpu
 # (Metal) on iOS, because eframe's glow path needs glutin, which has no iOS
-# backend.
+# backend. Desktop and iOS re-enable accesskit (screen readers); Android
+# can't — NativeActivity has no winit integration to hang it on.
 [target.'cfg(not(target_os = "ios"))'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["glow"] }
+eframe = { workspace = true, features = ["glow", "accesskit"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
+eframe = { workspace = true, features = ["wgpu"] }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
     "NSString",
     "NSDictionary",
     "NSObject",
-    "NSValue",
     "NSNotification",
 ] }
 objc2-core-foundation = { version = "0.3", features = ["CFURL"] }
 objc2-core-text = { version = "0.3", features = ["CTFont", "CTFontDescriptor"] }
+# The generated UIApplication and UIWindow class types are cfg-gated on the
+# UIResponder / UIView features (their class-hierarchy supers), so those two
+# look unused here but are load-bearing; the keyboard-frame constants come
+# from UIWindow. UIScreen and foundation's NSValue have zero references in
+# src (ios.rs goes through raw class!/msg_send!, CGRect via core-foundation)
+# and are trimmed.
 objc2-ui-kit = { version = "0.3", features = [
     "UIApplication",
     "UIWindow",
-    "UIScreen",
+    "UIGeometry",
     "UIView",
     "UIResponder",
-    "UIGeometry",
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["android-native-activity"] }
+eframe = { workspace = true, features = ["android-native-activity"] }
 android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.14"
 jni = "0.22"
 
 # Linux desktop: with default features off nothing selects a winit backend.
 [target.'cfg(target_os = "linux")'.dependencies]
-eframe = { version = "0.36", default-features = false, features = ["x11", "wayland"] }
+eframe = { workspace = true, features = ["x11", "wayland"] }
 
-[target.'cfg(not(target_os = "android"))'.dependencies]
+# Desktop only: the iOS binary logs through the panic hook (NSLog) instead.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 env_logger = "0.11"

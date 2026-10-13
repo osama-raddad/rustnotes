@@ -5,9 +5,13 @@ members = ["crates/rustnotes-core", "crates/rustnotes"]
 [workspace.dependencies]
 log = "0.4"
 egui = { version = "0.36", default-features = false }
+eframe = { version = "0.36", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
 lto = true
 strip = true
 codegen-units = 1
+# No unwinding through JNI (Android) / ObjC (iOS) frames; smaller binaries.
+# Tests run under the dev profile, so they keep unwinding.
+panic = "abort"

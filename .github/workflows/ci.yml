@@ -1,0 +1,26 @@
+# Host-safe quality gate: fmt + clippy + tests + a host type-check of the
+# desktop binary. Cross-compiles and `just` recipes are deliberately not run
+# here yet: `just check`'s Android/iOS legs need the NDK (ANDROID_HOME) and
+# Xcode device tooling — revisit once CI grows an Android SDK setup story.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No toolchain action needed: rustup is preinstalled on GitHub runners
+      # and picks up the pinned 1.99.0 + targets from rust-toolchain.toml on
+      # the first cargo invocation (fmt/clippy ship as default components).
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test
+        run: cargo test --workspace
+      - name: check host binary
+        run: cargo check -p rustnotes --bin rustnotes
