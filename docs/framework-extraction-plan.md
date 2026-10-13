@@ -431,3 +431,59 @@ step. What building it found that the record above didn't predict:
   temporary default-features swap since xbuild cannot
   `--no-default-features`, and possibly a lower targetSdk for the
   probe).
+
+## Addendum: where the plan stands (2026-10-13, after the implementation waves)
+
+The Sequence is executed as far as it goes without two decisions that
+are not this repo's to make alone. Status per step, then per open
+question:
+
+- **Sequence 1 — the seam: done** (#14, merged). `App` trait over the
+  nine calls, `Host<A>` generic, identity in consts; core unchanged.
+- **Sequence 2 — the second consumer: done** (#15, merged). hello-mobile
+  proves the platform glue generalizes with no rustnotes-core
+  dependency; `android_main` turned out to be app identity behind a
+  feature.
+- **Sequence 3 — split by half:** the IME half shipped as the plan's own
+  recommendation — NativeActivity default (byte-equivalent), GameActivity
+  as a documented, **experimental** opt-in (#17, merged; the wall and the
+  escape route are the addendum above). The default-switch decision
+  stays gated exactly as §"Still open" insists: until a real app needs
+  CJK. The endpoint half shipped its decidable substance (#16, merged):
+  app-parametric packaging, per-app keystores, the screenshot recipes.
+  The thin CLI and the crates.io release remain — gated on Q5 below.
+- **Q1 — layer or fork:** the layer holds; the fork triggers are now
+  written down (the action item Q1 itself asked for) in
+  `docs/framework-fork-triggers.md` — a nine-hole baseline inventory,
+  five named triggers, and the re-count discipline ("before the list
+  doubles again" is now checkable). The upstream push list lives there
+  too; filing is deliberately deferred until Q5 settles the crate names.
+- **Q2 — do the platform modules generalize:** answered twice in code —
+  structure (#14/#15) and packaging (#16). Identity travels as data; the
+  identity table is the embryo of the endpoint CLI's per-app config.
+  Residue, mapped to the endpoint: per-app device signing (the profile
+  helper's pbxproj is baked to one bundle id) and the table's two rows.
+- **Q3 — layout:** unchanged, correctly. hello-mobile is a proof, not a
+  real second consumer; the trigger stands.
+- **Q4 — IME:** the plan's recommended state is now shipped
+  (opt-in, experimental, honestly labeled). What remains is the real
+  decision — default switch, and which packaging pays for it — with a
+  concrete price tag attached: mini-AGP or gradle delegation.
+- **Q5 — name and home: the only blocker left standing.** A memo, since
+  this plan cannot take it: **(A)** rename this repo; it becomes the
+  framework's home and Rust Notes its first-party example app — one
+  home, but the repo's identity and every clone URL moves. **(B)** new
+  repo for framework + CLI + template; Rust Notes consumes published
+  crates — clean names, but a split to maintain and a versioning
+  protocol to run. Either way the prep is done: the seam, the second
+  consumer, parametric packaging, the identity table. The decision gates
+  exactly three things now: the crates.io release, the CLI's name, and
+  the repo's name. It was not taken autonomously; it renames homes.
+- **Unscheduled framework surface** (the services matrix's open rows,
+  still open by choice): true pause/resume/low-memory lifecycle, IME
+  composing closure behind the packaging wall, clipboard/haptics/share.
+  None are sequenced; each joins a wave when a consumer needs it.
+
+`main` carries all four waves at `1c5f6e8`. The plan's implementable
+runway is exhausted; what remains is the Q5 decision, the Q4 switch when
+a real CJK need lands, and the upstream pushes once names settle.
