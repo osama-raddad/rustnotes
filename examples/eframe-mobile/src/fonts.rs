@@ -6,20 +6,25 @@
 //! order, so appending Noto fonts *after* the default ones keeps the default
 //! look for Latin and falls back per-glyph for everything else.
 //!
+//! Arabic: Noto Sans Arabic only gives glyph coverage. egui 0.36 (epaint)
+//! has no bidi or shaping pass, so Arabic text is laid out left-to-right in
+//! logical order with unjoined letter forms, which reads wrong. Treat the
+//! `ar` locale as a coverage demo, not working right-to-left support.
+//!
 //! Fonts are embedded at compile time: mobile bundles have no reliable
 //! runtime font path (Android ships NotoSansCJK as a .ttc with no stable
 //! name across vendors, iOS hides PingFang behind CoreText), and embedding
 //! keeps rendering identical on every device. Download from
 //! https://fonts.google.com/noto and drop into assets/fonts/.
-//! Sizes: Noto Sans ~500 KB, Noto Sans Arabic ~200 KB, Noto Sans SC ~8 MB.
+//! Sizes: Noto Sans Arabic ~200 KB, Noto Sans SC ~8 MB.
 //! Replace the CJK font with a subset if binary size matters.
 
 use egui::{FontData, FontDefinitions, FontFamily};
 use std::sync::Arc;
 
-/// (family name registered with egui, font bytes)
+/// (family name registered with egui, font bytes). No Latin entry: the
+/// default fonts already cover Latin, Greek and Cyrillic.
 const FALLBACK_FONTS: &[(&str, &[u8])] = &[
-    ("NotoSans", include_bytes!("../assets/fonts/NotoSans-Regular.ttf")),
     (
         "NotoSansArabic",
         include_bytes!("../assets/fonts/NotoSansArabic-Regular.ttf"),

@@ -6,7 +6,7 @@
 //! Android backend. When a release targets egui 0.36 without `rfd`, swap
 //! `Theme::visuals()` for `ThemeConfig::to_visuals()`; nothing else changes.
 //!
-//! Each preset is a named `Visuals`. Applying one is `ctx.set_visuals`,
+//! Each preset is a named `Visuals`. Applying one is `ctx.set_visuals_of`,
 //! which is cheap but still rebuilds style state, so `App` applies it only
 //! when the selection changes, never per frame.
 
@@ -16,7 +16,11 @@ use egui::{Color32, Visuals};
 pub enum Theme {
     Light,
     Dark,
-    /// Follow the OS setting reported by winit (eframe forwards it).
+    /// Follow the OS dark/light setting. Desktop: winit reports it and
+    /// eframe forwards it. Android: winit does not, so `MobileApp`'s
+    /// `raw_input_hook` reads the configuration's night mode each frame.
+    /// iOS: winit does not report it either and eframe has no hook for it,
+    /// so `System` falls back to dark (egui's default `fallback_theme`).
     System,
     Nord,
     CatppuccinMocha,
@@ -42,13 +46,20 @@ impl Theme {
     }
 
     /// Apply this theme to the context. `System` hands control back to
-    /// egui's theme preference so OS dark/light switches are followed live.
+    /// egui's theme preference so OS dark/light switches are followed live
+    /// (where the platform reports them; see the `System` variant).
     pub fn apply(self, ctx: &egui::Context) {
-        match self {
-            Theme::System => ctx.set_theme(egui::ThemePreference::System),
-            other => {
-                ctx.set_theme(egui::ThemePreference::from(other.base()));
-                ctx.set_visuals(other.visuals());
+        // Reset both style slots to stock first: egui keeps a dark and a
+        // light style, and a previous palette (Nord, Catppuccin) written into
+        // one of them would otherwise survive a switch to System or Light.
+        // Only `Visuals` are replaced; the spacing tweaks in `Style` stay.
+        ctx.set_visuals_of(egui::Theme::Dark, Visuals::dark());
+        ctx.set_visuals_of(egui::Theme::Light, Visuals::light());
+        match self.visuals() {
+            None => ctx.set_theme(egui::ThemePreference::System),
+            Some(visuals) => {
+                ctx.set_theme(egui::ThemePreference::from(self.base()));
+                ctx.set_visuals_of(self.base(), visuals);
             }
         }
     }
@@ -61,10 +72,13 @@ impl Theme {
         }
     }
 
-    fn visuals(self) -> Visuals {
-        match self {
+    /// The fixed `Visuals` for this preset; `None` for `System`, which uses
+    /// egui's stock dark or light style depending on the OS.
+    fn visuals(self) -> Option<Visuals> {
+        Some(match self {
+            Theme::System => return None,
             Theme::Light => Visuals::light(),
-            Theme::Dark | Theme::System => Visuals::dark(),
+            Theme::Dark => Visuals::dark(),
             Theme::Nord => palette(
                 Visuals::dark(),
                 Color32::from_rgb(0x2e, 0x34, 0x40), // polar night
@@ -79,7 +93,7 @@ impl Theme {
                 Color32::from_rgb(0xcd, 0xd6, 0xf4), // text
                 Color32::from_rgb(0x89, 0xb4, 0xfa), // blue
             ),
-        }
+        })
     }
 }
 

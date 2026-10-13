@@ -1,7 +1,7 @@
 //! Crate root: shared app code plus the Android entry point.
 //!
 //! - `app.rs`   — the eframe `App` (state, responsive layout, i18n, theming)
-//! - `fonts.rs` — Noto fallback fonts so Arabic / CJK render
+//! - `fonts.rs` — Noto fallback fonts (Arabic / CJK glyph coverage)
 //! - `theme.rs` — named Visuals presets (dark, light, system, Nord, Catppuccin)
 //! - `main.rs`  — iOS and desktop entry (binary)
 //! - this file  — Android entry (`android_main`, loaded as a cdylib)
@@ -58,10 +58,61 @@ fn android_main(app: android_activity::AndroidApp) {
     std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
 
     let mut options = native_options();
+    // eframe has no default storage directory on Android (its `storage_dir()`
+    // returns None there), so without an explicit path `cc.storage` is None
+    // and nothing persists. The app's private files dir survives relaunches.
+    options.persistence_path = app.internal_data_path().map(|dir| dir.join("app.ron"));
+    // Keep a handle for per-frame queries egui-winit does not forward
+    // (content rect for safe-area insets, night mode for Theme::System).
+    let _ = android::APP.set(app.clone());
     // winit needs the AndroidApp handle to build its event loop.
     options.android_app = Some(app);
 
     if let Err(e) = run(options) {
         log::error!("eframe exited with error: {e}");
+    }
+}
+
+/// Android platform state that egui-winit does not forward to egui.
+#[cfg(target_os = "android")]
+pub(crate) mod android {
+    use android_activity::ndk::configuration::UiModeNight;
+    use android_activity::AndroidApp;
+    use std::sync::OnceLock;
+
+    /// Set once in `android_main`, before eframe starts.
+    pub(crate) static APP: OnceLock<AndroidApp> = OnceLock::new();
+
+    /// Safe-area insets in points, derived from NativeActivity's content
+    /// rect (window pixels) versus the viewport. egui-winit only fills
+    /// `RawInput::safe_area_insets` on iOS, so Android needs this.
+    ///
+    /// Limitation: the content rect is the content view's frame inside the
+    /// window. On Android 15+ with targetSdk 35, edge-to-edge is enforced
+    /// and the content view fills the whole window, so this reports zero
+    /// insets for the status and navigation bars there. Getting real system
+    /// bar insets on those devices needs JNI (`View.getRootWindowInsets`) or
+    /// a theme with `windowOptOutEdgeToEdgeEnforcement`.
+    pub(crate) fn safe_area_insets(screen: egui::Rect, ppp: f32) -> Option<egui::SafeAreaInsets> {
+        let rect = APP.get()?.content_rect();
+        if rect.right <= rect.left || rect.bottom <= rect.top || ppp <= 0.0 {
+            return None; // not reported yet
+        }
+        Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+            left: (rect.left as f32 / ppp).max(0.0),
+            top: (rect.top as f32 / ppp).max(0.0),
+            right: (screen.width() - rect.right as f32 / ppp).max(0.0),
+            bottom: (screen.height() - rect.bottom as f32 / ppp).max(0.0),
+        }))
+    }
+
+    /// The OS dark-mode setting. winit's `Window::theme()` is None on
+    /// Android, so egui never learns it without asking the configuration.
+    pub(crate) fn night_mode() -> Option<egui::Theme> {
+        match APP.get()?.config().ui_mode_night() {
+            UiModeNight::Yes => Some(egui::Theme::Dark),
+            UiModeNight::No => Some(egui::Theme::Light),
+            _ => None,
+        }
     }
 }
