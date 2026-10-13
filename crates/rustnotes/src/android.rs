@@ -1,4 +1,9 @@
-//! Android platform glue that eframe/winit do not provide.
+//! Android platform glue that eframe/winit do not provide. Public: this
+//! module is the framework's Android bootstrap, usable by any hosted app
+//! — [`start`] is what an app crate's own `android_main` calls. This
+//! crate's own Rust Notes `android_main` compiles behind the
+//! `android-entry` feature (default-on; see Cargo.toml for why a second
+//! consumer must opt out).
 
 use android_activity::AndroidApp;
 use std::cell::Cell;
@@ -7,6 +12,16 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// NativeActivity loads `librustnotes.so` and calls this on its own thread.
+///
+/// Feature-gated because the cdylib's `android_main` is app identity, not
+/// framework code: a second consumer linking this crate as a dependency
+/// supplies its own `android_main` (a one-liner calling [`start`] with its
+/// app type) and MUST build with `default-features = false`, or the two
+/// `#[no_mangle]` symbols collide at link time — a landmine `cargo check`
+/// cannot see, because it does not link. Feature unification re-arms it in
+/// multi-package Android builds (`--workspace`, multiple `-p`s); build
+/// Android targets per-package, as the justfile does.
+#[cfg(feature = "android-entry")]
 #[unsafe(no_mangle)]
 fn android_main(app: AndroidApp) {
     start::<rustnotes_core::App>(app);
@@ -15,8 +30,10 @@ fn android_main(app: AndroidApp) {
 /// Android bootstrap, generic over the embedded [`crate::App`]. Everything
 /// here is framework — logger, panic hook, data-dir resolution, entry into
 /// eframe; the app-specific values (logcat tag, data-dir fallback, window
-/// title) ride the trait's consts.
-pub(crate) fn start<A: crate::App>(app: AndroidApp) {
+/// title) ride the trait's consts. Public so a hosted app's own
+/// `android_main` (the `android-entry`-gated one above is only Rust
+/// Notes') can delegate here.
+pub fn start<A: crate::App>(app: AndroidApp) {
     android_logger::init_once(
         android_logger::Config::default()
             .with_tag(A::ANDROID_LOG_TAG)

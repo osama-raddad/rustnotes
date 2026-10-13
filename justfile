@@ -280,14 +280,28 @@ ios-install: ios-device ios-sign
 
 # ---- misc -------------------------------------------------------------------
 
-# Type-check both crates for their real targets (rustnotes is checked
-# three ways: Android lib, iOS-sim bin, host desktop bin)
+# Type-check every crate for its real targets (rustnotes and hello-mobile
+# are each checked three ways: Android lib, iOS-sim bin, host desktop bin)
 # (the workspace can't be checked as a whole: ndk-sys only compiles for Android)
 check:
     cargo check -p rustnotes-core
     cargo check -p rustnotes --lib --target aarch64-linux-android
     cargo check -p rustnotes --bin rustnotes --target aarch64-apple-ios-sim
     cargo check -p rustnotes --bin rustnotes
+    cargo check -p hello-mobile --lib --target aarch64-linux-android
+    cargo check -p hello-mobile --bin hello-mobile --target aarch64-apple-ios-sim
+    cargo check -p hello-mobile --bin hello-mobile
+
+# Link both Android cdylibs (debug): the one guard `cargo check` cannot
+# give — a duplicate `android_main` symbol only surfaces at link, and only
+# on Android's lld (macOS's ld64 drops the duplicate silently). Each app
+# links alone, per-package: rustnotes with its default android-entry
+# feature, hello-mobile with it opted out (crates/rustnotes/Cargo.toml
+# has the symbol-collision rationale). Not wired into CI — the full
+# cross-compile is slow; run before an Android release.
+check-links:
+    cargo build -p rustnotes --lib --target aarch64-linux-android
+    cargo build -p hello-mobile --lib --target aarch64-linux-android
 
 # Format every crate (what `just lint` enforces)
 fmt:
@@ -297,11 +311,11 @@ fmt:
 test:
     cargo test -p rustnotes-core
 
-# Format check, then clippy over both crates on the host feature set (the
-# Android/iOS glue is additionally type-checked by `just check`)
+# Format check, then clippy over all three crates on the host feature set
+# (the Android/iOS glue is additionally type-checked by `just check`)
 lint:
     cargo fmt --all -- --check
-    cargo clippy -p rustnotes-core -p rustnotes --all-targets -- -D warnings
+    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile --all-targets -- -D warnings
 
 clean:
     rm -rf build

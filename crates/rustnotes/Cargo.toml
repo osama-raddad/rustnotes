@@ -15,6 +15,23 @@ crate-type = ["cdylib", "rlib"]
 name = "rustnotes"
 path = "src/main.rs"
 
+[features]
+# Compile this crate's own `android_main` (the Rust Notes app entry).
+# Default-on so every existing recipe (justfile, xbuild, plain cargo) keeps
+# producing a launchable Rust Notes cdylib unchanged. A second consumer that
+# links this crate as a dependency MUST opt out (`default-features = false`)
+# or the two `#[no_mangle] android_main` symbols collide at link time —
+# `cargo check` cannot see this (it does not link); the collision is a
+# build-time landmine the feature defuses.
+# Caveat: feature unification re-arms it — building rustnotes together
+# with a consumer for an Android target (`--workspace`, `--all`, multiple
+# `-p`s) turns android-entry back on for the shared unit and re-creates
+# the collision at link (NDK lld: duplicate symbol; the `cargo check`
+# twin of the same command passes silently). Build Android targets
+# per-package, as `just check` does.
+default = ["android-entry"]
+android-entry = []
+
 [dependencies]
 rustnotes-core = { path = "../rustnotes-core" }
 log.workspace = true
