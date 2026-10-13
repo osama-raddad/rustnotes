@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- GameActivity variant of AndroidManifest.xml — the opt-in backend
+     (justfile: activity=game; cargo: the android-game-activity feature).
+     Diff vs the NativeActivity manifest is exactly the backend's needs:
+     the activity class (GameActivity ships as Java — androidx.games:
+     games-activity 4.4.0, dexed into the APK, so hasCode flips to true)
+     and its configChanges list (from the android-activity project's own
+     GameActivity example manifests; recreation is SAFE under this glue —
+     it re-enters android_main with fresh state — so the NativeActivity
+     manifest's full anti-recreate list is not required). Everything else
+     is the same matched set: package, label, icon, extractNativeLibs,
+     singleTask, adjustResize and the android.app.lib_name meta-data
+     (GameActivity reads the same name to load the cdylib). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.osamaraddad.rustnotes"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <application
+        android:label="Rust Notes"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:hasCode="true"
+        android:allowBackup="true"
+        android:extractNativeLibs="true"
+        android:enableOnBackInvokedCallback="false"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <activity
+            android:name="com.google.androidgamesdk.GameActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:windowSoftInputMode="adjustResize">
+
+            <!-- Name of the cdylib inside jniLibs, without lib prefix / .so suffix -->
+            <meta-data android:name="android.app.lib_name" android:value="rustnotes" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
