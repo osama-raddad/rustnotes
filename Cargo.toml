@@ -1,12 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/rustnotes-core", "crates/rustnotes-android", "crates/rustnotes-ios"]
+members = ["crates/rustnotes-core", "crates/rustnotes"]
 
 [workspace.dependencies]
 log = "0.4"
-glow = "0.17"
 egui = { version = "0.36", default-features = false }
-egui_glow = { version = "0.36", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
