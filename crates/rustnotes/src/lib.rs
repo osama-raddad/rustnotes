@@ -4,7 +4,8 @@
 //! the soft keyboard. This crate supplies only what they do not:
 //!
 //! - Android (`android.rs`): `android_main`, window insets, night mode and
-//!   font scale through JNI, and leaving the app on back at the root.
+//!   font scale through JNI, and exiting the eframe loop on back at the
+//!   root (the activity is finished from `on_exit`, after the loop ends).
 //! - iOS (`ios.rs`): the system font through CoreText, safe-area and
 //!   keyboard insets, appearance and Dynamic Type, wgpu limits that the
 //!   iOS Metal devices meet.
@@ -73,7 +74,7 @@ impl eframe::App for Host {
         }
         // Android's back key arrives as BrowserBack (winit's mapping).
         if ctx.input(|i| i.key_pressed(egui::Key::BrowserBack)) && !self.app.on_back() {
-            leave_app();
+            leave_app(&ctx);
         }
         self.app.ui(root);
     }
@@ -81,6 +82,11 @@ impl eframe::App for Host {
     #[cfg(not(target_os = "ios"))]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.app.save_current();
+        // eframe calls this from its teardown after ViewportCommand::Close,
+        // with the loop's state already gone. Only now may Android finish
+        // the activity — see `leave_app` for why doing it earlier deadlocks.
+        #[cfg(target_os = "android")]
+        android::finish_activity();
     }
 
     #[cfg(target_os = "ios")]
@@ -90,9 +96,21 @@ impl eframe::App for Host {
 }
 
 /// Back at the root: hand control back to the OS, as native apps do.
-fn leave_app() {
+///
+/// Android: close the viewport, which runs eframe's exit path (ending with
+/// [`Host::on_exit`], where the activity is finished) and then exits the
+/// winit loop so `android_main` returns. Finishing the activity directly
+/// from here instead would deadlock: NativeActivity's `onDestroy` blocks
+/// the Java main thread until `android_main` returns, and the eframe/winit
+/// loop never exits on its own (winit ignores Android's destroy event), so
+/// the manifest's singleTask would serve the next launch from a process
+/// stuck in that wait. iOS apps may not exit programmatically, and desktop
+/// has no back-at-root contract, so only Android acts.
+fn leave_app(ctx: &egui::Context) {
     #[cfg(target_os = "android")]
-    android::finish_activity();
+    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    #[cfg(not(target_os = "android"))]
+    let _ = ctx;
 }
 
 /// Options shared by every platform.
