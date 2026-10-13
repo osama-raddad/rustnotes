@@ -6,6 +6,9 @@
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
 use ui_kit::components::FocusRing;
+use ui_kit::icon::{icon, icon_active, install as install_icons, IconSize};
+use ui_kit::icons::{Icon, CATEGORY_GROUPS};
+use ui_kit::logo::Logo;
 use ui_kit::states::{self, UiKitFlags};
 use ui_kit::theme::{egui_shadow, ThemeId};
 use ui_kit::tokens::{radii, spacing, ThemeColors};
@@ -24,6 +27,7 @@ fn main() -> eframe::Result {
         Box::new(|cc| {
             let theme = ThemeId::Light;
             install(theme, &cc.egui_ctx);
+            install_icons(&cc.egui_ctx);
             theme.apply(&cc.egui_ctx);
             Ok(Box::new(Gallery {
                 theme,
@@ -407,6 +411,163 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
     });
 }
 
+/// The icons: the five token sizes, then the whole catalogue grouped by
+/// its categories, the fill-capable icons shown in their filled cut
+/// (filled is the selected or toggled state; everything else rests
+/// outlined).
+fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "Icons · Material Symbols Outlined · wght 300",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    ui.horizontal(|ui| {
+        for size in IconSize::ALL {
+            ui.vertical(|ui| {
+                icon(ui, Icon::Search, *size, colors.primary);
+                ui.add(egui::Label::new(specimen_job(
+                    &format!(
+                        "{} · {}",
+                        trim_float(size.px()),
+                        size.name().trim_start_matches("icon-size-")
+                    ),
+                    TypeStyle::Caption,
+                    theme,
+                    colors.text_muted(),
+                )));
+            });
+            ui.add_space(spacing::SPACE_2);
+        }
+    });
+    ui.add(egui::Label::new(specimen_job(
+        "One library in every theme. Weight 300; grade -25 on the dark canvases so light glyphs don't bloom. The optical size sits at 24 in every subset. location_on has no glyph in font 0.47.5 and paints push_pin, the catalogue's pin.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+
+    for (category, icons) in CATEGORY_GROUPS {
+        ui.add_space(spacing::SPACE_4);
+        ui.label(format!("{category} · {}", icons.len()));
+        ui.add_space(spacing::SPACE_1);
+        ui.horizontal_wrapped(|ui| {
+            for one in *icons {
+                ui.vertical(|ui| {
+                    if one.has_fill() {
+                        icon_active(ui, *one, IconSize::Lg, colors.primary);
+                    } else {
+                        icon(ui, *one, IconSize::Lg, colors.primary);
+                    }
+                    let caption = if one.has_fill() {
+                        format!("{} · fills", one.name())
+                    } else {
+                        one.name().to_owned()
+                    };
+                    ui.add(egui::Label::new(specimen_job(
+                        &caption,
+                        TypeStyle::Caption,
+                        theme,
+                        colors.text_muted(),
+                    )));
+                });
+                ui.add_space(spacing::SPACE_2);
+            }
+        });
+    }
+}
+
+/// One logo band: a filled ground carrying the logo in the placement's
+/// ink, with its caption.
+fn logo_band(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    caption: &str,
+    ground: Option<Color32>,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    let colors = theme.colors();
+    let mut frame = egui::Frame::default()
+        .inner_margin(spacing::SPACE_4)
+        .corner_radius(radii::RADIUS_MD as u8);
+    if let Some(ground) = ground {
+        frame = frame.fill(ground);
+    }
+    frame.show(ui, |ui| ui.horizontal(|ui| add(ui)));
+    ui.add(egui::Label::new(specimen_job(
+        caption,
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The logo: the mark and wordmark on the canvas, reversed on the
+/// primary and on an inverse band, the accent moment, and the size
+/// floors in the caption.
+fn logo_section(ui: &mut egui::Ui, theme: ThemeId) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "Logo · The mark and the wordmark",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    logo_band(ui, theme, "On the canvas · primary", None, |ui| {
+        ui.add(Logo::mark().height(32.0));
+        ui.add_space(spacing::SPACE_6);
+        ui.add(Logo::wordmark());
+    });
+    ui.add_space(spacing::SPACE_2);
+    logo_band(
+        ui,
+        theme,
+        "On a primary fill · on-primary",
+        Some(colors.primary),
+        |ui| {
+            ui.add(
+                Logo::mark()
+                    .height(32.0)
+                    .ink(ui_kit::logo::LogoInk::OnPrimary),
+            );
+            ui.add_space(spacing::SPACE_6);
+            ui.add(Logo::wordmark().ink(ui_kit::logo::LogoInk::OnPrimary));
+        },
+    );
+    ui.add_space(spacing::SPACE_2);
+    logo_band(
+        ui,
+        theme,
+        "On an inverse band · inverse-on-surface",
+        Some(colors.inverse_surface),
+        |ui| {
+            ui.add(
+                Logo::mark()
+                    .height(32.0)
+                    .ink(ui_kit::logo::LogoInk::Inverse),
+            );
+            ui.add_space(spacing::SPACE_6);
+            ui.add(Logo::wordmark().ink(ui_kit::logo::LogoInk::Inverse));
+        },
+    );
+    ui.add_space(spacing::SPACE_2);
+    logo_band(ui, theme, "The accent moment · text-accent", None, |ui| {
+        ui.add(Logo::mark().height(32.0).ink(ui_kit::logo::LogoInk::Accent));
+    });
+    ui.add_space(spacing::SPACE_2);
+    ui.add(egui::Label::new(specimen_job(
+        "Smallest on screen: the wordmark 96px wide, the mark 24px in product chrome and 96px in a brand placement. Clear space on every side: the height of the V.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
 impl eframe::App for Gallery {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
@@ -443,6 +604,9 @@ impl eframe::App for Gallery {
                 type_section(ui, self.theme);
                 states_section(ui, self.theme, &self.flags);
                 foundations_section(ui, self.theme);
+                icons_section(ui, self.theme);
+                ui.add_space(spacing::SPACE_6);
+                logo_section(ui, self.theme);
                 ui.add_space(spacing::SPACE_6);
 
                 ui.add_space(spacing::SPACE_4);

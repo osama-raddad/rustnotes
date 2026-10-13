@@ -170,11 +170,27 @@ impl ThemeId {
 
     /// Install the theme on a context: the visuals go into the theme's
     /// light/dark slot and the theme preference switches to it, so a
-    /// live switch re-skins immediately.
+    /// live switch re-skins immediately. The id is remembered for
+    /// [`ThemeId::current`], the role lookup the kit's widgets use when
+    /// they colour themselves from the live theme.
     pub fn apply(self, ctx: &Context) {
+        ctx.data_mut(|data| data.insert_temp(theme_key(), self));
         ctx.set_theme(ThemePreference::from(self.slot()));
         ctx.set_visuals_of(self.slot(), self.visuals());
     }
+
+    /// The theme [`apply`](Self::apply) last installed on the context:
+    /// `None` before the first apply. The kit's theme-following widgets
+    /// (the logo) resolve their default colours through this rather
+    /// than taking a theme parameter.
+    pub fn current(ctx: &Context) -> Option<ThemeId> {
+        ctx.data(|data| data.get_temp(theme_key()))
+    }
+}
+
+/// The context-data key [`ThemeId::apply`] stores the live theme under.
+fn theme_key() -> egui::Id {
+    egui::Id::new("ui-kit theme")
 }
 
 /// One CSS layer set as a single egui shadow: egui paints one layer with
@@ -278,11 +294,14 @@ mod tests {
         }
     }
 
-    /// `apply` puts the theme's visuals in the right egui slot and makes
-    /// it the live theme.
+    /// `apply` puts the theme's visuals in the right egui slot, makes
+    /// it the live theme, and remembers its id: `current` reports the
+    /// last applied theme, `None` on a fresh context and after each
+    /// apply the one that went in.
     #[test]
     fn apply_installs_the_theme_on_the_context() {
         let ctx = egui::Context::default();
+        assert_eq!(ThemeId::current(&ctx), None, "fresh context carries none");
         for theme in ThemeId::ALL {
             theme.apply(&ctx);
             assert_eq!(ctx.theme(), theme.slot(), "{}: live slot", theme.name());
@@ -290,6 +309,12 @@ mod tests {
                 ctx.global_style().visuals.panel_fill,
                 theme.colors().surface,
                 "{}: canvas applied",
+                theme.name()
+            );
+            assert_eq!(
+                ThemeId::current(&ctx),
+                Some(*theme),
+                "{}: remembered",
                 theme.name()
             );
         }
