@@ -1,11 +1,15 @@
 //! The Vynatix gallery: a theme switcher, the type specimen, a palette
 //! swatch grid, the interaction states, the foundation specimens
-//! (spacing, radii, elevation), the icons, the logo and the surface
-//! components (cards, metrics, editorial, glass). Run with `cargo run
-//! -p ui-kit --example gallery`. Each issue grows a section here.
+//! (spacing, radii, elevation), the icons, the logo, the action
+//! components (buttons, chips, badges) and the surface components
+//! (cards, metrics, editorial, glass). Run with `cargo run -p ui-kit
+//! --example gallery`. Each issue grows a section here.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
+use ui_kit::components::badge::{count_text, Badge, BadgeTone, IconButton};
+use ui_kit::components::button::{Button, ButtonEmphasis};
+use ui_kit::components::chip::{Chip, ChipEvent};
 use ui_kit::components::liquid_glass::{glass_recipe, paint_glass, GlassThickness, GlassTint};
 use ui_kit::components::{Card, EditorialCard, FocusRing, LiquidGlass, MetricCard};
 use ui_kit::icon::{icon, icon_active, install as install_icons, IconSize};
@@ -34,6 +38,8 @@ fn main() -> eframe::Result {
             Ok(Box::new(Gallery {
                 theme,
                 flags: UiKitFlags::default(),
+                filters: [false; 4],
+                saved_chip: true,
             }))
         }),
     )
@@ -44,6 +50,11 @@ struct Gallery {
     /// The kit flags this host passes down, standing in for the web
     /// system's reduced-motion and reduced-transparency media queries.
     flags: UiKitFlags,
+    /// The practice-area filter chips' selected states, so the chips
+    /// demo section toggles live.
+    filters: [bool; 4],
+    /// Whether the dismissible chip demo still holds its chip.
+    saved_chip: bool,
 }
 
 /// A role name for display: strip the `md-sys-color-` prefix and set the
@@ -911,6 +922,230 @@ fn glass_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     )));
 }
 
+// ---- the action components (issue 05) --------------------------------------
+
+/// The buttons group: the four emphases in the Button preview's own
+/// copy, the three sizes, and the icon variants, every one a live
+/// control (hover, hold, Tab) with the disabled and busy pair.
+fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
+    let colors = theme.colors();
+    ui.label("Buttons · four emphases · radius-md · the body face at 600");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal_wrapped(|ui| {
+        Button::new("Start a project").ui(ui, theme, flags);
+        Button::new("Read the case study")
+            .emphasis(ButtonEmphasis::Secondary)
+            .ui(ui, theme, flags);
+        Button::new("Hire a team")
+            .emphasis(ButtonEmphasis::Tertiary)
+            .icon_trailing(Icon::ArrowForward)
+            .ui(ui, theme, flags);
+        Button::new("Cancel")
+            .emphasis(ButtonEmphasis::Ghost)
+            .ui(ui, theme, flags);
+        Button::new("Disabled").disabled().ui(ui, theme, flags);
+        Button::new("Sending…").disabled().ui(ui, theme, flags);
+    });
+    ui.add(egui::Label::new(specimen_job(
+        "Hover for the 8% on-colour overlay, hold for 12% and the 98.5% scale, Tab for the ring. Disabled drops to 38%. While an action runs, the label says what is happening.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+
+    ui.add_space(spacing::SPACE_3);
+    ui.label("Sizes · 52, 44, 36 px");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal(|ui| {
+        Button::new("Open the dashboard")
+            .large()
+            .ui(ui, theme, flags);
+        Button::new("Save changes").ui(ui, theme, flags);
+        Button::new("Filter results").small().ui(ui, theme, flags);
+    });
+    ui.add(egui::Label::new(specimen_job(
+        "Keep touch targets at 44px or more: the default and large sizes clear the floor, the 36px small size stays on pointer-precise surfaces.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+
+    ui.add_space(spacing::SPACE_3);
+    ui.label("Icons · leading, trailing, icon-only");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal(|ui| {
+        Button::new("Search the archive")
+            .icon_leading(Icon::Search)
+            .ui(ui, theme, flags);
+        Button::new("Get the proposal")
+            .icon_trailing(Icon::ArrowForward)
+            .ui(ui, theme, flags);
+        Button::new("Visit the studio")
+            .icon_trailing(Icon::ArrowOutward)
+            .ui(ui, theme, flags);
+        Button::new("")
+            .icon_only(Icon::Search, "Search everything")
+            .ui(ui, theme, flags);
+        Button::new("")
+            .icon_only(Icon::ArrowOutward, "Open the external site")
+            .emphasis(ButtonEmphasis::Secondary)
+            .ui(ui, theme, flags);
+    });
+    ui.add(egui::Label::new(specimen_job(
+        "arrow_forward trails a call to action, arrow_outward a link that leaves the app. An icon-only button carries its action's name for assistive technology.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+
+    ui.add_space(spacing::SPACE_3);
+    ui.add(egui::Label::new(specimen_job(
+        "Tertiary is reserved: the one accent moment on a surface, never two of them on the same screen. Its label pair is the lowest in the system at 4.7 to 1, which the spec accepts.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The chips group: the preview's practice-area filter row as live
+/// toggles, the featured label, and a dismissible chip reporting its
+/// typed event.
+fn chips_group(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &UiKitFlags,
+    filters: &mut [bool; 4],
+    saved: &mut bool,
+) {
+    let colors = theme.colors();
+    ui.label("Chips · filter pills · radius-full");
+    ui.add_space(spacing::SPACE_2);
+    ui.add(TrackedLabel::new(
+        "Practice area",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_1);
+    ui.horizontal_wrapped(|ui| {
+        let labels = [
+            "All",
+            "Android Automotive",
+            "Platform",
+            "Design-engineering",
+        ];
+        for (label, selected) in labels.iter().zip(filters.iter_mut()) {
+            if let Some(ChipEvent::Toggled(now)) = Chip::new(label)
+                .set_selected(*selected)
+                .ui(ui, theme, flags)
+                .event
+            {
+                *selected = now;
+            }
+        }
+        ui.add_space(spacing::SPACE_4);
+        Chip::new("Featured").accent().ui(ui, theme, flags);
+    });
+    ui.add(egui::Label::new(specimen_job(
+        "A selected filter fills secondary-container and sets the check icon, so the state never rests on colour alone. The accent chip is the featured label.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+
+    ui.add_space(spacing::SPACE_3);
+    ui.horizontal(|ui| {
+        if *saved {
+            if let Some(event) = Chip::new("Client work")
+                .dismissible()
+                .ui(ui, theme, flags)
+                .event
+            {
+                if event == ChipEvent::Dismissed {
+                    *saved = false;
+                }
+            }
+        } else {
+            if Button::new("Restore the chip")
+                .emphasis(ButtonEmphasis::Ghost)
+                .ui(ui, theme, flags)
+                .clicked
+            {
+                *saved = true;
+            }
+        }
+    });
+    ui.add(egui::Label::new(specimen_job(
+        "The dismiss icon reports a typed event and the host drops the chip from its row.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The badges group: the six tones in the Badge preview's own words,
+/// and the count badges on their 44px icon buttons.
+fn badges_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
+    let colors = theme.colors();
+    ui.label("Badges · states, kinds, counts");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal_wrapped(|ui| {
+        Badge::new("Shipped", BadgeTone::Success).ui(ui, theme);
+        Badge::new("At risk", BadgeTone::Warning).ui(ui, theme);
+        Badge::new("In review", BadgeTone::Info).ui(ui, theme);
+        Badge::new("Blocked", BadgeTone::Error).ui(ui, theme);
+        Badge::new("Draft", BadgeTone::Neutral).ui(ui, theme);
+        Badge::new("Archived", BadgeTone::Neutral).ui(ui, theme);
+        Badge::new("Featured", BadgeTone::Accent).ui(ui, theme);
+    });
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal(|ui| {
+        IconButton::new("Notifications", Icon::Notifications)
+            .count(3)
+            .ui(ui, theme, flags);
+        IconButton::new("Mail", Icon::Mail)
+            .count(120)
+            .ui(ui, theme, flags);
+        IconButton::new("Messages", Icon::Chat)
+            .activity_dot()
+            .ui(ui, theme, flags);
+    });
+    ui.add(egui::Label::new(specimen_job(
+        &format!(
+            "One or two words on a tinted pill; the icon shape and the word carry the state. Counts read {} through 99 and cap at 99+ beyond, pairing error with on-error so the count never competes with the accent.",
+            count_text(3)
+        ),
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The actions section: every Button, Chip and Badge variant as live,
+/// Tab-focusable instances in the active theme.
+fn actions_section(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &UiKitFlags,
+    filters: &mut [bool; 4],
+    saved: &mut bool,
+) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "Components · Actions and labels",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    buttons_group(ui, theme, flags);
+    ui.add_space(spacing::SPACE_4);
+    chips_group(ui, theme, flags, filters, saved);
+    ui.add_space(spacing::SPACE_4);
+    badges_group(ui, theme, flags);
+}
+
 /// The components section: the surface components issue 08 adds, in
 /// the preview's own copy.
 fn components_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
@@ -971,6 +1206,14 @@ impl eframe::App for Gallery {
                 icons_section(ui, self.theme);
                 ui.add_space(spacing::SPACE_6);
                 logo_section(ui, self.theme);
+                ui.add_space(spacing::SPACE_6);
+                actions_section(
+                    ui,
+                    self.theme,
+                    &self.flags,
+                    &mut self.filters,
+                    &mut self.saved_chip,
+                );
                 ui.add_space(spacing::SPACE_6);
                 components_section(ui, self.theme, &self.flags);
                 ui.add_space(spacing::SPACE_6);

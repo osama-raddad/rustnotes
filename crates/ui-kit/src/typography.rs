@@ -254,6 +254,20 @@ pub fn display_bold_family(theme: ThemeId) -> FontFamily {
     FontFamily::Name(display_bold_family_name(theme).into())
 }
 
+/// The body face at weight 600, as a family name: the components'
+/// label voice, the Button spec's `--font-body` at weight 600 and the
+/// Badge's 12px at 600. The same per-theme mapping as headline 4,
+/// whose specimen is the body face at 600: Aptos SemiBold in Forest,
+/// Geist SemiBold in Teal and Monochrome.
+pub fn body_semibold_family_name(theme: ThemeId) -> &'static str {
+    TypeStyle::Headline4.family_name(theme)
+}
+
+/// [`body_semibold_family_name`] as a [`FontFamily::Name`].
+pub fn body_semibold_family(theme: ThemeId) -> FontFamily {
+    FontFamily::Name(body_semibold_family_name(theme).into())
+}
+
 // ---- the type styles ------------------------------------------------------
 
 /// One of the design system's eleven specimen styles, from
@@ -790,6 +804,35 @@ mod tests {
         assert!((format.extra_letter_spacing - (-0.04 * 56.0)).abs() < 1e-4);
         assert_eq!(format.line_height, Some(56.0));
         assert_eq!(format.color, Color32::BLACK);
+    }
+
+    /// The body face at weight 600 resolves per theme to a family that
+    /// theme installs: Aptos SemiBold in Forest, Geist SemiBold in Teal
+    /// and Monochrome. The components' label voice (button and badge
+    /// labels) draws on it.
+    #[test]
+    fn body_semibold_resolves_to_an_installed_face_per_theme() {
+        let expected: &[(ThemeId, &str)] = &[
+            (ThemeId::Light, "Aptos SemiBold"),
+            (ThemeId::Dark, "Aptos SemiBold"),
+            (ThemeId::TealLight, "Geist SemiBold"),
+            (ThemeId::TealDark, "Geist SemiBold"),
+            (ThemeId::MonoLight, "Geist SemiBold"),
+            (ThemeId::MonoDark, "Geist SemiBold"),
+        ];
+        for (theme, family) in expected {
+            assert_eq!(super::body_semibold_family_name(*theme), *family);
+            assert_eq!(
+                super::body_semibold_family(*theme),
+                FontFamily::Name((*family).into())
+            );
+            let installed: Vec<&str> = theme.faces().iter().map(|face| face.family).collect();
+            assert!(
+                installed.contains(family),
+                "{}: the label voice maps to {family}, which the theme does not install",
+                theme.name()
+            );
+        }
     }
 
     /// The per-theme face mapping follows the README table: Forest sets

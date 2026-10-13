@@ -112,6 +112,13 @@ pub fn disabled(content: Color32, container: Color32) -> DisabledColors {
     }
 }
 
+/// One colour at the disabled content opacity (38%): for the widgets
+/// whose variant has no container to fade (the transparent button and
+/// chip looks), only their content drops.
+pub fn disabled_content(color: Color32) -> Color32 {
+    state_layer(color, DISABLED_CONTENT_ALPHA)
+}
+
 /// An egui [`Response`] boiled down to the four states the design
 /// system styles, consuming egui's own interaction sensing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -324,7 +331,8 @@ mod tests {
     }
 
     /// The disabled pair: content at 38, container at 12, straight
-    /// channels preserved for opaque inputs.
+    /// channels preserved for opaque inputs. `disabled_content` is the
+    /// same content treatment alone, for the looks with no container.
     #[test]
     fn disabled_sets_both_opacities() {
         let light = ThemeColors::LIGHT;
@@ -336,6 +344,11 @@ mod tests {
         assert_eq!(
             pair.container,
             Color32::from_rgba_unmultiplied(239, 232, 218, 31)
+        );
+        assert_eq!(
+            disabled_content(light.primary),
+            Color32::from_rgba_unmultiplied(30, 58, 47, 97),
+            "the content treatment alone, for the looks with no container"
         );
     }
 
