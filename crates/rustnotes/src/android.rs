@@ -1,6 +1,5 @@
 //! Android platform glue that eframe/winit do not provide.
 
-use android_activity::ndk::configuration::UiModeNight;
 use android_activity::AndroidApp;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -41,7 +40,8 @@ fn app() -> Option<AndroidApp> {
     APP.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// What the Java side reports: window insets in pixels and the font scale.
+/// What the Java side reports: window insets in pixels, font scale and
+/// night mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Report {
     left: i32,
@@ -49,14 +49,16 @@ struct Report {
     right: i32,
     bottom: i32,
     font_scale: f32,
+    /// `Configuration.uiMode & UI_MODE_NIGHT_MASK == UI_MODE_NIGHT_YES`.
+    night: bool,
 }
 
 static REPORT: Mutex<Option<Report>> = Mutex::new(None);
 static LAST_QUERY: Mutex<Option<Instant>> = Mutex::new(None);
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-/// Insets change on rotation, keyboard show/hide and cutout changes, and font
-/// scale on a configuration change; all of those also produce frames, so
-/// polling at frame time is enough.
+/// Insets change on rotation, keyboard show/hide and cutout changes; font
+/// scale and night mode on a configuration change. All of those also produce
+/// frames, so polling at frame time is enough.
 const REQUERY: Duration = Duration::from_millis(250);
 
 /// Feed egui what winit does not report on Android: safe-area insets (status
@@ -80,20 +82,99 @@ pub(crate) fn raw_input_hook(ctx: &egui::Context, raw: &mut egui::RawInput) {
         if (ctx.zoom_factor() - scale).abs() > 1e-3 {
             ctx.set_zoom_factor(scale);
         }
-    }
-    // winit's Window::theme() is None on Android; ask the configuration.
-    if let Some(a) = app() {
-        let theme = match a.config().ui_mode_night() {
-            UiModeNight::Yes => Some(egui::Theme::Dark),
-            UiModeNight::No => Some(egui::Theme::Light),
-            _ => None,
-        };
-        if let Some(t) = theme {
-            if ctx.options(|o| o.fallback_theme) != t {
-                ctx.options_mut(|o| o.fallback_theme = t);
-            }
+        // winit's Window::theme() is None on Android, and android-activity's
+        // NDK configuration is not refreshed on configuration changes under
+        // winit, so night mode comes from the same JNI report.
+        let t = if r.night { egui::Theme::Dark } else { egui::Theme::Light };
+        if ctx.options(|o| o.fallback_theme) != t {
+            log::info!("night mode -> {t:?}");
+            ctx.options_mut(|o| o.fallback_theme = t);
         }
     }
+    sync_bar_icons(ctx.theme() == egui::Theme::Light);
+}
+
+/// Last bar style sent to the window; None until the first send.
+static BARS_LIGHT: Mutex<Option<bool>> = Mutex::new(None);
+
+/// Under enforced edge-to-edge the app draws behind the status and
+/// navigation bars, so it must say whether their icons should be dark (on a
+/// light UI) or light (on a dark UI). Sent only when the theme changes.
+fn sync_bar_icons(light_ui: bool) {
+    {
+        let mut cur = BARS_LIGHT.lock().unwrap_or_else(|e| e.into_inner());
+        if *cur == Some(light_ui) {
+            return;
+        }
+        *cur = Some(light_ui);
+    }
+    let Some(app) = app() else { return };
+    let app2 = app.clone();
+    app.run_on_java_main_thread(Box::new(move || {
+        let vm = unsafe { jni::JavaVM::from_raw(app2.vm_as_ptr().cast()) };
+        let res = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            let activity = unsafe {
+                jni::objects::JObject::from_raw(env, app2.activity_as_ptr() as jni::sys::jobject)
+            };
+            let r = (|| -> jni::errors::Result<()> {
+                let window = env
+                    .call_method(
+                        &activity,
+                        jni::jni_str!("getWindow"),
+                        jni::jni_sig!("()Landroid/view/Window;"),
+                        &[],
+                    )?
+                    .l()?;
+                // API 30+: WindowInsetsController. APPEARANCE_LIGHT_STATUS_BARS
+                // (8) | APPEARANCE_LIGHT_NAVIGATION_BARS (16) mean "dark icons".
+                let modern = (|| -> jni::errors::Result<()> {
+                    let ctrl = env
+                        .call_method(
+                            &window,
+                            jni::jni_str!("getInsetsController"),
+                            jni::jni_sig!("()Landroid/view/WindowInsetsController;"),
+                            &[],
+                        )?
+                        .l()?;
+                    let mask = 8 | 16;
+                    let value = if light_ui { mask } else { 0 };
+                    env.call_method(
+                        &ctrl,
+                        jni::jni_str!("setSystemBarsAppearance"),
+                        jni::jni_sig!("(II)V"),
+                        &[jni::JValue::from(value), jni::JValue::from(mask)],
+                    )?;
+                    Ok(())
+                })();
+                if modern.is_err() {
+                    // API < 30: SYSTEM_UI_FLAG_LIGHT_STATUS_BAR (0x2000) |
+                    // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR (0x10) on the decor view.
+                    env.exception_clear();
+                    let decor = env
+                        .call_method(
+                            &window,
+                            jni::jni_str!("getDecorView"),
+                            jni::jni_sig!("()Landroid/view/View;"),
+                            &[],
+                        )?
+                        .l()?;
+                    let flags: i32 = if light_ui { 0x2000 | 0x10 } else { 0 };
+                    env.call_method(
+                        &decor,
+                        jni::jni_str!("setSystemUiVisibility"),
+                        jni::jni_sig!("(I)V"),
+                        &[jni::JValue::from(flags)],
+                    )?;
+                }
+                Ok(())
+            })();
+            std::mem::forget(activity);
+            r
+        });
+        if let Err(e) = res {
+            log::warn!("system bar appearance failed: {e}");
+        }
+    }));
 }
 
 fn maybe_query(ctx: &egui::Context) {
@@ -164,6 +245,10 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
             let font_scale = env
                 .get_field(&config, jni::jni_str!("fontScale"), jni::jni_sig!("F"))?
                 .f()?;
+            let ui_mode = env
+                .get_field(&config, jni::jni_str!("uiMode"), jni::jni_sig!("I"))?
+                .i()?;
+            let night = ui_mode & 0x30 == 0x20; // UI_MODE_NIGHT_MASK, UI_MODE_NIGHT_YES
 
             let window = env
                 .call_method(
@@ -251,6 +336,7 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
                 right,
                 bottom,
                 font_scale,
+                night,
             }))
         })();
         // The activity reference belongs to NativeActivity; never release it.

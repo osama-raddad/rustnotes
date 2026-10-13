@@ -19,7 +19,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="unspecified"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode|locale|layoutDirection|fontScale"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|touchscreen|density|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|mcc|mnc|grammaticalGender"
             android:windowSoftInputMode="adjustResize">
 
             <!-- Which native library NativeActivity should dlopen. -->

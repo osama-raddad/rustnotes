@@ -18,7 +18,7 @@ android:
           label: Rust Notes
           exported: true
           launch_mode: singleTask
-          config_changes: "orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+          config_changes: "orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|touchscreen|density|uiMode|fontScale|fontWeightAdjustment|locale|layoutDirection|colorMode|mcc|mnc|grammaticalGender"
           window_soft_input_mode: adjustResize
           meta_data:
             - name: android.app.lib_name
