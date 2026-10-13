@@ -8,13 +8,25 @@
 //!
 //! Desktop: handy for fast iteration on layout and translations.
 
-#![cfg_attr(not(target_os = "android"), allow(dead_code))]
-
 fn main() -> eframe::Result {
+    // RUST_LOG wins when set; otherwise log at info.
     #[cfg(not(target_os = "android"))]
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Info)
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    mobile_app::run(mobile_app::native_options())
+    #[cfg_attr(not(target_os = "ios"), allow(unused_mut))]
+    let mut options = mobile_app::native_options();
+
+    // eframe has no default storage directory on iOS (its `storage_dir()`
+    // returns None there), so without an explicit path `cc.storage` is None
+    // and nothing persists. The sandbox's Documents folder survives relaunches.
+    #[cfg(target_os = "ios")]
+    if let Some(home) = std::env::var_os("HOME") {
+        options.persistence_path = Some(
+            std::path::PathBuf::from(home)
+                .join("Documents")
+                .join("app.ron"),
+        );
+    }
+
+    mobile_app::run(options)
 }

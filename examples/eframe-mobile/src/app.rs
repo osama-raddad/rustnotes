@@ -91,9 +91,13 @@ impl MobileApp {
         self.applied_theme = Some(self.theme);
     }
 
-    /// Portrait vs landscape, from the area safe for content (excludes the
-    /// status bar, notch and keyboard). `ctx.screen_rect()` would include
-    /// them; on phones that puts widgets under the notch.
+    /// Portrait vs landscape, from the area safe for content.
+    /// `ctx.content_rect()` is the viewport minus `safe_area_insets`, which
+    /// egui-winit fills on iOS (notch, home indicator). On Android
+    /// `raw_input_hook` fills them from the root view's `WindowInsets`
+    /// (system bars, display cutout and keyboard), which is correct under
+    /// Android 15+'s enforced edge-to-edge (see `android::safe_area_insets`).
+    /// Desktop has no insets.
     fn orientation(ctx: &egui::Context) -> Orientation {
         let rect = ctx.content_rect();
         if rect.height() >= rect.width() {
@@ -178,11 +182,13 @@ impl eframe::App for MobileApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(&ctx.global_style()).inner_margin(16.0))
+            .frame(egui::Frame::central_panel(&ctx.global_style()).inner_margin(0.0))
             .show(root, |ui| {
                 // The panel paints the full viewport (so the notch area has
                 // the right colour) but our widgets stay inside the safe
                 // area so nothing sits under the notch or home indicator.
+                // The 16 pt gutter is applied here, once; the child Ui
+                // ignores the panel frame's margin, so none is set there.
                 let safe = ctx.content_rect().shrink(16.0);
                 let mut safe_ui = ui.new_child(egui::UiBuilder::new().max_rect(safe));
                 let ui = &mut safe_ui;
@@ -213,6 +219,26 @@ impl eframe::App for MobileApp {
                         }
                     });
             });
+    }
+
+    /// Android only: feed egui the platform state egui-winit leaves out.
+    /// Runs before every frame, so rotation, keyboard and dark-mode changes
+    /// are picked up on the next frame.
+    #[cfg(target_os = "android")]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Safe area: egui-winit only fills this on iOS. Setting it here makes
+        // `ctx.content_rect()` (layout and orientation) respect it.
+        if let Some(insets) = crate::android::safe_area_insets(ctx, ctx.pixels_per_point()) {
+            raw_input.safe_area_insets = Some(insets);
+        }
+
+        // Theme::System: winit reports no OS theme on Android, so egui uses
+        // `fallback_theme`. Point it at the configuration's night mode.
+        if let Some(night) = crate::android::night_mode() {
+            if ctx.options(|o| o.fallback_theme) != night {
+                ctx.options_mut(|o| o.fallback_theme = night);
+            }
+        }
     }
 
     /// eframe calls this on exit and on Android pause/suspend.
