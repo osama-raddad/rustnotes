@@ -17,6 +17,14 @@ extern "C" {
     /// Foundation's `NSLog`. Declared locally because objc2-foundation 0.3
     /// does not bind it; no extra Cargo feature is needed to link it.
     fn NSLog(format: *mut AnyObject, ...);
+    /// UIKit's `UIAccessibilityIsReduceMotionEnabled()` (iOS 8+). Declared
+    /// locally for the same reason — plus it is a C *function*, not an
+    /// Obj-C method: Swift's `UIAccessibility.isReduceMotionEnabled` is
+    /// apinotes sugar over this symbol, and msg_send!-ing a `UIAccessibility`
+    /// class (or NSObject) dies at runtime ("class … could not be found" /
+    /// "unrecognized selector"). BOOL is 0/1; u8 keeps the ABI agnostic
+    /// to BOOL's signed-char/_Bool definition.
+    fn UIAccessibilityIsReduceMotionEnabled() -> u8;
 }
 
 /// Route panics through NSLog: on a device stderr is not connected to
@@ -306,11 +314,12 @@ pub(crate) fn raw_input_hook(ctx: &egui::Context, raw: &mut egui::RawInput) -> O
             (style == 2, content_size_scale(&cat.to_string()))
         };
         TRAITS.with(|t| t.set(traits));
-        // Reduce motion (UIAccessibility) and the zone offset, from the
-        // same poll; NSTimeZone is reached through raw msg_send because the
-        // crate does not enable objc2-foundation's NSTimeZone feature.
+        // Reduce motion (through the C function declared above) and the
+        // zone offset, from the same poll; NSTimeZone is reached through
+        // raw msg_send because the crate does not enable objc2-foundation's
+        // NSTimeZone feature.
         let motion_tz = unsafe {
-            let reduce: bool = msg_send![class!(UIAccessibility), isReduceMotionEnabled];
+            let reduce: bool = UIAccessibilityIsReduceMotionEnabled() != 0;
             let tz: Retained<AnyObject> = msg_send![class!(NSTimeZone), systemTimeZone];
             let secs: isize = msg_send![&*tz, secondsFromGMT];
             (reduce, secs as i32)

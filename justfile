@@ -376,7 +376,7 @@ android-run app='rustnotes' device='adb:emulator-5554':
 # devicectl install / xcodebuild with unrelated errors.
 [private]
 ios-device-id:
-    @xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/){print $j; exit}}}'
+    @xcrun devicectl list devices 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="connected"){for(j=1;j<=NF;j++) if($j ~ /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/){print $j; exit}}}'
 
 # Fail unless exactly one iOS simulator is booted. Shared by ios-run and
 # screenshot-ios: simctl's `booted` selector silently picks an arbitrary one
@@ -489,9 +489,13 @@ ios-sign app='rustnotes':
             rest=${appid#*.} # strip team id: TEAMID.bundle.id → bundle.id (TEAMID.* → *)
             [ "$rest" = "$ios_bundle" ] || [ "$rest" = "*" ] || continue
             exp=$(plutil -extract ExpirationDate raw -o - "$tmp/profile.plist" 2>/dev/null) || continue
-            # plutil prints "YYYY-MM-DD HH:MM:SS +0000" — normalize both
-            # sides to comparable UTC integers (a plain string compare
-            # pits ' ' against 'T' at position 10).
+            # plutil prints ExpirationDate as ISO-8601 ("YYYY-MM-DDTHH:MM:SSZ")
+            # on newer macOS and "YYYY-MM-DD HH:MM:SS +0000" on older —
+            # normalize to the latter first, then both sides to comparable
+            # UTC integers (a plain string compare pits ' ' against 'T' at
+            # position 10).
+            exp=${exp/T/ }
+            exp=${exp/Z/ +0000}
             exp=$(date -ju -f '%Y-%m-%d %H:%M:%S %z' "$exp" +%Y%m%d%H%M%S) || continue
             [[ "$exp" > "$now" ]] || continue
             profile="$p"
