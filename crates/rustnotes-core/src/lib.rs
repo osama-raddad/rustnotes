@@ -1,27 +1,45 @@
-//! Rust Notes core — platform-agnostic app state machine, input handling and
-//! UI drawing. Shells (android / ios) own the window, GL context and event
-//! translation, and drive this code through [`CoreEvent`]s.
+//! Rust Notes core — platform-agnostic app state machine, input translation and
+//! UI. The UI is egui, painted by egui_glow onto a GLES3 context the shell owns.
+//! Shells (android / ios) own the window, GL context and event translation, and
+//! drive this code through [`CoreEvent`]s.
 
-pub mod gl;
 pub mod notes;
-pub mod text;
 pub mod util;
 
-pub use gl::{Color, Renderer};
-
+use egui::epaint::MarginF32;
+use egui::{
+    Align, Align2, Color32, Event, FontData, FontDefinitions, FontFamily, FontId, Id, Key, Layout,
+    Modifiers, PointerButton, Pos2, RawInput, Rect, SafeAreaInsets, Sense, Stroke, TouchDeviceId,
+    TouchId, TouchPhase, Ui, UiBuilder, Vec2, ViewportId, ViewportIdMap, ViewportInfo,
+};
+use egui_glow::{Painter, ShaderVersion};
 use notes::{Note, NotesDb};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const ACCENT: Color = [0.208, 0.455, 0.957, 1.0];
-const TEXT_DARK: Color = [0.10, 0.11, 0.13, 1.0];
-const TEXT_GRAY: Color = [0.42, 0.44, 0.50, 1.0];
-const CARD_BG: Color = [1.0, 1.0, 1.0, 1.0];
-const HEADER_BG: Color = [1.0, 1.0, 1.0, 1.0];
-const HAIRLINE: Color = [0.90, 0.90, 0.93, 1.0];
-const DANGER: Color = [0.83, 0.19, 0.19, 1.0];
-const DANGER_BG: Color = [0.985, 0.91, 0.91, 1.0];
-const PLACEHOLDER: Color = [0.62, 0.64, 0.69, 1.0];
+const SCREEN_BG: Color32 = Color32::from_rgb(246, 246, 248);
+const ACCENT: Color32 = Color32::from_rgb(53, 116, 244);
+const TEXT_DARK: Color32 = Color32::from_rgb(26, 28, 33);
+const TEXT_GRAY: Color32 = Color32::from_rgb(107, 112, 128);
+const CARD_BG: Color32 = Color32::WHITE;
+const HEADER_BG: Color32 = Color32::WHITE;
+const HAIRLINE: Color32 = Color32::from_rgb(230, 230, 237);
+const DANGER: Color32 = Color32::from_rgb(212, 48, 48);
+const DANGER_BG: Color32 = Color32::from_rgb(251, 232, 232);
+const PLACEHOLDER: Color32 = Color32::from_rgb(158, 163, 176);
+
+/// Fonts load at runtime from the device so the bundle carries no font file.
+const FONT_CANDIDATES: &[&str] = &[
+    "/system/fonts/Roboto-Regular.ttf",    // Android
+    "/system/fonts/NotoSans-Regular.ttf",  // Android fallback
+    "/System/Library/Fonts/SFNS.ttf",      // iOS: San Francisco
+    "/System/Library/Fonts/Geneva.ttf",    // iOS fallback
+    "/System/Library/Fonts/DroidSans.ttf", // Android last resort
+];
+
+const EDITOR_ID: &str = "rustnotes.editor";
+const DELETE_ARM_WINDOW: Duration = Duration::from_secs(2);
 
 /// Services only the platform shell can provide.
 pub trait Platform {
@@ -50,35 +68,15 @@ pub enum CoreEvent {
     Key(CoreKey),
 }
 
-pub type Rect = (f32, f32, f32, f32);
-
-fn hit(rect: Option<Rect>, x: f32, y: f32) -> bool {
-    matches!(rect, Some((rx, ry, rw, rh)) if x >= rx && x < rx + rw && y >= ry && y < ry + rh)
-}
-
-fn in_rect(r: &Rect, x: f32, y: f32) -> bool {
-    x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3
-}
-
 #[derive(PartialEq, Clone, Copy)]
 enum Screen {
     List,
     Editor,
 }
 
-struct TouchState {
-    last: (f32, f32),
-    moved: f32,
-    dragging: bool,
-}
-
-#[derive(Clone, Copy)]
-struct EditorGeom {
-    x0: f32,
-    y0: f32,
-    max_w: f32,
-    line_h: f32,
-    px: f32,
+enum ListAction {
+    Open(usize),
+    Delete(usize),
 }
 
 pub struct App {
@@ -88,31 +86,48 @@ pub struct App {
     // Editor state
     edit_id: i64, // 0 = new, unsaved
     buffer: String,
-    cursor: usize, // char index
-    edit_scroll: f32,
-    edit_geom: Option<EditorGeom>,
+    focus_editor: bool,
     // List state
-    list_scroll: f32,
-    list_content_h: f32,
-    // Hit targets, refreshed during draw
-    hit_add: Option<Rect>,
-    hit_back: Option<Rect>,
-    hit_rows: Vec<(Rect, usize)>,
-    hit_del: Vec<(Rect, usize)>,
-    hit_editor: Option<Rect>,
+    reset_list_scroll: bool,
     armed_delete: Option<(usize, Instant)>,
-    // Input / animation
-    touch: Option<TouchState>,
-    blink_on: bool,
-    last_blink: Instant,
-    pub dirty: bool,
-    scale: f32,
-    vw: f32,
-    vh: f32,
-    /// Top content inset (status bar / notch) in px; UI is drawn below this.
+    // egui
+    ctx: egui::Context,
+    painter: Option<Painter>,
+    font_source: Result<String, String>,
+    events: Vec<Event>,
+    size_px: [u32; 2],
+    /// Points-per-pixel scale: 360 "dp" across the width, like the old renderer.
+    ppp: f32,
+    /// Top content inset (status bar / notch) in px.
     content_top: f32,
-    /// Bottom content inset (keyboard / home indicator) in px; 0 = use full height.
+    /// Bottom content inset (keyboard / home indicator) in px.
     content_bottom: f32,
+    start: Instant,
+    next_repaint: Option<Instant>,
+    keyboard_shown: bool,
+    /// A touch was released since the last frame (re-shows a dismissed keyboard).
+    tapped: bool,
+    pub dirty: bool,
+}
+
+fn load_fonts() -> Result<(FontDefinitions, String), String> {
+    let mut last_err = String::from("no font candidates");
+    for path in FONT_CANDIDATES {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                let mut defs = FontDefinitions::empty();
+                defs.font_data
+                    .insert("system".to_owned(), Arc::new(FontData::from_owned(bytes)));
+                defs.families
+                    .insert(FontFamily::Proportional, vec!["system".to_owned()]);
+                defs.families
+                    .insert(FontFamily::Monospace, vec!["system".to_owned()]);
+                return Ok((defs, (*path).to_string()));
+            }
+            Err(e) => last_err = format!("cannot read {path}: {e}"),
+        }
+    }
+    Err(last_err)
 }
 
 impl App {
@@ -120,32 +135,89 @@ impl App {
         let db = NotesDb::open(&data_dir).expect("open notes database");
         let notes = db.list();
         log::info!("loaded {} notes from {}", notes.len(), data_dir.display());
+
+        let ctx = egui::Context::default();
+        ctx.set_theme(egui::Theme::Light);
+        ctx.style_mut_of(egui::Theme::Light, |s| {
+            s.visuals.panel_fill = SCREEN_BG;
+            s.visuals.extreme_bg_color = Color32::TRANSPARENT;
+            s.visuals.selection.bg_fill = ACCENT.gamma_multiply(0.35);
+            s.visuals.text_cursor.stroke = Stroke::new(2.0, ACCENT);
+            s.spacing.item_spacing = Vec2::ZERO;
+            s.interaction.selectable_labels = false;
+        });
+        let font_source = match load_fonts() {
+            Ok((defs, src)) => {
+                ctx.set_fonts(defs);
+                Ok(src)
+            }
+            Err(e) => {
+                log::error!("font load failed: {e}");
+                Err(e)
+            }
+        };
+
         App {
             db,
             screen: Screen::List,
             notes,
             edit_id: 0,
             buffer: String::new(),
-            cursor: 0,
-            edit_scroll: 0.0,
-            edit_geom: None,
-            list_scroll: 0.0,
-            list_content_h: 0.0,
-            hit_add: None,
-            hit_back: None,
-            hit_rows: Vec::new(),
-            hit_del: Vec::new(),
-            hit_editor: None,
+            focus_editor: false,
+            reset_list_scroll: false,
             armed_delete: None,
-            touch: None,
-            blink_on: true,
-            last_blink: Instant::now(),
-            dirty: true,
-            scale: 1.0,
-            vw: 1080.0,
-            vh: 2280.0,
+            ctx,
+            painter: None,
+            font_source,
+            events: Vec::new(),
+            size_px: [0, 0],
+            ppp: 1.0,
             content_top: 0.0,
             content_bottom: 0.0,
+            start: Instant::now(),
+            next_repaint: None,
+            keyboard_shown: false,
+            tapped: false,
+            dirty: true,
+        }
+    }
+
+    // ---- GL / viewport -----------------------------------------------------
+
+    /// Attach the shell's (current) GL context. Fails if no system font loaded.
+    pub fn attach_gl(&mut self, gl: Arc<glow::Context>) -> Result<(), String> {
+        let src = self.font_source.clone()?;
+        let painter = Painter::new(gl, "", Some(ShaderVersion::Es300), false)
+            .map_err(|e| format!("{e:?}"))?;
+        log::info!(
+            "egui_glow painter ready (max texture {}), font: {src}",
+            painter.max_texture_side()
+        );
+        self.painter = Some(painter);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Release GL resources before the shell destroys the context.
+    pub fn detach_gl(&mut self) {
+        if let Some(mut p) = self.painter.take() {
+            p.destroy();
+        }
+    }
+
+    pub fn font_source(&self) -> &str {
+        match &self.font_source {
+            Ok(s) => s,
+            Err(_) => "<none>",
+        }
+    }
+
+    pub fn set_viewport(&mut self, w: i32, h: i32) {
+        let size = [w.max(0) as u32, h.max(0) as u32];
+        if size != self.size_px {
+            self.size_px = size;
+            self.ppp = (size[0] as f32 / 360.0).clamp(0.75, 3.5);
+            self.dirty = true;
         }
     }
 
@@ -163,26 +235,6 @@ impl App {
         }
     }
 
-    /// Debug introspection for shells: (vw, vh, top_inset, bottom_inset, notes).
-    pub fn debug_layout(&self) -> (f32, f32, f32, f32, usize) {
-        (
-            self.vw,
-            self.vh,
-            self.content_top,
-            self.content_bottom,
-            self.notes.len(),
-        )
-    }
-
-    /// The y coordinate of the usable bottom edge (viewport minus insets).
-    fn bottom(&self) -> f32 {
-        if self.content_bottom > 0.0 {
-            (self.vh - self.content_bottom).max(0.0)
-        } else {
-            self.vh
-        }
-    }
-
     // ---- editor ----------------------------------------------------------
 
     fn open_editor(&mut self, id: i64, plat: &dyn Platform) {
@@ -197,12 +249,10 @@ impl App {
                 .map(|n| n.body.clone())
                 .unwrap_or_default()
         };
-        self.cursor = self.buffer.chars().count();
-        self.edit_scroll = 0.0;
         self.screen = Screen::Editor;
-        self.blink_on = true;
-        self.last_blink = Instant::now();
+        self.focus_editor = true;
         plat.show_keyboard();
+        self.keyboard_shown = true;
         self.dirty = true;
     }
 
@@ -230,8 +280,9 @@ impl App {
         }
         self.notes = self.db.list();
         self.screen = Screen::List;
-        self.list_scroll = 0.0;
+        self.reset_list_scroll = true;
         plat.hide_keyboard();
+        self.keyboard_shown = false;
         self.dirty = true;
     }
 
@@ -249,132 +300,101 @@ impl App {
         self.edit_id = n.id;
     }
 
-    fn insert_char(&mut self, c: char) {
-        let byte = text::char_to_byte(&self.buffer, self.cursor);
-        self.buffer.insert(byte, c);
-        self.cursor += 1;
-        self.after_edit();
-    }
-
-    fn backspace(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let start = text::char_to_byte(&self.buffer, self.cursor - 1);
-        let end = text::char_to_byte(&self.buffer, self.cursor);
-        self.buffer.replace_range(start..end, "");
-        self.cursor -= 1;
-        self.after_edit();
-    }
-
-    fn move_cursor(&mut self, delta: i32) {
-        let len = self.buffer.chars().count() as i32;
-        self.cursor = ((self.cursor as i32 + delta).clamp(0, len)) as usize;
-        self.after_edit();
-    }
-
-    fn after_edit(&mut self) {
-        self.blink_on = true;
-        self.last_blink = Instant::now();
-        self.dirty = true;
-    }
-
     // ---- input ------------------------------------------------------------
+
+    fn pos(&self, x: f32, y: f32) -> Pos2 {
+        Pos2::new(x / self.ppp, y / self.ppp)
+    }
+
+    fn touch(&mut self, phase: TouchPhase, pos: Pos2) {
+        self.events.push(Event::Touch {
+            device_id: TouchDeviceId(0),
+            id: TouchId(0),
+            phase,
+            pos,
+            force: None,
+        });
+    }
+
+    fn push_key(&mut self, key: Key) {
+        for pressed in [true, false] {
+            self.events.push(Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            });
+        }
+    }
 
     /// Handle one neutral event. Returns whether the shell should consider it
     /// consumed (used e.g. for Android's back key).
-    pub fn handle_event(
-        &mut self,
-        ev: CoreEvent,
-        plat: &dyn Platform,
-        r: Option<&mut Renderer>,
-    ) -> bool {
+    pub fn handle_event(&mut self, ev: CoreEvent, plat: &dyn Platform) -> bool {
+        self.dirty = true;
+        let handled = self.handle_event_inner(ev, plat);
+        if self.painter.is_none() {
+            // No frame will drain these until a GL context is attached.
+            self.events.clear();
+        }
+        handled
+    }
+
+    fn handle_event_inner(&mut self, ev: CoreEvent, plat: &dyn Platform) -> bool {
         match ev {
             CoreEvent::TouchDown { x, y } => {
-                self.touch = Some(TouchState {
-                    last: (x, y),
-                    moved: 0.0,
-                    dragging: false,
+                let p = self.pos(x, y);
+                self.touch(TouchPhase::Start, p);
+                self.events.push(Event::PointerMoved(p));
+                self.events.push(Event::PointerButton {
+                    pos: p,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
                 });
                 true
             }
             CoreEvent::TouchMove { x, y } => {
-                if let Some(t) = self.touch.as_mut() {
-                    let dx = x - t.last.0;
-                    let dy = y - t.last.1;
-                    t.moved += dx.abs() + dy.abs();
-                    if t.moved > 16.0 * self.scale {
-                        t.dragging = true;
-                    }
-                    if t.dragging {
-                        match self.screen {
-                            Screen::List => {
-                                self.list_scroll -= dy;
-                                let max = (self.list_content_h - self.vh).max(0.0);
-                                self.list_scroll = self.list_scroll.clamp(0.0, max);
-                            }
-                            Screen::Editor => {
-                                self.edit_scroll = (self.edit_scroll - dy).max(0.0);
-                            }
-                        }
-                        self.dirty = true;
-                    }
-                    t.last = (x, y);
-                }
+                let p = self.pos(x, y);
+                self.touch(TouchPhase::Move, p);
+                self.events.push(Event::PointerMoved(p));
                 true
             }
             CoreEvent::TouchUp { x, y } => {
-                if let Some(t) = self.touch.take() {
-                    if !t.dragging {
-                        self.handle_tap(x, y, plat, r);
-                    }
-                }
+                let p = self.pos(x, y);
+                self.touch(TouchPhase::End, p);
+                self.events.push(Event::PointerButton {
+                    pos: p,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                });
+                self.events.push(Event::PointerGone);
+                self.tapped = true;
                 true
             }
             CoreEvent::TouchCancel => {
-                self.touch.take();
+                self.touch(TouchPhase::Cancel, Pos2::ZERO);
+                self.events.push(Event::PointerGone);
                 true
             }
-            CoreEvent::Key(k) => self.handle_key(k, plat, r),
+            CoreEvent::Key(k) => self.handle_key(k, plat),
         }
     }
 
-    fn handle_key(&mut self, k: CoreKey, plat: &dyn Platform, r: Option<&mut Renderer>) -> bool {
+    fn handle_key(&mut self, k: CoreKey, plat: &dyn Platform) -> bool {
         if self.screen == Screen::Editor {
             match k {
-                CoreKey::Back => {
-                    self.close_editor(plat);
-                    true
-                }
-                CoreKey::Enter => {
-                    self.insert_char('\n');
-                    true
-                }
-                CoreKey::Backspace => {
-                    self.backspace();
-                    true
-                }
-                CoreKey::Left => {
-                    self.move_cursor(-1);
-                    true
-                }
-                CoreKey::Right => {
-                    self.move_cursor(1);
-                    true
-                }
-                CoreKey::Up => {
-                    self.move_cursor_vertical(-1, r);
-                    true
-                }
-                CoreKey::Down => {
-                    self.move_cursor_vertical(1, r);
-                    true
-                }
-                CoreKey::Char(c) => {
-                    self.insert_char(c);
-                    true
-                }
+                CoreKey::Back => self.close_editor(plat),
+                CoreKey::Char(c) => self.events.push(Event::Text(c.to_string())),
+                CoreKey::Enter => self.push_key(Key::Enter),
+                CoreKey::Backspace => self.push_key(Key::Backspace),
+                CoreKey::Left => self.push_key(Key::ArrowLeft),
+                CoreKey::Right => self.push_key(Key::ArrowRight),
+                CoreKey::Up => self.push_key(Key::ArrowUp),
+                CoreKey::Down => self.push_key(Key::ArrowDown),
             }
+            true
         } else {
             match k {
                 CoreKey::Enter => {
@@ -386,308 +406,395 @@ impl App {
         }
     }
 
-    fn handle_tap(&mut self, x: f32, y: f32, plat: &dyn Platform, r: Option<&mut Renderer>) {
-        self.dirty = true;
-        match self.screen {
-            Screen::List => {
-                if hit(self.hit_add, x, y) {
-                    self.armed_delete = None;
-                    self.open_editor(0, plat);
-                    return;
-                }
-                let dels: Vec<(Rect, usize)> = self.hit_del.clone();
-                for (rect, idx) in &dels {
-                    if in_rect(rect, x, y) {
-                        // Two taps within 2s on ✕ confirms the delete.
-                        match self.armed_delete.take() {
-                            Some((i, t)) if i == *idx && t.elapsed() < Duration::from_secs(2) => {
-                                if let Some(n) = self.notes.get(*idx) {
-                                    self.db.delete(n.id);
-                                }
-                                self.notes = self.db.list();
-                            }
-                            _ => self.armed_delete = Some((*idx, Instant::now())),
-                        }
-                        return;
-                    }
-                }
-                let rows: Vec<(Rect, usize)> = self.hit_rows.clone();
-                for (rect, idx) in &rows {
-                    if in_rect(rect, x, y) {
-                        let id = self.notes.get(*idx).map(|n| n.id);
-                        if let Some(id) = id {
-                            self.armed_delete = None;
-                            self.open_editor(id, plat);
-                        }
-                        return;
-                    }
-                }
-            }
-            Screen::Editor => {
-                if hit(self.hit_back, x, y) {
-                    self.close_editor(plat);
-                    return;
-                }
-                if hit(self.hit_editor, x, y) {
-                    if let Some(r) = r {
-                        self.place_cursor(x, y, r);
-                    }
-                    plat.show_keyboard();
-                }
-            }
-        }
-    }
-
-    fn place_cursor(&mut self, x: f32, y: f32, r: &mut Renderer) {
-        let g = match self.edit_geom {
-            Some(g) => g,
-            None => return,
-        };
-        let chars: Vec<char> = self.buffer.chars().collect();
-        let lines = text::layout_text(&r.fonts, &self.buffer, g.px, g.max_w);
-        let ly = (y - g.y0 + self.edit_scroll).max(0.0);
-        self.cursor = text::hit_to_cursor(&r.fonts, &chars, &lines, x - g.x0, ly, g.line_h, g.px)
-            .min(chars.len());
-        self.after_edit();
-    }
-
-    fn move_cursor_vertical(&mut self, dir: i32, r: Option<&mut Renderer>) {
-        let Some(r) = r else { return };
-        let Some(g) = self.edit_geom else { return };
-        let chars: Vec<char> = self.buffer.chars().collect();
-        let lines = text::layout_text(&r.fonts, &self.buffer, g.px, g.max_w);
-        let (cx, li) = text::cursor_geometry(&r.fonts, &chars, &lines, self.cursor, g.px);
-        let ty = (li as f32 + dir as f32).max(0.0) * g.line_h;
-        self.cursor = text::hit_to_cursor(&r.fonts, &chars, &lines, cx, ty, g.line_h, g.px)
-            .min(chars.len());
-        self.after_edit();
-    }
-
-    /// Advance animations (cursor blink, armed-delete expiry). Call ~10Hz.
+    /// Fire due repaints (cursor blink, scroll momentum, armed-delete expiry).
+    /// Call ~10Hz or faster.
     pub fn tick(&mut self) {
-        if self.screen == Screen::Editor && self.last_blink.elapsed() >= Duration::from_millis(530)
-        {
-            self.blink_on = !self.blink_on;
-            self.last_blink = Instant::now();
-            self.dirty = true;
-        }
-        if let Some((_, t)) = self.armed_delete {
-            if t.elapsed() > Duration::from_secs(2) {
-                self.armed_delete = None;
+        if let Some(t) = self.next_repaint {
+            if Instant::now() >= t {
+                self.next_repaint = None;
                 self.dirty = true;
             }
         }
     }
 
-    // ---- rendering --------------------------------------------------------
+    // ---- frame ------------------------------------------------------------
 
-    pub fn draw(&mut self, r: &mut Renderer) {
+    /// Run one egui frame and paint it into the currently bound framebuffer.
+    pub fn frame(&mut self, plat: &dyn Platform) {
         self.dirty = false;
-        let w = r.w as f32;
-        let h = r.h as f32;
-        if w <= 0.0 || h <= 0.0 {
+        let [w, h] = self.size_px;
+        let Some(max_texture_side) = self.painter.as_ref().map(|p| p.max_texture_side()) else {
+            self.events.clear();
+            return;
+        };
+        if w == 0 || h == 0 {
             return;
         }
-        self.vw = w;
-        self.vh = h;
-        let top = self.content_top;
-        self.scale = (w / 360.0).clamp(0.75, 3.5);
-        r.begin();
-        match self.screen {
-            Screen::List => self.draw_list(r, w, h, top),
-            Screen::Editor => self.draw_editor(r, w, h, top),
+        let ppp = self.ppp;
+        let screen_rect =
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(w as f32 / ppp, h as f32 / ppp));
+        let mut viewports = ViewportIdMap::default();
+        viewports.insert(
+            ViewportId::ROOT,
+            ViewportInfo {
+                native_pixels_per_point: Some(ppp),
+                ..Default::default()
+            },
+        );
+        let raw = RawInput {
+            viewport_id: ViewportId::ROOT,
+            viewports,
+            safe_area_insets: Some(SafeAreaInsets(MarginF32 {
+                left: 0.0,
+                right: 0.0,
+                top: self.content_top / ppp,
+                bottom: self.content_bottom / ppp,
+            })),
+            screen_rect: Some(screen_rect),
+            max_texture_side: Some(max_texture_side),
+            time: Some(self.start.elapsed().as_secs_f64()),
+            events: std::mem::take(&mut self.events),
+            ..Default::default()
+        };
+
+        let ctx = self.ctx.clone();
+        let mut out = ctx.run_ui(raw, |ui| self.ui(ui, plat));
+
+        // Soft keyboard follows egui's "is a text field being edited" signal.
+        // A tap while editing re-shows a keyboard the OS dismissed.
+        let editing = out.platform_output.ime.is_some();
+        let tapped = std::mem::take(&mut self.tapped);
+        if editing {
+            if tapped || !self.keyboard_shown {
+                plat.show_keyboard();
+                self.keyboard_shown = true;
+            }
+        } else if self.keyboard_shown {
+            plat.hide_keyboard();
+            self.keyboard_shown = false;
         }
-        r.finish();
+
+        // Repaint scheduling: egui asks for 0 (animations / multi-pass) or a
+        // delay (cursor blink); Duration::MAX means "idle until input".
+        let delay = out
+            .viewport_output
+            .get(&ViewportId::ROOT)
+            .map(|v| v.repaint_delay)
+            .unwrap_or(Duration::MAX);
+        if delay.is_zero() {
+            self.dirty = true;
+            self.next_repaint = None;
+        } else if delay < Duration::from_secs(3600) {
+            self.next_repaint = Some(Instant::now() + delay);
+        } else {
+            self.next_repaint = None;
+        }
+
+        let primitives = ctx.tessellate(std::mem::take(&mut out.shapes), out.pixels_per_point);
+        let painter = self.painter.as_mut().expect("painter attached");
+        let [r, g, b, _] = SCREEN_BG.to_normalized_gamma_f32();
+        painter.clear([w, h], [r, g, b, 1.0]);
+        painter.paint_and_update_textures(
+            [w, h],
+            out.pixels_per_point,
+            &primitives,
+            &mut out.textures_delta,
+        );
     }
 
-    fn draw_list(&mut self, r: &mut Renderer, w: f32, h: f32, top: f32) {
-        self.hit_rows.clear();
-        self.hit_del.clear();
+    // ---- UI ---------------------------------------------------------------
 
-        let s = self.scale;
-        let header_h = 56.0 * s;
-        let pad = 16.0 * s;
-        let card_m = 12.0 * s;
-        let card_pad = 14.0 * s;
-        let row_h = 78.0 * s;
-        let card_h = row_h - 8.0 * s;
-        let title_px = (16.0 * s).round();
-        let snip_px = (13.0 * s).round();
-        let date_px = (11.0 * s).round();
-        let del_r = 16.0 * s;
-        let side_w = 64.0 * s; // reserved for the delete button
+    fn ui(&mut self, ui: &mut Ui, plat: &dyn Platform) {
+        let ctx = ui.ctx().clone();
+        let full = ctx.viewport_rect();
+        let content = ctx.content_rect();
+        let bg = match self.screen {
+            Screen::List => SCREEN_BG,
+            Screen::Editor => CARD_BG,
+        };
+        ui.painter().rect_filled(full, 0.0, bg);
+        let mut body = ui.new_child(
+            UiBuilder::new()
+                .max_rect(content)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        match self.screen {
+            Screen::List => self.list_ui(&mut body, plat),
+            Screen::Editor => self.editor_ui(&mut body, plat),
+        }
+    }
 
-        // Pre-compute content height and clamp scroll before drawing.
-        self.list_content_h =
-            top + header_h + 12.0 * s + self.notes.len() as f32 * row_h + 16.0 * s;
-        let max_scroll = (self.list_content_h - self.bottom()).max(0.0);
-        self.list_scroll = self.list_scroll.clamp(0.0, max_scroll);
+    /// Header bar: fills `header_h`, returns its rect (caller paints contents).
+    fn header(ui: &mut Ui, header_h: f32) -> Rect {
+        let (header, _) =
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), header_h), Sense::hover());
+        let p = ui.painter();
+        p.rect_filled(header, 0.0, HEADER_BG);
+        p.line_segment(
+            [header.left_bottom(), header.right_bottom()],
+            Stroke::new(1.0, HAIRLINE),
+        );
+        header
+    }
 
-        r.fill_rect(0.0, 0.0, w, h, gl::SCREEN_BG);
-        r.fill_rect(0.0, top, w, header_h, HEADER_BG);
-        r.fill_rect(0.0, top + header_h - 1.0, w, 1.0, HAIRLINE);
-
-        let base = top + header_h / 2.0 + r.fonts.ascent(title_px) / 2.0;
-        r.text_str(pad, base, "Notes", title_px, TEXT_DARK);
+    fn list_ui(&mut self, ui: &mut Ui, plat: &dyn Platform) {
+        let pad = 16.0;
+        let header = Self::header(ui, 56.0);
+        let p = ui.painter();
+        let title = p.text(
+            Pos2::new(header.left() + pad, header.center().y),
+            Align2::LEFT_CENTER,
+            "Notes",
+            FontId::proportional(16.0),
+            TEXT_DARK,
+        );
         let count = match self.notes.len() {
             0 => "no notes".to_string(),
             1 => "1 note".to_string(),
             n => format!("{n} notes"),
         };
-        let tw = r.text_width("Notes", title_px);
-        r.text_str(pad + tw + 12.0 * s, base, &count, date_px, TEXT_GRAY);
+        p.text(
+            Pos2::new(title.right() + 12.0, header.center().y),
+            Align2::LEFT_CENTER,
+            count,
+            FontId::proportional(11.0),
+            TEXT_GRAY,
+        );
 
         // + button (fixed at the right edge)
-        let btn_d = 40.0 * s;
-        let bx = w - pad - btn_d;
-        let by = top + (header_h - btn_d) / 2.0;
-        let (cx, cy) = (bx + btn_d / 2.0, by + btn_d / 2.0);
-        r.fill_round_rect(bx, by, btn_d, btn_d, btn_d * 0.35, ACCENT);
-        let arm = 9.0 * s;
-        r.line(cx - arm, cy, cx + arm, cy, 2.5 * s, CARD_BG);
-        r.line(cx, cy - arm, cx, cy + arm, 2.5 * s, CARD_BG);
-        self.hit_add = Some((bx - 8.0 * s, by - 8.0 * s, btn_d + 16.0 * s, btn_d + 16.0 * s));
+        let btn_d = 40.0;
+        let btn = Rect::from_center_size(
+            Pos2::new(header.right() - pad - btn_d / 2.0, header.center().y),
+            Vec2::splat(btn_d),
+        );
+        let add = ui.interact(btn.expand(8.0), Id::new("add"), Sense::click());
+        let p = ui.painter();
+        p.rect_filled(btn, btn_d * 0.35, ACCENT);
+        let c = btn.center();
+        let arm = 9.0;
+        p.line_segment(
+            [c - Vec2::new(arm, 0.0), c + Vec2::new(arm, 0.0)],
+            Stroke::new(2.5, CARD_BG),
+        );
+        p.line_segment(
+            [c - Vec2::new(0.0, arm), c + Vec2::new(0.0, arm)],
+            Stroke::new(2.5, CARD_BG),
+        );
+        if add.clicked() {
+            self.armed_delete = None;
+            self.open_editor(0, plat);
+            return;
+        }
 
-        let bottom = self.bottom();
-        let mut y = top + header_h + 12.0 * s - self.list_scroll;
-        for (idx, note) in self.notes.iter().enumerate() {
-            if y + card_h > top + header_h && y < bottom {
-                r.fill_round_rect(card_m, y, w - card_m * 2.0, card_h, 10.0 * s, CARD_BG);
+        // Armed delete expires after 2 s without a repaint-triggering input.
+        if let Some((_, t)) = self.armed_delete {
+            let elapsed = t.elapsed();
+            if elapsed > DELETE_ARM_WINDOW {
+                self.armed_delete = None;
+            } else {
+                ui.ctx()
+                    .request_repaint_after(DELETE_ARM_WINDOW - elapsed);
+            }
+        }
 
-                // delete button (right side)
-                let del_cx = w - card_m - 32.0 * s;
-                let del_cy = y + card_h / 2.0;
-                let armed = matches!(self.armed_delete, Some((i, _)) if i == idx);
-                r.fill_circle(del_cx, del_cy, del_r, if armed { DANGER } else { DANGER_BG });
+        let mut scroll = egui::ScrollArea::vertical()
+            .id_salt("list")
+            .auto_shrink(false)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+        if std::mem::take(&mut self.reset_list_scroll) {
+            scroll = scroll.vertical_scroll_offset(0.0);
+        }
+
+        let notes = &self.notes;
+        let armed_delete = self.armed_delete;
+        let mut action: Option<ListAction> = None;
+        scroll.show(ui, |ui| {
+            let view = ui.available_rect_before_wrap();
+            ui.add_space(12.0);
+            let w = ui.available_width();
+            let card_m = 12.0;
+            let card_pad = 14.0;
+            let row_h = 78.0;
+            let card_h = row_h - 8.0;
+            let del_r = 16.0;
+            let side_w = 64.0; // reserved for the delete button
+            let title_px = 16.0;
+
+            for (idx, note) in notes.iter().enumerate() {
+                let (row, _) = ui.allocate_exact_size(Vec2::new(w, row_h), Sense::hover());
+                let card = Rect::from_min_size(
+                    Pos2::new(row.left() + card_m, row.top()),
+                    Vec2::new(w - card_m * 2.0, card_h),
+                );
+                // Delete is registered after the row so it wins the hit test.
+                let row_resp = ui.interact(card, Id::new(("row", note.id)), Sense::click());
+                let del_c = Pos2::new(card.right() - 32.0, card.center().y);
+                let del_hit = Rect::from_center_size(del_c, Vec2::splat((del_r + 10.0) * 2.0));
+                let del_resp = ui.interact(del_hit, Id::new(("del", note.id)), Sense::click());
+                if del_resp.clicked() {
+                    action = Some(ListAction::Delete(idx));
+                } else if row_resp.clicked() {
+                    action = Some(ListAction::Open(idx));
+                }
+                if !ui.is_rect_visible(card) {
+                    continue;
+                }
+
+                let p = ui.painter();
+                p.rect_filled(card, 10.0, CARD_BG);
+
+                let armed = matches!(armed_delete, Some((i, _)) if i == idx);
+                p.circle_filled(del_c, del_r, if armed { DANGER } else { DANGER_BG });
                 let k = del_r * 0.45;
                 let cross = if armed { CARD_BG } else { DANGER };
-                r.line(del_cx - k, del_cy - k, del_cx + k, del_cy + k, 2.0 * s, cross);
-                r.line(del_cx - k, del_cy + k, del_cx + k, del_cy - k, 2.0 * s, cross);
+                p.line_segment(
+                    [del_c + Vec2::new(-k, -k), del_c + Vec2::new(k, k)],
+                    Stroke::new(2.0, cross),
+                );
+                p.line_segment(
+                    [del_c + Vec2::new(-k, k), del_c + Vec2::new(k, -k)],
+                    Stroke::new(2.0, cross),
+                );
 
-                let text_w = w - card_m * 2.0 - card_pad * 2.0 - side_w;
-                let tx = card_m + card_pad;
-                r.text_str_clipped(
-                    tx,
-                    y + card_pad + r.fonts.ascent(title_px),
+                let text_w = card.width() - card_pad * 2.0 - side_w;
+                let tx = card.left() + card_pad;
+                let clip = Rect::from_min_size(
+                    Pos2::new(tx, card.top()),
+                    Vec2::new(text_w, card_h),
+                );
+                let pc = p.with_clip_rect(clip);
+                pc.text(
+                    Pos2::new(tx, card.top() + card_pad),
+                    Align2::LEFT_TOP,
                     notes::title_of(&note.body),
-                    text_w,
-                    title_px,
+                    FontId::proportional(title_px),
                     TEXT_DARK,
                 );
                 if let Some(sn) = notes::snippet_of(&note.body) {
-                    r.text_str_clipped(
-                        tx,
-                        y + card_pad + r.fonts.ascent(title_px) + title_px * 1.45,
+                    pc.text(
+                        Pos2::new(tx, card.top() + card_pad + title_px * 1.45),
+                        Align2::LEFT_TOP,
                         sn,
-                        text_w,
-                        snip_px,
+                        FontId::proportional(13.0),
                         TEXT_GRAY,
                     );
                 }
-                let date = util::format_note_date(note.updated);
-                let dw = r.text_width(&date, date_px);
-                r.text_str(
-                    card_m + card_pad + text_w - dw,
-                    y + card_h - card_pad - r.fonts.ascent(date_px),
-                    &date,
-                    date_px,
+                p.text(
+                    Pos2::new(tx + text_w, card.bottom() - card_pad),
+                    Align2::RIGHT_BOTTOM,
+                    util::format_note_date(note.updated),
+                    FontId::proportional(11.0),
                     PLACEHOLDER,
                 );
-
-                self.hit_rows.push(((card_m, y, w - card_m * 2.0, card_h), idx));
-                let hit_d = del_r + 10.0 * s;
-                self.hit_del.push((
-                    (del_cx - hit_d, del_cy - hit_d, hit_d * 2.0, hit_d * 2.0),
-                    idx,
-                ));
             }
-            y += row_h;
-        }
+            ui.add_space(16.0);
 
-        if self.notes.is_empty() {
-            let t1 = "No notes yet";
-            let t2 = "Tap + to write one";
-            let p1 = (18.0 * s).round();
-            let p2 = (14.0 * s).round();
-            let mid = top + (bottom - top) * 0.4;
-            let w1 = r.text_width(t1, p1);
-            let w2 = r.text_width(t2, p2);
-            r.text_str((w - w1) / 2.0, mid, t1, p1, TEXT_GRAY);
-            r.text_str((w - w2) / 2.0, mid + p1 * 1.4, t2, p2, PLACEHOLDER);
+            if notes.is_empty() {
+                let mid = view.top() + view.height() * 0.4;
+                let p = ui.painter();
+                let t1 = p.text(
+                    Pos2::new(view.center().x, mid),
+                    Align2::CENTER_TOP,
+                    "No notes yet",
+                    FontId::proportional(18.0),
+                    TEXT_GRAY,
+                );
+                p.text(
+                    Pos2::new(view.center().x, t1.bottom() + 6.0),
+                    Align2::CENTER_TOP,
+                    "Tap + to write one",
+                    FontId::proportional(14.0),
+                    PLACEHOLDER,
+                );
+            }
+        });
+
+        match action {
+            Some(ListAction::Open(idx)) => {
+                if let Some(id) = self.notes.get(idx).map(|n| n.id) {
+                    self.armed_delete = None;
+                    self.open_editor(id, plat);
+                }
+            }
+            Some(ListAction::Delete(idx)) => {
+                // Two taps within 2 s on ✕ confirms the delete.
+                match self.armed_delete.take() {
+                    Some((i, t)) if i == idx && t.elapsed() < DELETE_ARM_WINDOW => {
+                        if let Some(n) = self.notes.get(idx) {
+                            self.db.delete(n.id);
+                        }
+                        self.notes = self.db.list();
+                    }
+                    _ => self.armed_delete = Some((idx, Instant::now())),
+                }
+            }
+            None => {}
         }
     }
 
-    fn draw_editor(&mut self, r: &mut Renderer, w: f32, h: f32, top: f32) {
-        let s = self.scale;
-        let header_h = 56.0 * s;
-        let pad = 16.0 * s;
-        let title_px = (17.0 * s).round();
-
-        r.fill_rect(0.0, 0.0, w, h, CARD_BG);
-        r.fill_rect(0.0, top, w, header_h, HEADER_BG);
-        r.fill_rect(0.0, top + header_h - 1.0, w, 1.0, HAIRLINE);
-
+    fn editor_ui(&mut self, ui: &mut Ui, plat: &dyn Platform) {
+        let header = Self::header(ui, 56.0);
+        let back = ui.interact(
+            Rect::from_min_size(header.left_top(), Vec2::new(52.0, header.height())),
+            Id::new("back"),
+            Sense::click(),
+        );
+        let p = ui.painter();
         // back chevron
-        let cx = 28.0 * s;
-        let cy = top + header_h / 2.0;
-        r.line(cx - 6.0 * s, cy - 10.0 * s, cx - 12.0 * s, cy, 3.0 * s, TEXT_DARK);
-        r.line(cx - 12.0 * s, cy, cx - 6.0 * s, cy + 10.0 * s, 3.0 * s, TEXT_DARK);
+        let c = Pos2::new(header.left() + 28.0, header.center().y);
+        let stroke = Stroke::new(3.0, TEXT_DARK);
+        p.line_segment([c + Vec2::new(-6.0, -10.0), c + Vec2::new(-12.0, 0.0)], stroke);
+        p.line_segment([c + Vec2::new(-12.0, 0.0), c + Vec2::new(-6.0, 10.0)], stroke);
         let title = if self.edit_id == 0 { "New note" } else { "Edit note" };
-        r.text_str(56.0 * s, cy + r.fonts.ascent(title_px) / 2.0, title, title_px, TEXT_DARK);
-        self.hit_back = Some((0.0, top, 52.0 * s, header_h));
+        p.text(
+            Pos2::new(header.left() + 56.0, header.center().y),
+            Align2::LEFT_CENTER,
+            title,
+            FontId::proportional(17.0),
+            TEXT_DARK,
+        );
+        if back.clicked() {
+            self.close_editor(plat);
+            return;
+        }
 
-        // body
-        let px = (17.0 * s).round();
-        let line_h = r.fonts.line_height(px);
-        let x0 = pad;
-        let y0 = top + header_h + 12.0 * s;
-        let max_w = w - pad * 2.0;
-        let chars: Vec<char> = self.buffer.chars().collect();
-        let lines = text::layout_text(&r.fonts, &self.buffer, px, max_w);
-        let content_h = lines.len() as f32 * line_h;
-        let bottom = self.bottom();
-        let area_h = (bottom - y0).max(line_h);
-
-        // keep cursor on screen
-        let (cx_off, cli) = text::cursor_geometry(&r.fonts, &chars, &lines, self.cursor, px);
-        let cur_top = y0 + cli as f32 * line_h - self.edit_scroll;
-        let cur_bottom = cur_top + line_h;
-        if cur_bottom > bottom {
-            self.edit_scroll += cur_bottom - bottom;
+        let id = Id::new(EDITOR_ID);
+        if std::mem::take(&mut self.focus_editor) {
+            // The widget id is shared by every note, so replace the stored
+            // cursor/selection with "caret at the end of this note".
+            let mut st = egui::text_edit::TextEditState::default();
+            let end = egui::text::CCursor::new(self.buffer.chars().count());
+            st.cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(end)));
+            st.store(ui.ctx(), id);
+            ui.memory_mut(|m| m.request_focus(id));
         }
-        if cur_top < y0 {
-            self.edit_scroll -= y0 - cur_top;
-        }
-        self.edit_scroll = self
-            .edit_scroll
-            .clamp(0.0, (content_h - area_h + line_h).max(0.0));
-
-        self.edit_geom = Some(EditorGeom {
-            x0,
-            y0,
-            max_w,
-            line_h,
-            px,
-        });
-
-        if chars.is_empty() {
-            r.text_str(x0, y0 + r.fonts.ascent(px), "Start typing...", px, PLACEHOLDER);
-        }
-        for (li, line) in lines.iter().enumerate() {
-            let ly = y0 + li as f32 * line_h - self.edit_scroll;
-            if ly + line_h < y0 {
-                continue;
-            }
-            if ly > bottom {
-                break;
-            }
-            let baseline = ly + r.fonts.ascent(px);
-            r.text_run(x0, baseline, &chars, line.start, line.end, px, TEXT_DARK);
-        }
-        if self.blink_on {
-            let cy0 = y0 + cli as f32 * line_h - self.edit_scroll;
-            r.fill_rect(x0 + cx_off, cy0 + line_h * 0.12, 2.0 * s, line_h * 0.76, ACCENT);
-        }
-        self.hit_editor = Some((0.0, top + header_h, w, bottom - top - header_h));
+        let body_h = ui.available_height();
+        egui::ScrollArea::vertical()
+            .id_salt("editor")
+            .auto_shrink(false)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                ui.add_space(12.0);
+                // The field fills the whole body so a tap anywhere below the
+                // header lands on it; TextEdit scrolls its cursor into view.
+                let min = Vec2::new(ui.available_width(), (body_h - 12.0).max(0.0));
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.buffer)
+                        .id(id)
+                        .frame(egui::Frame::NONE.inner_margin(egui::Margin {
+                            left: 16,
+                            right: 16,
+                            top: 0,
+                            bottom: 0,
+                        }))
+                        .desired_width(f32::INFINITY)
+                        .min_size(min)
+                        .font(FontId::proportional(17.0))
+                        .text_color(TEXT_DARK)
+                        .hint_text("Start typing...")
+                        .lock_focus(true),
+                );
+            });
     }
 }
