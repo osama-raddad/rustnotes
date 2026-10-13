@@ -236,3 +236,39 @@ as a product target (desktop is a dev loop), and accessibility trees
 (desktop-only in this stack: accesskit_winit has no iOS adapter, and on
 Android eframe refuses the accesskit feature under NativeActivity —
 GameActivity would unlock it, the same decision as IME).
+
+## Addendum: the seam PRs, as built (2026-10-13)
+
+Sequence steps 1 and 2 landed on `feat/framework-seam` (`d47bb27`) and
+`feat/framework-second-consumer` (`bb19215`, stacked). What building them
+found that the record above didn't predict:
+
+- The trait carries four identity consts — name, desktop data dir,
+  Android fallback dir, logcat tag — not the audit's name/data-dir pair:
+  the log tag was a specific the Q2 list missed. iOS `$HOME/Documents`
+  stayed host-side: platform convention, not app identity. And the impl
+  for `rustnotes_core::App` lives in the host crate because the
+  dependency arrow forces it there (core cannot name a host trait);
+  `rustnotes-core` shipped unchanged.
+- The iOS `HOST_PTR` thread-local cannot hold `*mut dyn App` — a trait
+  with associated consts is not dyn-compatible. It stores a thin
+  `*mut ()` to the host's `app` field, re-typed to `*mut A` inside the
+  save-hook closure, which is monomorphized over that same `A` (the
+  process hosts exactly one). The pointer's safety argument gained these
+  clauses; none were lost.
+- The nine calls held exactly. The entry points around them needed
+  load-bearing turbofishes — `A` appears only in consts, so inference
+  cannot recover it — an ergonomic debt to settle at extraction time
+  (marker type vs an `AppSpec` value).
+- The cdylib's `android_main` is app identity, not framework code. It
+  compiles behind a default-on `android-entry` feature; a consumer must
+  opt out or the two `#[no_mangle]` symbols collide at link — invisible
+  to `cargo check`, and re-armed by feature unification in multi-package
+  Android builds (NDK lld errors; macOS ld64 drops the duplicate
+  silently). `just check-links` links both apps' cdylibs as the guard.
+- `hello-mobile` — no `rustnotes-core` dependency, checked in all three
+  shapes by `just check` — answers Q2 for structure. It does not answer
+  packaging: the justfile's Android/iOS recipes carry Rust Notes'
+  package identity, the next hard-coded surface (the endpoint CLI's
+  problem). Q3 stays open — a hello screen is not "a real second
+  consumer" for `layout/`.
