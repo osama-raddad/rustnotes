@@ -149,7 +149,7 @@ What each class means for the two apps:
 | Expanded and `two_pane_ok` (tablets, desktop) | list–detail: list pane left, editor right, no navigation | same, with a max content width |
 | Expanded but compact height (phones in landscape) | single pane, editor with a max line width | settings above content, scrolled |
 
-The list–detail row is the one visible payoff; it is Phase 3 and optional.
+The list–detail row is the one visible payoff; it is Phase 3, and in scope.
 
 ### 3. Scaffold
 
@@ -208,7 +208,7 @@ scaffold:
 pub struct Metrics {
     pub space: [f32; 5],        // 4, 8, 12, 16, 24
     pub bar_height: f32,        // 56
-    pub touch_target: f32,      // 44 (iOS HIG) — 48 on Android if desired
+    pub touch_target: f32,      // 48 (Material minimum; also satisfies the iOS HIG 44)
     pub corner: f32,            // 10
     pub text: TextScale,        // caption 11, body 14, body_large 16, title 17, headline 22
     pub max_content_width: f32, // 640, used in Medium/Expanded bodies
@@ -250,24 +250,26 @@ inset: with the simulator's hardware-keyboard toggle switched off by hand,
 the soft keyboard must appear and the caret must stay visible above it.
 (Android proves nothing here: `adjustResize` shrinks the surface itself.)
 
-**Phase 3 — size classes and list–detail (optional).** Rust Notes renders
+**Phase 3 — size classes and list–detail.** Rust Notes renders
 list–detail when `two_pane_ok()`; the template replaces its orientation
 branch with `WindowClass`. Acceptance: the iPad simulator shows list and
 editor side by side in both orientations; the iPhone 17 Pro in landscape
 (874 x 402 pt) still shows one pane.
 
-## Open questions
+## Decisions (resolved 2026-10-13)
 
-- **Is Expanded in scope at all?** Rust Notes is a phone demo; list–detail
-  is the only reason to carry size classes. If tablets are not a target,
-  stop after Phase 2 and keep `SizeClass` as a two-line enum for the
-  template.
-- **Touch target: 44 or 48 points?** iOS HIG says 44, Material says 48.
-  One number for both is simpler; 48 is the safer default.
-- **Android density source.** `config().density()` is the configuration
-  density, which follows the user's "display size" setting. That is the
-  desired behaviour for dp parity, but it means the UI can scale by the
-  user's choice. Confirm that is wanted.
+- **Tablets are in scope.** All three phases are planned; Phase 3 ships
+  list–detail in Rust Notes and the `WindowClass` switch in the template,
+  verified on an iPad simulator in both orientations. Rust Notes gains a
+  tablet target with this plan.
+- **Touch target is 48 points** on both platforms. Material's minimum,
+  which also satisfies the iOS HIG's 44. The template's `TOUCH_TARGET`
+  constant moves from 44 to 48 when it adopts `Metrics`.
+- **Android follows the system "Display size" setting.** Density comes
+  from `config().density()`, so the UI scales with the user's
+  accessibility preference exactly as native apps do. Consequence for
+  testing: screenshots on the emulator are only comparable at the default
+  display size.
 
 ## Not covered, on purpose
 
