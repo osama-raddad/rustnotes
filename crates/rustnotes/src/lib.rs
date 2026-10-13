@@ -5,13 +5,15 @@
 //!
 //! - Android (`android.rs`): `android_main`, window insets, night mode,
 //!   font scale, reduce motion and zone offset through JNI, and leaving
-//!   the app on back at the root. Keyboard input is winit's under
-//!   NativeActivity — with real limits: physical keycodes, basic-latin
-//!   text and combining accents only. There is no IME composing or
-//!   commit-text path on this backend, so CJK input, emoji panels and
-//!   autocorrect never reach the app. The real fix is eframe's
-//!   `android-game-activity` feature (GameActivity supports commit text
-//!   through winit); until that switch, the limitation is accepted.
+//!   the app on back at the root. Keyboard input is winit's under the
+//!   default NativeActivity backend — with real limits: physical
+//!   keycodes, basic-latin text and combining accents only. There is no
+//!   IME composing or commit-text path on that backend, so CJK input,
+//!   emoji panels and autocorrect never reach the app. The fix is
+//!   shipped as an opt-in: the `android-game-activity` feature swaps the
+//!   backend for GameActivity, whose GameTextInput gives winit commit
+//!   text (see README "Android: the GameActivity opt-in"); NativeActivity
+//!   stays the default because its keycode path works today.
 //! - iOS (`ios.rs`): the system font through CoreText, safe-area and
 //!   keyboard insets, appearance and Dynamic Type, background saving,
 //!   wgpu limits that the iOS Metal devices meet.

@@ -4,6 +4,19 @@
 //! crate's own Rust Notes `android_main` compiles behind the
 //! `android-entry` feature (default-on; see Cargo.toml for why a second
 //! consumer must opt out).
+//!
+//! The activity backend is a build flavor, not code: the default is
+//! NativeActivity (`android-native-activity` feature, default-on — the OS
+//! ships the class, the APK stays Java-free), with GameActivity as a
+//! documented opt-in (`android-game-activity` + `--no-default-features`;
+//! see Cargo.toml for the swap rule). The glue here is backend-blind on
+//! purpose: android-activity presents the same `AndroidApp` API (same
+//! `android_main` re-entry contract, same `run_on_java_main_thread`,
+//! same borrowed activity pointer) under both, so nothing in this module
+//! branches on the choice. What changes is packaging (GameActivity's APK
+//! gains a dexed androidx.games:games-activity) and input (GameTextInput
+//! gives the app a real `InputConnection`, i.e. IME composing; see the
+//! README's "Android: the GameActivity opt-in" section).
 
 use android_activity::AndroidApp;
 use std::cell::Cell;
@@ -11,7 +24,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// NativeActivity loads `librustnotes.so` and calls this on its own thread.
+/// The activity backend loads `librustnotes.so` (NativeActivity, the
+/// default, per the OS; GameActivity via the opt-in, per the
+/// `android.app.lib_name` meta-data both glues read) and calls this on
+/// the activity's own dedicated thread.
 ///
 /// Feature-gated because the cdylib's `android_main` is app identity, not
 /// framework code: a second consumer linking this crate as a dependency
@@ -68,9 +84,10 @@ pub fn start<A: crate::App>(app: AndroidApp) {
     }
 }
 
-/// A Mutex rather than a OnceLock: NativeActivity can call `android_main`
-/// again in the same process after the activity is recreated, and the new
-/// handle must win.
+/// A Mutex rather than a OnceLock: the activity backend — either one —
+/// ties `android_main` to the activity lifecycle, not the process, so the
+/// activity being recreated calls `android_main` again in the same
+/// process and the new handle must win.
 static APP: Mutex<Option<AndroidApp>> = Mutex::new(None);
 
 fn set_app(app: AndroidApp) {

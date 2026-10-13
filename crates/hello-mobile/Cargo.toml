@@ -16,6 +16,24 @@ crate-type = ["cdylib", "rlib"]
 name = "hello-mobile"
 path = "src/main.rs"
 
+# The backend swap, mirroring rustnotes' (see its Cargo.toml for the full
+# rationale — android-activity compile_error!s on both-on and on neither).
+# This crate must carry the choice itself: it declares android-activity
+# for its own `android_main` signature AND consumes rustnotes with
+# `default-features = false`, so the host's `android-native-activity`
+# default never leaks in — opt into GameActivity here
+# (`--features android-game-activity`) exactly as in the host.
+[features]
+default = ["android-native-activity"]
+android-native-activity = [
+    "rustnotes/android-native-activity",
+    "android-activity/native-activity",
+]
+android-game-activity = [
+    "rustnotes/android-game-activity",
+    "android-activity/game-activity",
+]
+
 [dependencies]
 # THE point of this crate: the host, consumed as a framework. Default
 # features are off so this crate's own `android_main` (src/lib.rs) is the
@@ -35,6 +53,8 @@ eframe.workspace = true
 env_logger = "0.11"
 
 # The lib's `android_main` signature; winit gets the AndroidApp through
-# the host's `start`, which sets `options.android_app` itself.
+# the host's `start`, which sets `options.android_app` itself. Backend-free
+# like the host's android-target deps: the activity class is chosen by the
+# features above.
 [target.'cfg(target_os = "android")'.dependencies]
-android-activity = { version = "0.6", features = ["native-activity"] }
+android-activity = "0.6"
