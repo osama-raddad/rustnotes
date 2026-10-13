@@ -489,9 +489,13 @@ ios-sign app='rustnotes':
             rest=${appid#*.} # strip team id: TEAMID.bundle.id → bundle.id (TEAMID.* → *)
             [ "$rest" = "$ios_bundle" ] || [ "$rest" = "*" ] || continue
             exp=$(plutil -extract ExpirationDate raw -o - "$tmp/profile.plist" 2>/dev/null) || continue
-            # plutil prints "YYYY-MM-DD HH:MM:SS +0000" — normalize both
-            # sides to comparable UTC integers (a plain string compare
-            # pits ' ' against 'T' at position 10).
+            # plutil prints ExpirationDate as ISO-8601 ("YYYY-MM-DDTHH:MM:SSZ")
+            # on newer macOS and "YYYY-MM-DD HH:MM:SS +0000" on older —
+            # normalize to the latter first, then both sides to comparable
+            # UTC integers (a plain string compare pits ' ' against 'T' at
+            # position 10).
+            exp=${exp/T/ }
+            exp=${exp/Z/ +0000}
             exp=$(date -ju -f '%Y-%m-%d %H:%M:%S %z' "$exp" +%Y%m%d%H%M%S) || continue
             [[ "$exp" > "$now" ]] || continue
             profile="$p"
