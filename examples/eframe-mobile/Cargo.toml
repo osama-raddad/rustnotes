@@ -1,0 +1,52 @@
+[package]
+name = "mobile_app"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95" # egui 0.36 floor
+
+# One crate, two shapes: Android loads a cdylib through NativeActivity,
+# iOS/desktop run the binary in src/main.rs which links the rlib.
+[lib]
+name = "mobile_app"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "mobile_app"
+path = "src/main.rs"
+
+# Standalone: not a member of the rustnotes workspace above it.
+[workspace]
+
+[dependencies]
+# eframe's default feature set includes `accesskit`, which refuses to build
+# with NativeActivity on Android, so the features are spelled out instead.
+eframe = { version = "0.36", default-features = false, features = [
+    "default_fonts", # bundled Latin fonts; Noto fallbacks are added in fonts.rs
+    "persistence",   # remember app state between launches
+] }
+egui = "0.36"
+rust-i18n = "4"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+
+# Renderer per platform. glow (OpenGL ES 3) runs on every Android GPU, but
+# eframe's glow path uses glutin, which has no iOS backend; iOS gets wgpu
+# on Metal instead. Desktop uses glow for parity with Android.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["glow"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["android-native-activity"] }
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.14"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+env_logger = "0.11"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

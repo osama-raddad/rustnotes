@@ -1,0 +1,4 @@
+# egui 0.36 needs rustc >= 1.95.
+[toolchain]
+channel = "1.99.0"
+targets = ["aarch64-linux-android", "aarch64-apple-ios", "aarch64-apple-ios-sim"]
