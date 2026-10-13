@@ -11,11 +11,13 @@ apk       := 'build/rustnotes.apk'
 ios_app   := 'build/ios/Rust Notes.app'
 ios_id    := 'com.osamaraddad.rustnotes.ios'
 
-# NDK toolchain on PATH (xbuild's cc-rs resolves llvm-ar by name) and C env
-# for bundled SQLite (rusqlite) in cargo builds
+# NDK toolchain on PATH (xbuild's cc-rs resolves llvm-ar by name), C env for
+# bundled SQLite (rusqlite) in cargo builds, and the Android linker — exported
+# so .cargo/config.toml stays free of absolute machine paths
 export PATH := toolchain + ':' + env_var('PATH')
 export CC_aarch64_linux_android := toolchain + '/aarch64-linux-android24-clang'
 export AR_aarch64_linux_android := toolchain + '/llvm-ar'
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER := toolchain + '/aarch64-linux-android24-clang'
 
 default:
     @just --list
@@ -234,3 +236,17 @@ check:
     cargo check -p rustnotes-core
     cargo check -p rustnotes --lib --target aarch64-linux-android
     cargo check -p rustnotes --bin rustnotes --target aarch64-apple-ios-sim
+
+# Format every crate (what `just lint` enforces)
+fmt:
+    cargo fmt --all
+
+# Unit tests for the core crate (the host crate is platform glue — no tests)
+test:
+    cargo test -p rustnotes-core
+
+# Format check, then clippy over both crates on the host feature set (the
+# Android/iOS glue is additionally type-checked by `just check`)
+lint:
+    cargo fmt --all -- --check
+    cargo clippy -p rustnotes-core -p rustnotes

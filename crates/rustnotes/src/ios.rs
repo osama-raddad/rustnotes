@@ -6,7 +6,9 @@ use objc2::runtime::AnyObject;
 use objc2::{class, define_class, msg_send, sel, AnyThread};
 use objc2_core_foundation::CGRect;
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObject, NSString};
-use objc2_ui_kit::{UIEdgeInsets, UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification};
+use objc2_ui_kit::{
+    UIEdgeInsets, UIKeyboardFrameEndUserInfoKey, UIKeyboardWillChangeFrameNotification,
+};
 use std::cell::{Cell, RefCell};
 
 /// The system UI font file, resolved through CoreText. iOS devices have no
@@ -150,7 +152,11 @@ pub(crate) fn raw_input_hook(ctx: &egui::Context, raw: &mut egui::RawInput) {
         TRAITS.with(|t| t.set(traits));
     }
     let (dark, scale) = TRAITS.with(Cell::get);
-    let theme = if dark { egui::Theme::Dark } else { egui::Theme::Light };
+    let theme = if dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    };
     if ctx.options(|o| o.fallback_theme) != theme {
         ctx.options_mut(|o| o.fallback_theme = theme);
     }

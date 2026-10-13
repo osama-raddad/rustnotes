@@ -72,7 +72,11 @@ impl<R: Clone> Nav<R> {
             back,
             push: true,
             q: 0.0,
-            anim: Some(Anim { from: 0.0, to: 1.0, t0: now }),
+            anim: Some(Anim {
+                from: 0.0,
+                to: 1.0,
+                t0: now,
+            }),
             dragging: false,
         });
     }
@@ -89,7 +93,11 @@ impl<R: Clone> Nav<R> {
             back: revealed,
             push: false,
             q: 0.0,
-            anim: Some(Anim { from: 0.0, to: 1.0, t0: now }),
+            anim: Some(Anim {
+                from: 0.0,
+                to: 1.0,
+                t0: now,
+            }),
             dragging: false,
         });
         true
@@ -141,10 +149,18 @@ impl<R: Clone> Nav<R> {
         t.dragging = false;
         let from = t.q;
         if commit {
-            t.anim = Some(Anim { from, to: 1.0, t0: now });
+            t.anim = Some(Anim {
+                from,
+                to: 1.0,
+                t0: now,
+            });
             self.stack.pop();
         } else {
-            t.anim = Some(Anim { from, to: 0.0, t0: now });
+            t.anim = Some(Anim {
+                from,
+                to: 0.0,
+                t0: now,
+            });
         }
     }
 

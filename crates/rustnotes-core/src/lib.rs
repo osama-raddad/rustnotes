@@ -29,10 +29,10 @@ use std::time::{Duration, Instant};
 /// device has no readable font at these paths (the simulator masks it,
 /// because its reads resolve against the macOS host file system).
 const FONT_CANDIDATES: &[&str] = &[
-    "/system/fonts/Roboto-Regular.ttf",    // Android
-    "/system/fonts/NotoSans-Regular.ttf",  // Android fallback
-    "/System/Library/Fonts/SFNS.ttf",      // macOS desktop, iOS simulator
-    "/System/Library/Fonts/Geneva.ttf",    // macOS fallback
+    "/system/fonts/Roboto-Regular.ttf",                // Android
+    "/system/fonts/NotoSans-Regular.ttf",              // Android fallback
+    "/System/Library/Fonts/SFNS.ttf",                  // macOS desktop, iOS simulator
+    "/System/Library/Fonts/Geneva.ttf",                // macOS fallback
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", // Linux desktop
 ];
 
@@ -386,8 +386,8 @@ impl App {
                                 e.dragging = self.nav.begin_drag();
                             }
                             if e.dragging {
-                                e.vel = (pos.x - e.last_x)
-                                    / ((self.time - e.last_t) as f32).max(1e-3);
+                                e.vel =
+                                    (pos.x - e.last_x) / ((self.time - e.last_t) as f32).max(1e-3);
                                 self.nav.drag_to(dx / width);
                             }
                             e.last_x = pos.x;
@@ -468,7 +468,10 @@ mod tests {
     #[test]
     fn font_fallback_reports_last_error_when_all_missing() {
         let err = load_fonts_from(&["/nonexistent/a.ttf", "/nonexistent/b.ttf"]).unwrap_err();
-        assert!(err.contains("b.ttf"), "error should name the last candidate");
+        assert!(
+            err.contains("b.ttf"),
+            "error should name the last candidate"
+        );
     }
 
     /// A host-resolved font (CoreText on iOS) wins over the candidate lookup.
@@ -517,7 +520,10 @@ mod tests {
         assert!(app.screen() == Screen::Editor);
 
         let mut f = frame(
-            vec![touch(TouchPhase::Start, 5.0), Event::PointerMoved(egui::pos2(5.0, 300.0))],
+            vec![
+                touch(TouchPhase::Start, 5.0),
+                Event::PointerMoved(egui::pos2(5.0, 300.0)),
+            ],
             1.0,
         );
         app.filter_input(&mut f);
@@ -528,7 +534,10 @@ mod tests {
         let mut f = frame(vec![touch(TouchPhase::End, 250.0), Event::PointerGone], 1.3);
         app.filter_input(&mut f);
         assert!(f.events.is_empty());
-        assert!(app.screen() == Screen::List, "past 35% of the width commits");
+        assert!(
+            app.screen() == Screen::List,
+            "past 35% of the width commits"
+        );
     }
 
     /// A touch that starts in the edge zone but never moves is a tap.

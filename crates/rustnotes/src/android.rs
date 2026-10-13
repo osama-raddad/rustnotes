@@ -85,7 +85,11 @@ pub(crate) fn raw_input_hook(ctx: &egui::Context, raw: &mut egui::RawInput) {
         // winit's Window::theme() is None on Android, and android-activity's
         // NDK configuration is not refreshed on configuration changes under
         // winit, so night mode comes from the same JNI report.
-        let t = if r.night { egui::Theme::Dark } else { egui::Theme::Light };
+        let t = if r.night {
+            egui::Theme::Dark
+        } else {
+            egui::Theme::Light
+        };
         if ctx.options(|o| o.fallback_theme) != t {
             log::info!("night mode -> {t:?}");
             ctx.options_mut(|o| o.fallback_theme = t);
@@ -282,10 +286,20 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
             let modern = (|| -> jni::errors::Result<[i32; 4]> {
                 let types = env.find_class(jni::jni_str!("android/view/WindowInsets$Type"))?;
                 let bars = env
-                    .call_static_method(&types, jni::jni_str!("systemBars"), jni::jni_sig!("()I"), &[])?
+                    .call_static_method(
+                        &types,
+                        jni::jni_str!("systemBars"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )?
                     .i()?;
                 let cutout = env
-                    .call_static_method(&types, jni::jni_str!("displayCutout"), jni::jni_sig!("()I"), &[])?
+                    .call_static_method(
+                        &types,
+                        jni::jni_str!("displayCutout"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )?
                     .i()?;
                 let ime = env
                     .call_static_method(&types, jni::jni_str!("ime"), jni::jni_sig!("()I"), &[])?
@@ -306,11 +320,21 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
                         &[jni::JValue::from(ime)],
                     )?
                     .l()?;
-                let left = env.get_field(&sys, jni::jni_str!("left"), jni::jni_sig!("I"))?.i()?;
-                let top = env.get_field(&sys, jni::jni_str!("top"), jni::jni_sig!("I"))?.i()?;
-                let right = env.get_field(&sys, jni::jni_str!("right"), jni::jni_sig!("I"))?.i()?;
-                let bottom = env.get_field(&sys, jni::jni_str!("bottom"), jni::jni_sig!("I"))?.i()?;
-                let kb_bottom = env.get_field(&kb, jni::jni_str!("bottom"), jni::jni_sig!("I"))?.i()?;
+                let left = env
+                    .get_field(&sys, jni::jni_str!("left"), jni::jni_sig!("I"))?
+                    .i()?;
+                let top = env
+                    .get_field(&sys, jni::jni_str!("top"), jni::jni_sig!("I"))?
+                    .i()?;
+                let right = env
+                    .get_field(&sys, jni::jni_str!("right"), jni::jni_sig!("I"))?
+                    .i()?;
+                let bottom = env
+                    .get_field(&sys, jni::jni_str!("bottom"), jni::jni_sig!("I"))?
+                    .i()?;
+                let kb_bottom = env
+                    .get_field(&kb, jni::jni_str!("bottom"), jni::jni_sig!("I"))?
+                    .i()?;
                 Ok([left, top, right, bottom.max(kb_bottom)])
             })();
             let [left, top, right, bottom] = match modern {
@@ -319,14 +343,34 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
                     // API < 30: WindowInsets$Type does not exist.
                     env.exception_clear();
                     [
-                        env.call_method(&insets, jni::jni_str!("getSystemWindowInsetLeft"), jni::jni_sig!("()I"), &[])?
-                            .i()?,
-                        env.call_method(&insets, jni::jni_str!("getSystemWindowInsetTop"), jni::jni_sig!("()I"), &[])?
-                            .i()?,
-                        env.call_method(&insets, jni::jni_str!("getSystemWindowInsetRight"), jni::jni_sig!("()I"), &[])?
-                            .i()?,
-                        env.call_method(&insets, jni::jni_str!("getSystemWindowInsetBottom"), jni::jni_sig!("()I"), &[])?
-                            .i()?,
+                        env.call_method(
+                            &insets,
+                            jni::jni_str!("getSystemWindowInsetLeft"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )?
+                        .i()?,
+                        env.call_method(
+                            &insets,
+                            jni::jni_str!("getSystemWindowInsetTop"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )?
+                        .i()?,
+                        env.call_method(
+                            &insets,
+                            jni::jni_str!("getSystemWindowInsetRight"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )?
+                        .i()?,
+                        env.call_method(
+                            &insets,
+                            jni::jni_str!("getSystemWindowInsetBottom"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )?
+                        .i()?,
                     ]
                 }
             };
@@ -357,7 +401,12 @@ pub(crate) fn finish_activity() {
                 jni::objects::JObject::from_raw(env, app2.activity_as_ptr() as jni::sys::jobject)
             };
             let r = env
-                .call_method(&activity, jni::jni_str!("finish"), jni::jni_sig!("()V"), &[])
+                .call_method(
+                    &activity,
+                    jni::jni_str!("finish"),
+                    jni::jni_sig!("()V"),
+                    &[],
+                )
                 .map(|_| ());
             std::mem::forget(activity);
             r

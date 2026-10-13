@@ -210,11 +210,16 @@ impl App {
                 );
 
                 // List pane.
-                let list_bar_rect =
-                    Rect::from_min_size(left.min, vec2(left.width(), m.bar_height));
-                layout::bar(ui, list_bar_rect, inset_top, 0.0, BarLine::Bottom, pal, |u| {
-                    add = list_bar(u, count, pal, m)
-                });
+                let list_bar_rect = Rect::from_min_size(left.min, vec2(left.width(), m.bar_height));
+                layout::bar(
+                    ui,
+                    list_bar_rect,
+                    inset_top,
+                    0.0,
+                    BarLine::Bottom,
+                    pal,
+                    |u| add = list_bar(u, count, pal, m),
+                );
                 let list_rect =
                     Rect::from_min_max(pos2(left.min.x, list_bar_rect.bottom()), left.max);
                 let mut list_ui = ui.new_child(
@@ -280,19 +285,24 @@ impl App {
                 ),
             ),
             ("Text scale", format!("{:.2}x", ctx.zoom_factor())),
-            ("Window", format!("{:.0} x {:.0} pt", vp.width(), vp.height())),
+            (
+                "Window",
+                format!("{:.0} x {:.0} pt", vp.width(), vp.height()),
+            ),
             (
                 "Size class",
                 format!("{:?} width, {:?} height", class.width, class.height),
             ),
             (
                 "Layout",
-                if class.two_pane_ok() { "two-pane" } else { "single-pane" }.to_string(),
+                if class.two_pane_ok() {
+                    "two-pane"
+                } else {
+                    "single-pane"
+                }
+                .to_string(),
             ),
-            (
-                "Appearance",
-                format!("{:?}", ctx.theme()),
-            ),
+            ("Appearance", format!("{:?}", ctx.theme())),
             ("Version", env!("CARGO_PKG_VERSION").to_string()),
         ];
         Scaffold::new(pal, m)
@@ -416,7 +426,11 @@ impl App {
                     c + vec2(a.cos(), a.sin()) * 10.0
                 })
                 .collect();
-            let color = if progress >= 1.0 { pal.accent } else { pal.text_faint };
+            let color = if progress >= 1.0 {
+                pal.accent
+            } else {
+                pal.text_faint
+            };
             ui.painter().add(Shape::line(pts, Stroke::new(2.5, color)));
             ui.add_space(pull);
         }
@@ -464,17 +478,13 @@ impl App {
 
             for (idx, note) in notes.iter().enumerate() {
                 let (row, _) = ui.allocate_exact_size(vec2(w, row_h), Sense::hover());
-                let card = Rect::from_min_size(
-                    pos2(row.left() + card_m, row.top()),
-                    vec2(card_w, card_h),
-                );
+                let card =
+                    Rect::from_min_size(pos2(row.left() + card_m, row.top()), vec2(card_w, card_h));
                 // Delete is registered after the row so it wins the hit test.
                 let row_resp = ui.interact(card, Id::new(("row", note.id)), Sense::click());
                 let del_c = pos2(card.right() - 32.0, card.center().y);
-                let del_hit = Rect::from_center_size(
-                    del_c,
-                    vec2(m.touch_target + 4.0, m.touch_target + 4.0),
-                );
+                let del_hit =
+                    Rect::from_center_size(del_c, vec2(m.touch_target + 4.0, m.touch_target + 4.0));
                 let del_resp = ui.interact(del_hit, Id::new(("del", note.id)), Sense::click());
                 if del_resp.clicked() {
                     action = Some(ListAction::Delete(idx));
@@ -535,7 +545,11 @@ impl App {
                 let card = card.translate(vec2(off, 0.0));
                 let del_c = del_c + vec2(off, 0.0);
 
-                let fill = if selected == Some(note.id) { pal.selected } else { pal.surface };
+                let fill = if selected == Some(note.id) {
+                    pal.selected
+                } else {
+                    pal.surface
+                };
                 p.rect_filled(card, m.corner, fill);
 
                 let armed = matches!(armed_delete, Some((i, _)) if i == idx);

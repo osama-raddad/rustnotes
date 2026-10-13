@@ -71,7 +71,9 @@ impl NotesDb {
     }
 
     pub fn delete(&self, id: i64) {
-        let _ = self.conn.execute("DELETE FROM notes WHERE id=?1", params![id]);
+        let _ = self
+            .conn
+            .execute("DELETE FROM notes WHERE id=?1", params![id]);
     }
 }
 
