@@ -44,7 +44,7 @@
               <option name="patterns">
                 <list>
                   <Item>
-                    <option name="path" value="crates/rustnotes-android/manifest.yaml" />
+                    <option name="path" value="crates/rustnotes/manifest.yaml" />
                   </Item>
                 </list>
               </option>

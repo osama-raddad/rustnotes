@@ -88,12 +88,12 @@ run-android:
 
 # Release APK via xbuild (auto-signed, targetSdk 33)
 android-x:
-    cd crates/rustnotes-android && x build --platform android --arch arm64 --release --format apk
+    cd crates/rustnotes && x build --platform android --arch arm64 --release --format apk
 
 # xbuild: deploy + launch + stream logs (Ctrl-C detaches; app keeps running)
 # (--device implies --platform; x rejects passing both)
 android-run device='adb:emulator-5554':
-    cd crates/rustnotes-android && x run --device {{device}} --arch arm64 --release
+    cd crates/rustnotes && x run --device {{device}} --arch arm64 --release
 
 # ---- iOS --------------------------------------------------------------------
 
