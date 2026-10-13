@@ -18,9 +18,11 @@ else:
 3. **Scaffold** — a safe-area-aware frame with top bar, body and bottom
    slots, keyboard-aware, that every screen renders into.
 
-Explicitly out of scope for this plan: a widget library, navigation stack,
-page transitions, theming, gestures. They are listed as later phases only
-so the seams are left open.
+Phases 1–3 deliver those three. Phases 4–7 (navigation stack and
+transitions; theming, system appearance and text scale; bottom navigation
+and pull-to-refresh; swipe gestures) are designed in the "Later phases"
+section and build on the same seams. A general widget library is not part
+of this plan.
 
 ## What exists today
 
@@ -271,9 +273,134 @@ editor side by side in both orientations; the iPhone 17 Pro in landscape
   testing: screenshots on the emulator are only comparable at the default
   display size.
 
-## Not covered, on purpose
+## Later phases
 
-Navigation stack and transitions (the editor open/close today is a state
-flip; a stack would come with the scaffold's back button), a bottom
-navigation bar component, pull-to-refresh, swipe gestures, and theming.
-Each builds on the scaffold's slots and `Metrics` without changing them.
+Everything below builds on the scaffold's slots and `Metrics` without
+changing them. Each phase is one PR with a screenshot or recording as its
+acceptance check. Order matters only where stated.
+
+### Phase 4 — navigation stack and transitions
+
+Today the editor open/close is a state flip (`Screen::List` /
+`Screen::Editor`). A stack makes back behaviour uniform across the Android
+back key, the scaffold's back button and the iOS edge swipe (Phase 7).
+
+```rust
+pub struct Nav<R> { stack: Vec<R>, transition: Option<Transition<R>> }
+pub struct Transition<R> { from: R, to: R, push: bool, started: f64 }
+
+impl<R: Clone + PartialEq> Nav<R> {
+    pub fn push(&mut self, r: R);        // starts a slide-in from the right
+    pub fn pop(&mut self) -> bool;       // false when at the root (shell may exit)
+    pub fn top(&self) -> &R;
+    /// Render: during a transition both routes are drawn, offset by the
+    /// eased progress; otherwise only `top`.
+    pub fn show(&mut self, ui: &mut Ui, draw: impl FnMut(&mut Ui, &R));
+}
+```
+
+Mechanism: `ctx.animate_value_with_time(id, target, 0.25)` gives the
+progress; `show` creates two child UIs with `UiBuilder::max_rect` on
+`content_rect().translate(vec2(dx, 0))` and clips them, outgoing at
+`-0.3 * width * t` and incoming at `width * (1 - t)`, the Material
+"shared axis" feel. Reduced-motion preference maps to a 0 ms duration.
+Rust Notes: `Screen` becomes `Nav<Route>` with `Route::List` and
+`Route::Editor(id)`; `close_editor` becomes `pop`. The `Back` key handler
+already returns whether the event was consumed, so the Android shell keeps
+working unchanged.
+
+Acceptance: recording of list → editor → back on both simulators shows a
+single 250 ms slide with no flash; the Android hardware back key pops;
+the back key at the root is reported unhandled.
+
+### Phase 5 — theming, system appearance, text scale
+
+Three layers, in order of precedence:
+
+1. **Tokens** (`Palette`): background, surface, text, text-weak, accent,
+   danger, hairline. Both apps' colour constants collapse into one struct
+   with a light and a dark instance. `Palette::apply(ctx)` writes them into
+   `Visuals` through `set_visuals_of(Theme::Light, ..)` and
+   `set_visuals_of(Theme::Dark, ..)`, which keeps both styles correct and
+   is what the PR #3 review found the template getting wrong.
+2. **System appearance.** egui follows `ThemePreference::System` only when
+   the shell reports the OS theme, and winit reports none on Android or iOS.
+   The shells feed it directly: Android reads
+   `AndroidApp::config().ui_mode_night()` on resume and config change
+   (`uiMode` is already in `configChanges`), iOS reads
+   `traitCollection.userInterfaceStyle` in `traitCollectionDidChange`.
+   Both push `CoreEvent::Appearance(Dark | Light)`; the core calls
+   `ctx.options_mut(|o| o.fallback_theme = ..)`. Rust Notes gets a dark mode
+   out of this for free.
+3. **Text scale.** Android `fontScale` (`config()` exposes it; `fontScale`
+   is in `configChanges`) and iOS Dynamic Type (`preferredContentSizeCategory`)
+   map to `ctx.set_zoom_factor(scale)`, which egui applies to every text
+   style and spacing uniformly. Because zoom multiplies pixels-per-point,
+   the Phase 1 density contract must be set first and zoom applied after;
+   `set_viewport` keeps density, `set_text_scale` keeps zoom.
+
+Acceptance: emulator with the system dark theme on shows the dark palette
+at launch and switches live when toggled in Settings; "Font size: largest"
+on the emulator scales text and bars together without clipping; the same
+on the iPhone simulator via Accessibility → Larger Text.
+
+### Phase 6 — bottom navigation bar and pull-to-refresh
+
+**BottomNav** fills the scaffold's bottom slot:
+
+```rust
+pub struct NavItem { pub icon: fn(&Painter, Rect, Color32), pub label: &'static str }
+pub struct BottomNav<'a> { items: &'a [NavItem], selected: &'a mut usize }
+impl BottomNav<'_> { pub fn show(self, ui: &mut Ui) -> Option<usize>; } // Some(i) when changed
+```
+
+Height is `Metrics::bar_height` (56) plus the bottom safe inset, which the
+scaffold already excludes from the body, so the bar paints its background
+over `viewport_rect` down to the screen edge and keeps its items inside
+`content_rect`. Items are `touch_target` wide at minimum and the active
+one gets the accent colour. Each tab owns its own `Nav<R>` stack so
+switching tabs preserves where the user was. Rust Notes has one tab; the
+component exists for the template and future screens (search, settings).
+
+**Pull-to-refresh** is the one piece egui lacks a primitive for: a
+`ScrollArea` clamps at offset 0 and does not overscroll. The mechanism is
+a drag watcher around the list: when the scroll offset is 0 and the
+pointer drags downward (`input.pointer.delta().y > 0` with
+`press_origin()` inside the list), accumulate `pull` with resistance
+(`pull += dy * 0.5`), draw a spinner at `top + pull`, and on release past
+`64` points fire the refresh and animate `pull` back with
+`animate_value_with_time`. While `pull > 0` the ScrollArea is shown with
+`vertical_scroll_offset(0)` so it does not fight. Rust Notes uses it to
+re-read the SQLite list.
+
+Acceptance: recording on the Android emulator (`adb shell input swipe`)
+shows the spinner follow the finger, snap back, and the list reload; a
+drag that starts mid-list scrolls instead of pulling.
+
+### Phase 7 — swipe gestures
+
+Two gestures, both with an axis lock so they do not fight drag-to-scroll:
+nothing is decided until the pointer has moved 8 points, then the larger
+axis wins for the rest of that touch.
+
+- **Swipe-to-delete on list rows.** The row is `Sense::drag()`; a
+  horizontal drag reveals a `danger`-coloured action behind the card by
+  translating the card's painted rect. Past 40% of the width on release
+  the delete fires (same two-step confirmation as today, with the revealed
+  action standing in for the first tap); otherwise it animates back.
+  Delete button and swipe coexist for one release, then the button goes.
+- **Edge swipe back (iOS).** A drag whose `press_origin().x` is within 20
+  points of the left edge of `content_rect` drives `Nav::pop` interactively:
+  the transition progress follows the finger, commits past 35% or on a
+  fast fling, cancels otherwise. Android keeps the system back gesture,
+  which arrives as the back key.
+
+Acceptance: swipe-to-delete recording on both simulators; the iOS edge
+swipe recording shows the editor following the finger and snapping back
+when released early.
+
+### Still not covered
+
+Haptics, share sheets and other platform services, accessibility tree
+(egui's AccessKit integration is desktop-only in 0.36), and multi-window.
+None of them touch layout.
