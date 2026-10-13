@@ -2,6 +2,7 @@
 name = "rustnotes-core"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.95" # egui 0.36 floor
 description = "Rust Notes app logic: notes storage, screens and the mobile layout layer (pure egui)"
 
 [dependencies]

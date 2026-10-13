@@ -5,6 +5,7 @@ members = ["crates/rustnotes-core", "crates/rustnotes"]
 [workspace.dependencies]
 log = "0.4"
 egui = { version = "0.36", default-features = false }
+eframe = { version = "0.36", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]

@@ -101,7 +101,7 @@ shared via git). Pick one from the Run/Debug dropdown:
 |---|---|
 | Run on Android (just run-android) | physical device if connected → else emulator (boots the first AVD if needed) |
 | Run on iOS (just run-ios) | connected iPhone (sign + install + launch) → else simulator (boots one if needed) |
-| Check all targets | `cargo check` for all three crates on their real targets |
+| Check all targets | `cargo check` for both crates on their real targets |
 
 The granular recipes (`just android`, `just ios-run`, `just ios-install`,
 …) remain available as plain `just` commands in the terminal, and

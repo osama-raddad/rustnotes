@@ -227,7 +227,8 @@ ios-install: ios-device ios-sign
 
 # ---- misc -------------------------------------------------------------------
 
-# Type-check all three crates for their real targets
+# Type-check both crates for their real targets (rustnotes is checked
+# twice: Android lib + iOS-sim bin)
 # (the workspace can't be checked as a whole: ndk-sys only compiles for Android)
 check:
     cargo check -p rustnotes-core
