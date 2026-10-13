@@ -63,6 +63,18 @@ default:
 #                the app's OWN debug keystore file, alias, and dname — see
 #                the keystore recipe for why files, not one file with two
 #                aliases
+#   entry        cargo feature compiling this app's own android_main in the
+#                rustnotes host ('android-entry' for rustnotes; '' for
+#                hello-mobile, whose android_main lives in its own lib
+#                unconditionally). Needed when a recipe builds with
+#                --no-default-features (the GameActivity flavor does, to
+#                swap the backend without dragging the default back in):
+#                everything default provides besides the backend must be
+#                re-added by name, and this is that name.
+# The activity backend (NativeActivity vs GameActivity) is deliberately NOT
+# a table row: it is a build flavor of the host, not a fact about the app —
+# the same app packages under either. Recipes take it as an `activity`
+# parameter ('native', default | 'game'), orthogonal to this table.
 # The key may be spelled two ways on the command line — `just android
 # hello-mobile` and `just android app=hello-mobile` — because just binds
 # the `app=…` token whole as a positional argument; the prefix is stripped
@@ -90,6 +102,7 @@ app-identity app:
         echo "ks='debug.keystore'"
         echo "ks_alias='rustnotes'"
         echo "ks_dname='CN=Rust Notes Debug,O=Rust,C=US'"
+        echo "entry='android-entry'"
         ;;
     hello-mobile)
         echo "key='hello-mobile'"
@@ -103,6 +116,7 @@ app-identity app:
         echo "ks='hello-mobile.debug.keystore'"
         echo "ks_alias='hellomobile'"
         echo "ks_dname='CN=Hello Mobile Debug,O=Rust,C=US'"
+        echo "entry=''"
         ;;
     *)
         echo "ERROR: unknown app '{{app}}' (expected 'rustnotes' or 'hello-mobile')." >&2
@@ -112,22 +126,92 @@ app-identity app:
 
 # ---- Android ----------------------------------------------------------------
 
+# Fetch (with caching) and sha256-verify the games-activity AAR — the Java
+# half of the GameActivity backend, dexed into GA APKs by android-stage.
+# Lockfile-style pin, the same job a Cargo.lock does for crates:
+#   artifact  androidx.games:games-activity
+#   version   4.4.0 — the release android-activity 0.6.1's native glue is
+#             built and documented against (backwards compatible with
+#             4.0.0; see its README's GameActivity section)
+#   sha256    3a8b0887ac55a0a6ab56021ced7353a250539eac811278b74bccd8a5b678d9c9
+#   url       https://dl.google.com/android/maven2/androidx/games/games-activity/4.4.0/games-activity-4.4.0.aar
+# A mismatch fails loudly and never continues: a tampered cache must not
+# ride into a signed APK. Note the AAR's pom declares NO dependencies —
+# false comfort: its bytecode extends androidx.appcompat.app.AppCompatActivity
+# (see the plan addendum; the runtime consequence is recorded there).
+# Bump = update BOTH sites: the sha256 appears here (comment) and in the
+# shasum check below; a version bump that touches one leaves the other
+# pinning the old digest.
+[private]
+android-aar:
+    #!/bin/zsh
+    set -euo pipefail
+    mkdir -p build/cache
+    aar=build/cache/games-activity-4.4.0.aar
+    if [ ! -f "$aar" ]; then
+        tmp="$aar.tmp.$$"
+        trap 'rm -f "$tmp"' EXIT
+        curl -fsSL -o "$tmp" "https://dl.google.com/android/maven2/androidx/games/games-activity/4.4.0/games-activity-4.4.0.aar"
+        mv "$tmp" "$aar"
+    fi
+    if ! echo "3a8b0887ac55a0a6ab56021ced7353a250539eac811278b74bccd8a5b678d9c9  $aar" | shasum -a 256 -c - >/dev/null 2>&1; then
+        echo "ERROR: sha256 mismatch for $aar — supply-chain guard tripped." >&2
+        echo "Delete the file and rerun; if it mismatches again the pin or the source is wrong. Never continue past a mismatch." >&2
+        exit 1
+    fi
+
 # Cross-compile the app's cdylib and stage it for packaging
 # (rust-toolchain.toml already installs the aarch64-linux-android target —
 # no rustup call needed — for every app). build/apk stays a single shared
 # staging dir, wiped per run exactly as when there was one app: only one
 # app is packaged at a time, and a stale lib from the other app must never
 # ride along into the zip.
+# activity=native (default) builds with default features — NativeActivity,
+# the byte-identical pipeline of old. activity=game SWAPS the backend (see
+# the crates' Cargo.toml for the swap-not-add rule) via --no-default-features,
+# re-adding the app's own entry feature from the identity table, and dexes
+# the games-activity AAR's classes.jar next to the staged lib — the APK's
+# only Java, and the reason its manifest variant says hasCode="true".
 [private]
-android-stage app='rustnotes':
+android-stage app='rustnotes' activity='native':
     #!/bin/zsh
     set -euo pipefail
     cfg=$(just app-identity "{{app}}")
     eval "$cfg"
-    cargo build -p "$crate" --lib --target aarch64-linux-android --release
+    # `activity=` prefix stripped here for the same reason app-identity
+    # strips `app=`: just binds a `x=y` token whole into the positional
+    # slot it lands in, so both spellings must normalize.
+    act="{{activity}}"; act=${act#activity=}
+    case "$act" in
+    native)
+        cargo build -p "$crate" --lib --target aarch64-linux-android --release
+        ;;
+    game)
+        just android-aar
+        # Build-time disclosure, in-recipe: this APK installs and then
+        # dies at launch (missing androidx closure — README's opt-in
+        # section has the wall). Warned, not refused: check-links' GA
+        # legs and the probe surface depend on the build succeeding.
+        echo "NOTE: activity=game APKs crash at launch until the androidx java closure is packaged — see README 'Android: the GameActivity opt-in'. NativeActivity is the launchable backend." >&2
+        feats="android-game-activity${entry:+,$entry}"
+        cargo build -p "$crate" --lib --target aarch64-linux-android --release \
+            --no-default-features --features "$feats"
+        ;;
+    *)
+        echo "ERROR: unknown activity backend '$act' (expected 'native' or 'game')." >&2
+        exit 1
+        ;;
+    esac
     rm -rf build/apk
     mkdir -p build/apk/lib/arm64-v8a
     cp "build/target/aarch64-linux-android/release/lib$cdylib.so" build/apk/lib/arm64-v8a/
+    if [ "$act" = game ]; then
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+        unzip -q build/cache/games-activity-4.4.0.aar classes.jar -d "$tmp"
+        "{{bt}}/d8" --release --lib "{{platform}}" --min-api 24 \
+            --output build/apk "$tmp/classes.jar"
+    fi
 
 # Preflight keytool (a JDK — macOS ships none) and mint the app's debug
 # keystore atomically (temp file + mv), so a missing JDK or a killed keytool
@@ -157,27 +241,47 @@ keystore app='rustnotes':
 # (targetSdk 35 — enforced by the aapt2 flags here, mirrored by every app's
 # manifest; min-sdk 24 likewise).
 #
+# activity=native (default) is the old pipeline byte-for-byte: the manifest
+# under $res, lib alone in the zip. activity=game swaps in the .game.xml
+# manifest variant and adds the staged classes.dex to the zip — that is the
+# whole difference; zipalign and signing do not care what is inside.
+#
 # 16 KB coupling, per app: extractNativeLibs="true" (the app's
-# AndroidManifest.xml under $res) + the DEFLATE-compressed .so stored by
+# AndroidManifest under $res) + the DEFLATE-compressed .so stored by
 # `zip` + `zipalign -f 4` form one matched set — the loader never mmaps the
 # lib from inside the APK, and what 16 KB kernels actually check is the
 # ELF's p_align (16384, from the rustflags in .cargo/config.toml, which
-# being global covers every app's cdylib). Flipping ANY app's manifest to
+# being global covers every app's cdylib). Both activity flavors sit
+# inside that set unchanged: classes.dex is not an ELF and changes nothing
+# about alignment or loading, and the GA manifest variant keeps
+# extractNativeLibs="true". Flipping ANY app's manifest to
 # extractNativeLibs="false" (uncompressed .so) requires `zip -0 -X` +
 # `zipalign -f -p 4` below for that app, or 16 KB-kernel devices stop
-# launching it. The manifest is otherwise the same matched set as ever
-# (full configChanges list, hasCode="false", NativeActivity) — copied
-# verbatim per app, because a missed configChanges entry recreates the
-# activity and ANRs.
-android app='rustnotes': (keystore app) (android-stage app)
+# launching it. Each manifest variant is otherwise a matched set (full
+# configChanges list + hasCode="false" + NativeActivity, or GameActivity's
+# shorter backend-documented list + hasCode="true" + dex) — copied verbatim
+# per app. The ANR rationale is the NA variant's: there, a missed
+# configChanges entry recreates the activity and NativeActivity's destroy
+# waits on android_main. The GA variant's short list is what the backend's
+# own example manifests document — recreation is handled by that glue.
+android app='rustnotes' activity='native': (keystore app) (android-stage app activity)
     #!/bin/zsh
     set -euo pipefail
     cfg=$(just app-identity "{{app}}")
     eval "$cfg"
+    act="{{activity}}"; act=${act#activity=}   # same prefix normalization as android-stage
+    manifest="AndroidManifest.xml"
+    if [ "$act" = game ]; then
+        manifest="AndroidManifest.game.xml"
+    fi
     "{{bt}}/aapt2" link -o "build/$key.unsigned.apk" \
-        --manifest "$res/AndroidManifest.xml" -I "{{platform}}" \
+        --manifest "$res/$manifest" -I "{{platform}}" \
         --min-sdk-version 24 --target-sdk-version 35
-    (cd build/apk && zip -qrX "../$key.unsigned.apk" lib)
+    if [ "$act" = game ]; then
+        (cd build/apk && zip -qrX "../$key.unsigned.apk" lib classes.dex)
+    else
+        (cd build/apk && zip -qrX "../$key.unsigned.apk" lib)
+    fi
     "{{bt}}/zipalign" -f 4 "build/$key.unsigned.apk" "build/$key.aligned.apk"
     "{{bt}}/apksigner" sign --ks "$ks" --ks-key-alias "$ks_alias" \
         --ks-pass pass:android --key-pass pass:android \
@@ -187,12 +291,16 @@ android app='rustnotes': (keystore app) (android-stage app)
 # APK + install & launch on an adb target (default: first connected device).
 # Falls back to uninstall+install when the signature changed (e.g. after
 # switching between the xbuild and keystore pipelines — clears app data).
-android-install app='rustnotes' serial='':
+# The launch component follows the activity flavor: the class the manifest
+# declares is the class `am` must name.
+android-install app='rustnotes' serial='' activity='native':
     #!/bin/zsh
     set -euo pipefail
     cfg=$(just app-identity "{{app}}")
     eval "$cfg"
-    just android "$key"
+    act="{{activity}}"; act=${act#activity=}   # same prefix normalization as android-stage
+    case "$act" in native|game) ;; *) echo "ERROR: unknown activity backend '$act' (expected 'native' or 'game')." >&2; exit 1 ;; esac
+    just android "$key" "$act"
     s="{{serial}}"
     if [ -z "$s" ]; then
         s=$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1; exit}')
@@ -200,16 +308,22 @@ android-install app='rustnotes' serial='':
     [ -n "$s" ] || { echo "ERROR: no adb device connected."; exit 1; }
     echo "==> target: $s"
     adb -s "$s" install -r "build/$key.apk" || (adb -s "$s" uninstall "$android_pkg" && adb -s "$s" install "build/$key.apk")
-    adb -s "$s" shell am start -n "$android_pkg/android.app.NativeActivity"
+    comp=android.app.NativeActivity
+    if [ "$act" = game ]; then
+        comp=com.google.androidgamesdk.GameActivity
+    fi
+    adb -s "$s" shell am start -n "$android_pkg/$comp"
 
 # Run on a connected Android device (physical first, then emulator); if none,
 # boot the first AVD and run there.
-run-android app='rustnotes':
+run-android app='rustnotes' activity='native':
     #!/bin/zsh
     set -euo pipefail
+    act="{{activity}}"; act=${act#activity=}   # same prefix normalization as android-stage
+    case "$act" in native|game) ;; *) echo "ERROR: unknown activity backend '$act' (expected 'native' or 'game')." >&2; exit 1 ;; esac
     s=$(adb devices -l 2>/dev/null | awk '{if($2=="device"){if(/usb:/&&!p)p=$1;else if(!e)e=$1}}END{print p?p:e}')
     if [ -n "$s" ]; then
-        just android-install "{{app}}" "$s"
+        just android-install "{{app}}" "$s" "$act"
         exit 0
     fi
     emu="{{sdk}}/emulator/emulator"
@@ -227,11 +341,14 @@ run-android app='rustnotes':
         sleep 2
     done
     [ "$ok" = 1 ] || { echo "ERROR: emulator did not boot within 180s."; exit 1; }
-    just android-install "{{app}}" "$s"
+    just android-install "{{app}}" "$s" "$act"
 
 # Release APK via xbuild (auto-signed, targetSdk 35). xbuild runs per crate,
 # so cd into the app's crate dir — the dir name equals the app key for every
-# app in the identity table.
+# app in the identity table. NativeActivity only: xbuild has no GameActivity
+# path (no --no-default-features passthrough, no games-activity support), so
+# the opt-in does not reach these recipes — see README 'Android: the
+# GameActivity opt-in'.
 android-x app='rustnotes':
     #!/bin/zsh
     set -euo pipefail
@@ -244,6 +361,7 @@ android-x app='rustnotes':
 # in every app-facing recipe — with device first, `just android-run
 # app=hello-mobile` would bind the whole token to the DEVICE (just binds
 # positional tokens whole) and silently keep packaging rustnotes.
+# NativeActivity only, same xbuild limitation as android-x above.
 android-run app='rustnotes' device='adb:emulator-5554':
     #!/bin/zsh
     set -euo pipefail
@@ -495,16 +613,24 @@ check:
     cargo check -p hello-mobile --bin hello-mobile --target aarch64-apple-ios-sim
     cargo check -p hello-mobile --bin hello-mobile
 
-# Link both Android cdylibs (debug): the one guard `cargo check` cannot
-# give — a duplicate `android_main` symbol only surfaces at link, and only
-# on Android's lld (macOS's ld64 drops the duplicate silently). Each app
-# links alone, per-package: rustnotes with its default android-entry
-# feature, hello-mobile with it opted out (crates/rustnotes/Cargo.toml
-# has the symbol-collision rationale). Not wired into CI — the full
-# cross-compile is slow; run before an Android release.
+# Link both Android cdylibs (debug), both backends: the one guard
+# `cargo check` cannot give — a duplicate `android_main` symbol only
+# surfaces at link, and only on Android's lld (macOS's ld64 drops the
+# duplicate silently). Each app links alone, per-package: rustnotes with
+# its default android-entry feature, hello-mobile with it opted out
+# (crates/rustnotes/Cargo.toml has the symbol-collision rationale). The
+# GameActivity legs prove the opt-in combination links too — one
+# `android_main` per app under the swapped backend — which is the whole
+# point of taking the backend as a feature: same entry contract, different
+# activity class underneath. Not wired into CI — the full cross-compile
+# is slow; run before an Android release.
 check-links:
     cargo build -p rustnotes --lib --target aarch64-linux-android
     cargo build -p hello-mobile --lib --target aarch64-linux-android
+    cargo build -p rustnotes --lib --target aarch64-linux-android \
+        --no-default-features --features android-game-activity,android-entry
+    cargo build -p hello-mobile --lib --target aarch64-linux-android \
+        --no-default-features --features android-game-activity
 
 # Format every crate (what `just lint` enforces)
 fmt:

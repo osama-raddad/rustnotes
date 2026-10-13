@@ -29,8 +29,31 @@ path = "src/main.rs"
 # the collision at link (NDK lld: duplicate symbol; the `cargo check`
 # twin of the same command passes silently). Build Android targets
 # per-package, as `just check` does.
-default = ["android-entry"]
+#
+# The Android activity backend is selected the same way — a SWAP, never
+# an add, which is why `android-native-activity` sits in `default`:
+# `android-game-activity` must be taken with `--no-default-features`, or
+# both backends are on at once and the android-activity crate
+# compile_error!s ("cannot be enabled at the same time") — loud, not
+# silent, by its design; building with neither fails the same way.
+# NativeActivity (the OS ships the class; the APK stays Java-free) is
+# the default because its keycode path — dead-key accents included —
+# works today. GameActivity (androidx.games:games-activity, a Java
+# library the APK must dex) unlocks IME composing via GameTextInput;
+# see README "Android: the GameActivity opt-in". Both backend features
+# are plain, not target-gated: on non-Android builds they forward into
+# android-target-gated dependencies and resolve to nothing — the same
+# no-op eframe itself relies on for the very features forwarded here.
+default = ["android-entry", "android-native-activity"]
 android-entry = []
+android-native-activity = [
+    "eframe/android-native-activity",
+    "android-activity/native-activity",
+]
+android-game-activity = [
+    "eframe/android-game-activity",
+    "android-activity/game-activity",
+]
 
 [dependencies]
 rustnotes-core = { path = "../rustnotes-core" }
@@ -46,8 +69,10 @@ eframe = { workspace = true, features = ["default_fonts"] }
 
 # Renderer per platform: glow (OpenGL ES 3) on Android and desktop; wgpu
 # (Metal) on iOS, because eframe's glow path needs glutin, which has no iOS
-# backend. Android can't take accesskit — NativeActivity has no winit
-# integration to hang it on (eframe compile_error!s on the pairing).
+# backend. Android can't take accesskit under the default NativeActivity
+# backend — no winit integration to hang it on (eframe compile_error!s on
+# the pairing); the android-game-activity opt-in is what unlocks it, kept
+# as a documented follow-on, not enabled here.
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 eframe = { workspace = true, features = ["glow"] }
 
@@ -82,8 +107,11 @@ objc2-ui-kit = { version = "0.3", features = [
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-eframe = { workspace = true, features = ["android-native-activity"] }
-android-activity = { version = "0.6", features = ["native-activity"] }
+# Backend-free declarations: which activity class eframe/winit and this
+# crate's glue target is a cargo feature (see [features] above) — the
+# backend features add exactly one of these per build.
+eframe = { workspace = true }
+android-activity = "0.6"
 android_logger = "0.14"
 jni = "0.22"
 

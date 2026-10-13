@@ -116,6 +116,55 @@ resources (Android manifest, Info.plist) and debug keystore; device
 signing (`just ios-install`/`just ios-profile`) is rustnotes-only for now
 (the bundled profile helper mints profiles for one bundle id).
 
+### Android: the GameActivity opt-in
+
+The default Android backend is **NativeActivity** — the OS ships the
+class, the APK stays pure Rust (no dex, `hasCode="false"`), and its
+keycode path (dead-key accents included) works today. Its hard limit: no
+`InputConnection` ever exists, so there is no IME composing — CJK input,
+autocorrect and swipe typing never reach the app.
+
+The fix is shipped as a documented opt-in, not a switch: the
+`android-game-activity` cargo feature swaps the backend for
+[GameActivity](https://developer.android.com/games/agdk/game-activity),
+whose GameTextInput gives winit commit text — and which is also the only
+route to Android AccessKit (a follow-on, not enabled here). Take it with
+
+```sh
+just android rustnotes game        # or: just android app=rustnotes activity=game
+just android-install rustnotes emulator-5554 game
+just run-android rustnotes game    # same parameter, same recipes
+```
+
+or in cargo, for either crate (the backend is a SWAP, never an add —
+`android-activity` compile-errors if both backends are on, which is why
+`--no-default-features` is mandatory):
+
+```sh
+cargo build -p rustnotes --lib --target aarch64-linux-android \
+    --no-default-features --features android-game-activity,android-entry
+cargo build -p hello-mobile --lib --target aarch64-linux-android \
+    --no-default-features --features android-game-activity
+```
+
+What it costs: the APK gains a `classes.dex` (dexed from
+`androidx.games:games-activity` 4.4.0, fetched once into `build/cache/`
+and sha256-pinned in the justfile), the manifest variant
+(`resources/AndroidManifest.game.xml`) flips `hasCode` to true and
+declares the GameActivity class, and the recipes pick everything up from
+the `activity` parameter.
+
+**Status, honestly (2026-10-13):** the opt-in *builds, signs, installs
+and launches* — and then crashes, because upstream `GameActivity`
+extends `AppCompatActivity` while its Maven pom declares no dependencies:
+the missing androidx classes (and, past those, appcompat's resources)
+would need a Gradle-style dependency/resource merge this no-Gradle
+pipeline does not have. The evidence and the exact wall are recorded in
+`docs/framework-extraction-plan.md`'s GameActivity addendum; NativeActivity
+remains the only launchable backend until that packaging story exists.
+The default stays NativeActivity regardless — the plan's Q4 takes the
+switch decision when a real app needs CJK.
+
 Underneath, the recipes drive plain `cargo` plus the platform packagers
 (`aapt2`/`apksigner`, `codesign`/`simctl`, or xbuild) — no Gradle, no Xcode
 project, no shell scripts.
@@ -159,13 +208,17 @@ panic hook (Console.app on a device); other log output is stderr via
 - Text input has no IME composing on either platform (NativeActivity on
   Android; winit's UIKeyInput view on iOS), so it works for basic Latin
   typing; CJK composition, autocorrect and emoji input are not supported.
-  The real fix on Android is eframe's `android-game-activity` feature.
-- The Android manifest lists every configuration change in `configChanges`.
-  Leaving via back at the root is clean now — the eframe loop exits and
-  `android_main` returns before the activity is finished — but a destroy
-  the system starts itself still stalls: NativeActivity's `onDestroy`
-  waits for `android_main` to return, which only our exit path ends, so
-  relaunching the cached process after such a destroy can freeze the app.
+  The Android fix is the GameActivity opt-in (see above): wired, packaged,
+  and currently blocked at launch by its hidden androidx dependency —
+  NativeActivity stays the default.
+- The NativeActivity manifest lists every configuration change in
+  `configChanges` (the GameActivity variant instead ships the backend's
+  shorter, example-documented list). Leaving via back at the root is
+  clean now — the eframe loop exits and `android_main` returns before
+  the activity is finished — but a destroy the system starts itself
+  still stalls: NativeActivity's `onDestroy` waits for `android_main` to
+  return, which only our exit path ends, so relaunching the cached
+  process after such a destroy can freeze the app.
 - arm64-v8a only (add more ABIs in the `justfile`).
 - No search, no clipboard, no user-selectable theme — it's a demo of the pure-Rust stack,
   not a product.
@@ -185,7 +238,7 @@ because xbuild reads it from the working directory.
 |---|---|
 | `crates/rustnotes-core/` | The app, pure egui: notes + SQLite, screens, `layout/` (metrics, size classes, palette, scaffold, nav, bottom nav), edge-swipe input filter, unit tests |
 | `crates/rustnotes/` | The eframe host: `src/lib.rs` (shared, `android_main` lives in `android.rs`), `src/main.rs` (iOS + desktop entry), `android.rs` (JNI), `ios.rs` (objc2/CoreText), `manifest.yaml` (xbuild) |
-| `resources/AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs |
+| `resources/AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs (+ `.game.xml` GameActivity variant for the opt-in) |
 | `resources/Info.plist` | App bundle manifest (hand-assembled .app) |
 | `tools/ios-profile-helper/` | Throwaway Xcode project that mints 7-day provisioning profiles |
 | `build/` | All generated artifacts: cargo target dir, APK staging + final APK, iOS .app |
