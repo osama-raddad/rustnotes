@@ -29,10 +29,10 @@ use std::time::{Duration, Instant};
 /// device has no readable font at these paths (the simulator masks it,
 /// because its reads resolve against the macOS host file system).
 const FONT_CANDIDATES: &[&str] = &[
-    "/system/fonts/Roboto-Regular.ttf",    // Android
-    "/system/fonts/NotoSans-Regular.ttf",  // Android fallback
-    "/System/Library/Fonts/SFNS.ttf",      // macOS desktop, iOS simulator
-    "/System/Library/Fonts/Geneva.ttf",    // macOS fallback
+    "/system/fonts/Roboto-Regular.ttf",                // Android
+    "/system/fonts/NotoSans-Regular.ttf",              // Android fallback
+    "/System/Library/Fonts/SFNS.ttf",                  // macOS desktop, iOS simulator
+    "/System/Library/Fonts/Geneva.ttf",                // macOS fallback
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", // Linux desktop
 ];
 
@@ -54,6 +54,9 @@ pub(crate) enum Tab {
 
 /// An iOS-style edge swipe in progress (drives an interactive pop).
 struct EdgeSwipe {
+    /// Which finger claimed the swipe; only this touch drives or ends it
+    /// (LOW-3: a second finger must not commit the pop).
+    touch: egui::TouchId,
     start_x: f32,
     start_y: f32,
     last_x: f32,
@@ -71,6 +74,47 @@ const EDGE_SLOP: f32 = 8.0;
 const EDGE_COMMIT_FRACTION: f32 = 0.35;
 /// Release velocity, in points per second, that commits regardless of distance.
 const EDGE_COMMIT_VELOCITY: f32 = 600.0;
+
+/// How long after the last keystroke the autosave fires (HIGH-2).
+const AUTOSAVE_DELAY: Duration = Duration::from_millis(1500);
+
+/// Prefixes that classify `App::db_error` entries so a later success of the
+/// same operation clears exactly its own error (HIGH-1b).
+const DB_LIST_ERR: &str = "couldn't load notes";
+const DB_SAVE_ERR: &str = "save failed";
+const DB_DELETE_ERR: &str = "delete failed";
+
+/// What the autosave logic should do this frame. Pure data so the decision
+/// (`debounce`) is table-testable without a live egui context.
+#[derive(PartialEq, Debug)]
+enum DebounceAction {
+    /// Nothing to do (not dirty, or no edit recorded yet).
+    None,
+    /// Dirty, but the quiet period hasn't elapsed; repaint after this long
+    /// so the save fires without user input.
+    Wait(Duration),
+    /// The quiet period elapsed — save now.
+    Save,
+}
+
+/// Debounced save-on-edit decision (HIGH-2): fire `AUTOSAVE_DELAY` after the
+/// last change to a dirty buffer.
+fn debounce(last_edit: Option<Instant>, dirty: bool, now: Instant) -> DebounceAction {
+    if !dirty {
+        return DebounceAction::None;
+    }
+    match last_edit {
+        None => DebounceAction::None,
+        Some(t) => {
+            let elapsed = now.saturating_duration_since(t);
+            if elapsed >= AUTOSAVE_DELAY {
+                DebounceAction::Save
+            } else {
+                DebounceAction::Wait(AUTOSAVE_DELAY - elapsed)
+            }
+        }
+    }
+}
 
 pub struct App {
     db: NotesDb,
@@ -94,16 +138,43 @@ pub struct App {
     // Swipe to delete
     swipe: Option<Swipe>,
     notes: Vec<Note>,
+    /// Formatted row dates, parallel to `notes` — built when the list loads
+    /// or the UTC offset changes, not per frame (MED-5).
+    row_dates: Vec<String>,
     // Editor state
     edit_id: i64, // 0 = new, unsaved
     buffer: String,
+    /// The note body exactly as last loaded or saved; `buffer` differing
+    /// from it means unsaved edits (LOW-2's dirty check, HIGH-2's flag).
+    loaded_body: String,
+    /// The buffer as of the previous frame, to detect edits without hashing.
+    last_seen_buffer: String,
+    /// When the buffer last changed; drives the autosave debounce (HIGH-2).
+    last_edit: Option<Instant>,
     focus_editor: bool,
     // List state
     reset_list_scroll: bool,
-    armed_delete: Option<(usize, Instant)>,
-    /// egui's clock (`RawInput::time`), latest seen.
+    /// Delete confirmation, keyed by note id (MED-1: an index goes stale
+    /// when the list reorders between the two taps).
+    armed_delete: Option<(i64, Instant)>,
+    /// Two clocks, deliberately: egui's `time` (`RawInput::time`, seconds
+    /// since the loop started) drives the nav animation because it stays in
+    /// step with the frames egui paints, while `Instant` drives the
+    /// delete-arm window and autosave debounce, which must keep running
+    /// (and fire) with no input at all. Don't mix them (NIT-3).
     time: f64,
     font_source: Result<String, String>,
+    /// The latest database failure, if any: drives the editor's "save
+    /// failed" indicator, the list's error state and the Settings
+    /// diagnostics row (HIGH-1b). Cleared when the same operation later
+    /// succeeds.
+    db_error: Option<String>,
+    /// Local zone offset east of UTC, pushed by the host (MED-2); note
+    /// dates render shifted by this.
+    utc_offset_secs: i32,
+    /// Cached settings diagnostics, rebuilt only when a value changes
+    /// (NIT-2).
+    diag: Option<(screens::DiagKey, Vec<(&'static str, String)>)>,
 }
 
 /// egui font definitions naming a single installed font "system", used for
@@ -169,9 +240,38 @@ impl App {
         ctx: &egui::Context,
         system_font: Option<(Vec<u8>, String)>,
     ) -> App {
-        let db = NotesDb::open(&data_dir).expect("open notes database");
-        let notes = db.list();
+        // HIGH-3: a corrupt or unwritable database must degrade to an
+        // in-memory fallback instead of panicking — on mobile that is a
+        // startup crash loop until the user clears app data.
+        let (db, mut db_error) = match NotesDb::open(&data_dir) {
+            Ok(db) => (db, None),
+            Err(e) => {
+                log::error!("open notes database failed: {e}; falling back to in-memory storage");
+                let msg = format!("notes.db unavailable ({e}) — in-memory, notes will not persist");
+                match NotesDb::open_in_memory() {
+                    Ok(db) => (db, Some(msg)),
+                    // An in-memory open has no filesystem dependency, so this
+                    // is not realistically reachable.
+                    Err(e2) => panic!("open in-memory notes database: {e2}"),
+                }
+            }
+        };
+        let (notes, list_err) = match db.list() {
+            Ok(notes) => (notes, None),
+            Err(e) => {
+                log::error!("initial note list failed: {e}");
+                (Vec::new(), Some(format!("{DB_LIST_ERR}: {e}")))
+            }
+        };
+        if db_error.is_none() {
+            db_error = list_err;
+        }
         log::info!("loaded {} notes from {}", notes.len(), data_dir.display());
+        let utc_offset_secs = 0;
+        let row_dates = notes
+            .iter()
+            .map(|n| util::format_note_date(n.updated, utc_offset_secs))
+            .collect();
 
         Metrics::DEFAULT.apply(ctx);
         Palette::apply_all(ctx);
@@ -199,13 +299,20 @@ impl App {
             list_offset: 0.0,
             swipe: None,
             notes,
+            row_dates,
             edit_id: 0,
             buffer: String::new(),
+            loaded_body: String::new(),
+            last_seen_buffer: String::new(),
+            last_edit: None,
             focus_editor: false,
             reset_list_scroll: false,
             armed_delete: None,
             time: 0.0,
             font_source,
+            db_error,
+            utc_offset_secs,
+            diag: None,
         }
     }
 
@@ -241,10 +348,54 @@ impl App {
         self.edge_swipe_enabled = enabled;
     }
 
+    /// Render note dates in the local zone: `offset_secs` east of UTC, as
+    /// polled from the OS by the host (core is pure egui and cannot read
+    /// the zone itself — MED-2). Clamped to ±24 h.
+    pub fn set_utc_offset_secs(&mut self, offset_secs: i32) {
+        self.utc_offset_secs = offset_secs.clamp(-86_400, 86_400);
+        self.recompute_dates();
+    }
+
+    /// Rebuild the cached row dates (MED-5) from `notes` and the offset.
+    fn recompute_dates(&mut self) {
+        let offset = self.utc_offset_secs;
+        self.row_dates = self
+            .notes
+            .iter()
+            .map(|n| util::format_note_date(n.updated, offset))
+            .collect();
+    }
+
+    /// Reload the list from the database. Every re-list clears the armed
+    /// delete — rows may have reordered, so the arm must not survive onto a
+    /// different note (MED-1) — and rebuilds the cached dates.
+    fn refresh_notes(&mut self) {
+        match self.db.list() {
+            Ok(rows) => {
+                self.notes = rows;
+                self.armed_delete = None;
+                self.recompute_dates();
+                self.clear_error_if(DB_LIST_ERR);
+            }
+            Err(e) => {
+                log::error!("list notes failed: {e}");
+                self.db_error = Some(format!("{DB_LIST_ERR}: {e}"));
+            }
+        }
+    }
+
+    /// Clear `db_error` when it came from the operation that just succeeded.
+    fn clear_error_if(&mut self, prefix: &str) {
+        if matches!(self.db_error.as_deref(), Some(e) if e.starts_with(prefix)) {
+            self.db_error = None;
+        }
+    }
+
     // ---- editor ----------------------------------------------------------
 
     /// Save the buffer to the database and refresh the list. An empty new note
-    /// is dropped; emptying an existing note deletes it.
+    /// is dropped; emptying an existing note deletes it. Failures are
+    /// surfaced through `db_error` instead of being swallowed (HIGH-1).
     fn persist_buffer(&mut self) {
         let empty = self.buffer.trim().is_empty();
         log::info!("editor: persist id={} empty={}", self.edit_id, empty);
@@ -255,19 +406,40 @@ impl App {
                     body: self.buffer.clone(),
                     updated: 0,
                 };
-                self.db.save(&mut n);
+                match self.db.save(&mut n) {
+                    Ok(()) => {
+                        // LOW-5: track the insert so a later save UPDATEs
+                        // instead of duplicating the note.
+                        self.edit_id = n.id;
+                        self.loaded_body.clone_from(&self.buffer);
+                        self.clear_error_if(DB_SAVE_ERR);
+                    }
+                    Err(e) => self.db_error = Some(format!("{DB_SAVE_ERR}: {e}")),
+                }
             }
         } else if empty {
-            self.db.delete(self.edit_id);
-        } else {
+            match self.db.delete(self.edit_id) {
+                Ok(()) => self.clear_error_if(DB_DELETE_ERR),
+                Err(e) => self.db_error = Some(format!("{DB_DELETE_ERR}: {e}")),
+            }
+        } else if self.buffer != self.loaded_body {
+            // LOW-2: a clean buffer is not written, so closing without
+            // editing no longer bumps `updated` and reorders the list.
             let mut n = Note {
                 id: self.edit_id,
                 body: self.buffer.clone(),
                 updated: 0,
             };
-            self.db.save(&mut n);
+            match self.db.save(&mut n) {
+                Ok(()) => {
+                    self.loaded_body.clone_from(&self.buffer);
+                    self.clear_error_if(DB_SAVE_ERR);
+                }
+                Err(e) => self.db_error = Some(format!("{DB_SAVE_ERR}: {e}")),
+            }
         }
-        self.notes = self.db.list();
+        self.last_edit = None;
+        self.refresh_notes();
     }
 
     fn open_editor(&mut self, id: i64) {
@@ -278,15 +450,23 @@ impl App {
             self.persist_buffer();
         }
         self.edit_id = id;
+        // The list only carries a body prefix (MED-5), so fetch the full
+        // note from the database.
         self.buffer = if id == 0 {
             String::new()
         } else {
-            self.notes
-                .iter()
-                .find(|n| n.id == id)
-                .map(|n| n.body.clone())
-                .unwrap_or_default()
+            match self.db.get(id) {
+                Ok(Some(n)) => n.body,
+                Ok(None) => String::new(),
+                Err(e) => {
+                    self.db_error = Some(format!("{DB_LIST_ERR}: {e}"));
+                    String::new()
+                }
+            }
         };
+        self.loaded_body.clone_from(&self.buffer);
+        self.last_seen_buffer.clone_from(&self.buffer);
+        self.last_edit = None;
         if !was_editor {
             let (now, animate) = (self.now(), self.animate_nav());
             self.nav.push(Screen::Editor, now, animate);
@@ -305,8 +485,13 @@ impl App {
     }
 
     /// Save without leaving the editor (the host calls this on pause/exit).
+    /// A buffer that matches what was loaded is skipped so an unedited note
+    /// is neither written nor bumped (LOW-2).
     pub fn save_current(&mut self) {
-        if self.screen() != Screen::Editor || self.buffer.trim().is_empty() {
+        if self.screen() != Screen::Editor
+            || self.buffer.trim().is_empty()
+            || self.buffer == self.loaded_body
+        {
             return;
         }
         let mut n = Note {
@@ -314,8 +499,51 @@ impl App {
             body: self.buffer.clone(),
             updated: 0,
         };
-        self.db.save(&mut n);
-        self.edit_id = n.id;
+        match self.db.save(&mut n) {
+            Ok(()) => {
+                self.edit_id = n.id;
+                self.loaded_body.clone_from(&self.buffer);
+                self.clear_error_if(DB_SAVE_ERR);
+            }
+            Err(e) => self.db_error = Some(format!("{DB_SAVE_ERR}: {e}")),
+        }
+        self.last_edit = None;
+    }
+
+    /// True while the editor holds unsaved changes.
+    fn dirty(&self) -> bool {
+        self.screen() == Screen::Editor
+            && !self.buffer.trim().is_empty()
+            && self.buffer != self.loaded_body
+    }
+
+    /// The debounced save (HIGH-2): the editor stays open, the buffer is
+    /// written and the failure state is surfaced. A failed attempt retries
+    /// after another quiet period, so a transient error (disk full, then
+    /// freed) recovers on its own.
+    fn autosave(&mut self) {
+        if !self.dirty() {
+            self.last_edit = None;
+            return;
+        }
+        let mut n = Note {
+            id: self.edit_id,
+            body: self.buffer.clone(),
+            updated: 0,
+        };
+        match self.db.save(&mut n) {
+            Ok(()) => {
+                self.edit_id = n.id;
+                self.loaded_body.clone_from(&self.buffer);
+                self.last_edit = None;
+                self.clear_error_if(DB_SAVE_ERR);
+            }
+            Err(e) => {
+                self.db_error = Some(format!("{DB_SAVE_ERR}: {e}"));
+                self.last_edit = Some(Instant::now());
+            }
+        }
+        self.refresh_notes();
     }
 
     // ---- input ------------------------------------------------------------
@@ -327,7 +555,10 @@ impl App {
             self.tab = Tab::Notes;
             return true;
         }
-        if self.nav.is_dragging() {
+        // LOW-1: while a push/pop animation plays or a drag is in flight,
+        // swallow the press — a second back during the pop animation would
+        // otherwise report "root" and quit the app mid-slide.
+        if self.nav.is_dragging() || self.nav.is_animating() {
             return true;
         }
         if self.screen() == Screen::Editor {
@@ -352,6 +583,9 @@ impl App {
     /// those touches (and the pointer events egui-winit simulates for them)
     /// never reach the widgets. A claimed touch that never moves is replayed
     /// as a plain tap, so the back button under the edge still works.
+    /// TODO(verify-on-device): multi-touch interleavings (second finger
+    /// during a claim, OS-cancelled touches) can't be produced headlessly —
+    /// check the TouchId gating on hardware.
     pub fn filter_input(&mut self, raw: &mut RawInput) {
         if let Some(t) = raw.time {
             self.time = t;
@@ -362,12 +596,13 @@ impl App {
         let width = raw.screen_rect.map_or(400.0, |r| r.width()).max(1.0);
         let events = std::mem::take(&mut raw.events);
         for ev in events {
-            if let Event::Touch { phase, pos, .. } = &ev {
+            if let Event::Touch { phase, pos, id, .. } = &ev {
                 match phase {
                     TouchPhase::Start => {
                         self.swallow_pointer = false;
                         if self.edge_swipe_eligible() && pos.x <= EDGE_ZONE {
                             self.edge = Some(EdgeSwipe {
+                                touch: *id,
                                 start_x: pos.x,
                                 start_y: pos.y,
                                 last_x: pos.x,
@@ -380,48 +615,58 @@ impl App {
                         }
                     }
                     TouchPhase::Move => {
-                        if let Some(mut e) = self.edge.take() {
-                            let dx = pos.x - e.start_x;
-                            if !e.dragging && dx > EDGE_SLOP {
-                                e.dragging = self.nav.begin_drag();
+                        // Only the finger that claimed the swipe drives it
+                        // (LOW-3); any other touch falls through to egui.
+                        let claimed = matches!(self.edge.as_ref(), Some(e) if e.touch == *id);
+                        if claimed {
+                            if let Some(e) = self.edge.as_mut() {
+                                let dx = pos.x - e.start_x;
+                                if !e.dragging && dx > EDGE_SLOP {
+                                    e.dragging = self.nav.begin_drag();
+                                }
+                                if e.dragging {
+                                    e.vel = (pos.x - e.last_x)
+                                        / ((self.time - e.last_t) as f32).max(1e-3);
+                                    self.nav.drag_to(dx / width);
+                                }
+                                e.last_x = pos.x;
+                                e.last_t = self.time;
+                                continue;
                             }
-                            if e.dragging {
-                                e.vel = (pos.x - e.last_x)
-                                    / ((self.time - e.last_t) as f32).max(1e-3);
-                                self.nav.drag_to(dx / width);
-                            }
-                            e.last_x = pos.x;
-                            e.last_t = self.time;
-                            self.edge = Some(e);
-                            continue;
                         }
                     }
                     TouchPhase::End | TouchPhase::Cancel => {
-                        if let Some(e) = self.edge.take() {
-                            if e.dragging {
-                                let commit = *phase == TouchPhase::End
-                                    && ((pos.x - e.start_x) / width > EDGE_COMMIT_FRACTION
-                                        || e.vel > EDGE_COMMIT_VELOCITY);
-                                if commit {
-                                    self.persist_buffer();
-                                    self.reset_list_scroll = true;
+                        if self.edge.as_ref().is_some_and(|e| e.touch == *id) {
+                            if let Some(e) = self.edge.take() {
+                                // Keep eating this touch's synthetic pointer
+                                // stream (its trailing PointerGone too);
+                                // the next TouchPhase::Start resets the
+                                // flag (see above).
+                                if e.dragging {
+                                    let commit = *phase == TouchPhase::End
+                                        && ((pos.x - e.start_x) / width > EDGE_COMMIT_FRACTION
+                                            || e.vel > EDGE_COMMIT_VELOCITY);
+                                    if commit {
+                                        self.persist_buffer();
+                                        self.reset_list_scroll = true;
+                                    }
+                                    self.nav.end_drag(commit, self.time);
+                                } else if *phase == TouchPhase::End {
+                                    // Never became a swipe: replay it as a tap.
+                                    let p = egui::pos2(e.start_x, e.start_y);
+                                    raw.events.push(Event::PointerMoved(p));
+                                    for pressed in [true, false] {
+                                        raw.events.push(Event::PointerButton {
+                                            pos: p,
+                                            button: egui::PointerButton::Primary,
+                                            pressed,
+                                            modifiers: egui::Modifiers::NONE,
+                                        });
+                                    }
+                                    raw.events.push(Event::PointerGone);
                                 }
-                                self.nav.end_drag(commit, self.time);
-                            } else if *phase == TouchPhase::End {
-                                // Never became a swipe: replay it as a tap.
-                                let p = egui::pos2(e.start_x, e.start_y);
-                                raw.events.push(Event::PointerMoved(p));
-                                for pressed in [true, false] {
-                                    raw.events.push(Event::PointerButton {
-                                        pos: p,
-                                        button: egui::PointerButton::Primary,
-                                        pressed,
-                                        modifiers: egui::Modifiers::NONE,
-                                    });
-                                }
-                                raw.events.push(Event::PointerGone);
+                                continue;
                             }
-                            continue;
                         }
                     }
                 }
@@ -468,7 +713,10 @@ mod tests {
     #[test]
     fn font_fallback_reports_last_error_when_all_missing() {
         let err = load_fonts_from(&["/nonexistent/a.ttf", "/nonexistent/b.ttf"]).unwrap_err();
-        assert!(err.contains("b.ttf"), "error should name the last candidate");
+        assert!(
+            err.contains("b.ttf"),
+            "error should name the last candidate"
+        );
     }
 
     /// A host-resolved font (CoreText on iOS) wins over the candidate lookup.
@@ -517,7 +765,10 @@ mod tests {
         assert!(app.screen() == Screen::Editor);
 
         let mut f = frame(
-            vec![touch(TouchPhase::Start, 5.0), Event::PointerMoved(egui::pos2(5.0, 300.0))],
+            vec![
+                touch(TouchPhase::Start, 5.0),
+                Event::PointerMoved(egui::pos2(5.0, 300.0)),
+            ],
             1.0,
         );
         app.filter_input(&mut f);
@@ -528,7 +779,10 @@ mod tests {
         let mut f = frame(vec![touch(TouchPhase::End, 250.0), Event::PointerGone], 1.3);
         app.filter_input(&mut f);
         assert!(f.events.is_empty());
-        assert!(app.screen() == Screen::List, "past 35% of the width commits");
+        assert!(
+            app.screen() == Screen::List,
+            "past 35% of the width commits"
+        );
     }
 
     /// A touch that starts in the edge zone but never moves is a tap.
@@ -553,13 +807,237 @@ mod tests {
         assert!(app.screen() == Screen::Editor);
     }
 
+    fn finger(phase: TouchPhase, x: f32, id: u64) -> Event {
+        Event::Touch {
+            device_id: egui::TouchDeviceId(0),
+            id: egui::TouchId(id),
+            phase,
+            pos: egui::pos2(x, 300.0),
+            force: None,
+        }
+    }
+
+    /// LOW-3: a second finger sweeping right during a claimed edge swipe
+    /// must not drive or commit the pop; only the claiming touch ends it.
+    #[test]
+    fn second_finger_cannot_commit_the_edge_swipe() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("twofinger").join("data"), &ctx, None);
+        app.set_edge_swipe_back(true);
+        app.open_editor(0);
+        app.nav.settle();
+
+        // Finger 0 claims the edge; finger 1 starts elsewhere.
+        let mut f = frame(vec![touch(TouchPhase::Start, 5.0)], 1.0);
+        app.filter_input(&mut f);
+        assert!(f.events.is_empty(), "claim swallows the touch");
+
+        // Finger 1 sweeps past the commit fraction: it must pass through
+        // untouched and not move the claimed swipe.
+        let mut f = frame(vec![finger(TouchPhase::Start, 100.0, 1)], 1.05);
+        app.filter_input(&mut f);
+        assert_eq!(f.events.len(), 1, "the other finger reaches egui");
+        let mut f = frame(vec![finger(TouchPhase::Move, 300.0, 1)], 1.1);
+        app.filter_input(&mut f);
+        assert_eq!(f.events.len(), 1, "its moves reach egui too");
+
+        // The claimed finger releases near its start: no commit, and the
+        // stationary claim replays as a tap.
+        let mut f = frame(vec![touch(TouchPhase::End, 10.0)], 1.2);
+        app.filter_input(&mut f);
+        let presses = f
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::PointerButton { .. }))
+            .count();
+        assert_eq!(presses, 2, "claim ends as a replayed tap");
+        assert!(
+            app.screen() == Screen::Editor,
+            "the second finger did not pop"
+        );
+    }
+
     #[test]
     fn back_closes_the_editor_then_reports_the_root() {
         let ctx = egui::Context::default();
         let mut app = App::new(temp("back").join("data"), &ctx, None);
         app.open_editor(0);
+        app.nav.settle();
         assert!(app.on_back());
+        app.nav.settle();
         assert!(app.screen() == Screen::List);
         assert!(!app.on_back(), "nothing left: the host may leave the app");
+    }
+
+    /// LOW-1: a second back while the pop is still animating must be
+    /// swallowed, not reported as "root" (which quits the app mid-slide).
+    #[test]
+    fn back_during_the_pop_animation_is_swallowed() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("backanim").join("data"), &ctx, None);
+        app.open_editor(0);
+        app.nav.settle();
+        assert!(app.on_back(), "starts the pop");
+        assert!(
+            app.on_back(),
+            "still animating — swallow instead of exiting"
+        );
+        app.nav.settle();
+        assert!(!app.on_back(), "settled: the host may leave the app");
+    }
+
+    /// HIGH-2's debounce decision, as a table: pure, no egui context.
+    #[test]
+    fn debounce_waits_then_saves() {
+        let t0 = Instant::now();
+        assert_eq!(debounce(None, true, t0), DebounceAction::None);
+        assert_eq!(debounce(Some(t0), false, t0), DebounceAction::None);
+        match debounce(Some(t0), true, t0 + Duration::from_millis(100)) {
+            DebounceAction::Wait(left) => {
+                assert!(left > Duration::ZERO && left < AUTOSAVE_DELAY);
+            }
+            other => panic!("expected Wait, got {other:?}"),
+        }
+        assert_eq!(
+            debounce(Some(t0), true, t0 + AUTOSAVE_DELAY),
+            DebounceAction::Save
+        );
+        assert_eq!(
+            debounce(Some(t0), true, t0 + AUTOSAVE_DELAY + Duration::from_secs(5)),
+            DebounceAction::Save
+        );
+    }
+
+    /// HIGH-2 wiring: a frame that runs more than the quiet period after the
+    /// last edit saves the note without leaving the editor.
+    #[test]
+    fn autosave_persists_after_the_quiet_period() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("autosave").join("data"), &ctx, None);
+        app.open_editor(0);
+        app.nav.settle();
+        app.buffer = "typed on the train".to_owned();
+        // Pretend the change was detected two seconds ago.
+        app.last_seen_buffer = app.buffer.clone();
+        app.last_edit = Some(Instant::now() - Duration::from_secs(2));
+
+        ctx.run_ui(Default::default(), |root| {
+            // eframe hands App::ui an edge-to-edge root; run_ui's root is
+            // the same shape, unlike a margined CentralPanel.
+            app.ui(root);
+        })
+        .drop_without_applying_deltas();
+
+        assert!(app.last_edit.is_none(), "the save consumed the edit");
+        assert_eq!(app.loaded_body, "typed on the train");
+        assert_eq!(app.db.list().unwrap().len(), 1);
+        assert!(app.db_error.is_none());
+    }
+
+    /// HIGH-3: a corrupt database degrades to in-memory storage with the
+    /// failure surfaced, instead of panicking into a startup crash loop.
+    #[test]
+    fn corrupt_database_degrades_to_memory_with_an_error_state() {
+        let dir = temp("corrupt");
+        std::fs::write(dir.join("notes.db"), b"definitely not a sqlite database").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::new(dir, &ctx, None);
+        assert!(
+            app.db_error.is_some(),
+            "open failure is surfaced, not panicked"
+        );
+        // The app still works against the fallback: edit and persist.
+        app.open_editor(0);
+        app.buffer = "recovered".to_owned();
+        app.persist_buffer();
+        assert_ne!(app.edit_id, 0);
+        assert_eq!(app.db.list().unwrap().len(), 1);
+        // The open failure is permanent — it must not be cleared by a
+        // successful in-memory write.
+        assert!(app.db_error.is_some());
+    }
+
+    /// MED-1: the delete arm is keyed by note id and any re-list clears it.
+    #[test]
+    fn refresh_clears_the_armed_delete() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("armed").join("data"), &ctx, None);
+        app.armed_delete = Some((42, Instant::now()));
+        app.refresh_notes();
+        assert!(app.armed_delete.is_none(), "a re-list invalidates the arm");
+    }
+
+    /// LOW-2: `save_current` skips a buffer that matches what was loaded, so
+    /// an unedited note is not written (or timestamp-bumped) on focus loss.
+    #[test]
+    fn save_current_skips_a_clean_buffer() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("clean").join("data"), &ctx, None);
+        app.open_editor(0);
+        app.nav.settle();
+        app.buffer = "already saved".to_owned();
+        app.loaded_body = "already saved".to_owned();
+        app.save_current();
+        assert_eq!(app.edit_id, 0, "clean buffer must not insert");
+        assert!(app.db.list().unwrap().is_empty());
+        // A real change does save.
+        app.buffer = "edited".to_owned();
+        app.save_current();
+        assert_ne!(app.edit_id, 0);
+        assert_eq!(app.db.list().unwrap().len(), 1);
+    }
+
+    /// LOW-5: after inserting a new note, the editor tracks its id so a
+    /// later save UPDATEs instead of duplicating the INSERT.
+    #[test]
+    fn persist_assigns_the_new_note_id() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("low5").join("data"), &ctx, None);
+        app.open_editor(0);
+        app.buffer = "hello".to_owned();
+        app.persist_buffer();
+        assert_ne!(app.edit_id, 0, "edit_id tracks the insert");
+        assert_eq!(app.notes.len(), 1);
+    }
+
+    /// MED-5: the list rows carry only a body prefix; opening the editor
+    /// fetches the full body from the database.
+    #[test]
+    fn open_editor_loads_the_full_body() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("fullbody").join("data"), &ctx, None);
+        app.open_editor(0);
+        app.nav.settle();
+        app.buffer = format!("{}\nand a second line", "y".repeat(200));
+        app.persist_buffer();
+        let id = app.edit_id;
+
+        let listed = app.db.list().unwrap();
+        assert!(listed[0].body.len() <= 120, "the list keeps only a preview");
+
+        app.open_editor(id);
+        assert_eq!(app.buffer.len(), 200 + "\nand a second line".len());
+    }
+
+    /// MED-2: the host-pushed UTC offset is clamped to ±24 h and shifts the
+    /// cached row dates.
+    #[test]
+    fn utc_offset_is_clamped_and_feeds_row_dates() {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp("tz").join("data"), &ctx, None);
+        app.set_utc_offset_secs(1_000_000);
+        assert_eq!(app.utc_offset_secs, 86_400, "clamped to +24 h");
+        app.set_utc_offset_secs(-9_999_999);
+        assert_eq!(app.utc_offset_secs, -86_400, "clamped to -24 h");
+
+        app.open_editor(0);
+        app.buffer = "tz".to_owned();
+        app.persist_buffer();
+        app.set_utc_offset_secs(0);
+        let before = app.row_dates.clone();
+        // One hour east always moves the rendered HH:MM of a fresh note.
+        app.set_utc_offset_secs(3600);
+        assert_ne!(app.row_dates, before, "row dates shift with the zone");
+        assert_eq!(app.row_dates.len(), app.notes.len());
     }
 }
