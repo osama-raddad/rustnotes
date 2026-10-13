@@ -1,6 +1,7 @@
 //! Android platform glue that eframe/winit do not provide.
 
 use android_activity::AndroidApp;
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -13,12 +14,27 @@ fn android_main(app: AndroidApp) {
             .with_tag("rustnotes")
             .with_max_level(log::LevelFilter::Info),
     );
-    std::panic::set_hook(Box::new(|info| log::error!("panic: {info}")));
+    // Capture the backtrace too: the default hook prints it to stderr, which
+    // this hook replaces — keep the only debugging signal a release panic
+    // on device has.
+    std::panic::set_hook(Box::new(|info| {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        log::error!("panic: {info}\n{backtrace}");
+    }));
 
+    // `internalDataPath` is set before `android_main` runs; the hard-coded
+    // fallback is the same directory for this package and stays writable by
+    // the app uid (`/data/local/tmp`, the old fallback, is owned by shell
+    // and would fail every DB operation).
     let data_dir = app
         .internal_data_path()
-        .unwrap_or_else(|| std::path::PathBuf::from("/data/local/tmp"));
+        .unwrap_or_else(|| std::path::PathBuf::from("/data/data/com.osamaraddad.rustnotes/files"));
     set_app(app.clone());
+    // Prime the config query now, so insets/night/font-scale are already
+    // known when eframe draws its first frames: the answer arrives
+    // asynchronously on the Java main thread, otherwise those first frames
+    // render with no safe-area insets at all.
+    post_query(None);
     let mut options = crate::native_options();
     // winit needs the AndroidApp handle to build its event loop.
     options.android_app = Some(app);
@@ -33,15 +49,31 @@ fn android_main(app: AndroidApp) {
 static APP: Mutex<Option<AndroidApp>> = Mutex::new(None);
 
 fn set_app(app: AndroidApp) {
-    *APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(app);
+    // Drop the superseded handle explicitly (it owns an eventfd); the
+    // closures already posted hold their own clones, so dropping this one
+    // cannot pull the handle out from under them.
+    let old = APP.lock().unwrap_or_else(|e| e.into_inner()).replace(app);
+    drop(old);
+    // A fresh activity must not inherit the previous session's state:
+    // REPORT would apply stale insets/theme/font until a requery lands,
+    // BARS_LIGHT would suppress the new window's first bar-icon sync, a
+    // stranded IN_FLIGHT would disable reporting forever, and HANDED /
+    // OS_SCALE would skip handing the (possibly changed) values to the app.
+    *REPORT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *LAST_QUERY.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *IN_FLIGHT_SINCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *BARS_LIGHT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    *HANDED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    IN_FLIGHT.store(false, Ordering::Release);
+    OS_SCALE.with(|o| o.set(1.0));
 }
 
 fn app() -> Option<AndroidApp> {
     APP.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// What the Java side reports: window insets in pixels, font scale and
-/// night mode.
+/// What the Java side reports: window insets in pixels, font scale, night
+/// mode, the animator scale and the zone offset.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Report {
     left: i32,
@@ -51,47 +83,100 @@ struct Report {
     font_scale: f32,
     /// `Configuration.uiMode & UI_MODE_NIGHT_MASK == UI_MODE_NIGHT_YES`.
     night: bool,
+    /// `Settings$Global.animator_duration_scale == 0` means the user asked
+    /// for reduced motion.
+    reduce_motion: bool,
+    /// `TimeZone.getDefault().getOffset(System.currentTimeMillis())`,
+    /// seconds east of UTC.
+    utc_offset_secs: i32,
 }
 
 static REPORT: Mutex<Option<Report>> = Mutex::new(None);
 static LAST_QUERY: Mutex<Option<Instant>> = Mutex::new(None);
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+/// When the currently in-flight query was posted; used to re-arm
+/// `IN_FLIGHT` if the posted closure never executes.
+static IN_FLIGHT_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+/// Reduce-motion / UTC-offset pair already handed to the host.
+static HANDED: Mutex<Option<(bool, i32)>> = Mutex::new(None);
 /// Insets change on rotation, keyboard show/hide and cutout changes; font
 /// scale and night mode on a configuration change. All of those also produce
-/// frames, so polling at frame time is enough.
-const REQUERY: Duration = Duration::from_millis(250);
+/// frames, so polling at frame time is enough. 100 ms bounds the staleness
+/// of a change to one requery plus one frame; the query itself is a short
+/// burst of cached-method JNI calls, so the cadence is cheap.
+const REQUERY: Duration = Duration::from_millis(100);
+/// A posted query whose closure never runs (eventfd write failure, or a
+/// Java main thread blocked past any reasonable latency) would strand
+/// `IN_FLIGHT` and disable reporting for the process; re-arm after this.
+const IN_FLIGHT_TIMEOUT: Duration = Duration::from_secs(2);
+
+thread_local! {
+    /// Last OS font scale this host enforced as zoom (see `raw_input_hook`).
+    static OS_SCALE: Cell<f32> = const { Cell::new(1.0) };
+}
 
 /// Feed egui what winit does not report on Android: safe-area insets (status
 /// bar, navigation bar, cutout, keyboard), the night-mode appearance, and the
-/// user's font scale.
-pub(crate) fn raw_input_hook(ctx: &egui::Context, raw: &mut egui::RawInput) {
+/// user's font scale — plus the reduce-motion preference and UTC offset,
+/// returned to the host when they change.
+pub(crate) fn raw_input_hook(ctx: &egui::Context, raw: &mut egui::RawInput) -> Option<(bool, i32)> {
     maybe_query(ctx);
     let ppp = ctx.native_pixels_per_point().unwrap_or(1.0).max(0.1);
     let report = *REPORT.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(r) = report {
-        // Insets are window pixels; egui wants points before zoom.
-        let zoom = ctx.zoom_factor().max(0.1);
-        let pt = |px: i32| px.max(0) as f32 / ppp / zoom;
-        raw.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
-            left: pt(r.left),
-            top: pt(r.top),
-            right: pt(r.right),
-            bottom: pt(r.bottom),
-        }));
-        let scale = r.font_scale.clamp(0.8, 2.0);
+    let Some(r) = report else {
+        sync_bar_icons(ctx.theme() == egui::Theme::Light);
+        return None;
+    };
+    let scale = r.font_scale.clamp(0.8, 2.0);
+    // Snap zoom to the OS font scale only when the OS-reported scale itself
+    // changed, so a user's pinch-zoom survives until the setting changes.
+    // (Zoom remains the carrier for the font scale — egui has no separate
+    // font-size input.)
+    let zoom = if (OS_SCALE.with(Cell::get) - scale).abs() > 1e-3 {
+        OS_SCALE.with(|o| o.set(scale));
         if (ctx.zoom_factor() - scale).abs() > 1e-3 {
             ctx.set_zoom_factor(scale);
         }
-        // winit's Window::theme() is None on Android, and android-activity's
-        // NDK configuration is not refreshed on configuration changes under
-        // winit, so night mode comes from the same JNI report.
-        let t = if r.night { egui::Theme::Dark } else { egui::Theme::Light };
-        if ctx.options(|o| o.fallback_theme) != t {
-            log::info!("night mode -> {t:?}");
-            ctx.options_mut(|o| o.fallback_theme = t);
-        }
+        // `set_zoom_factor` applies in this pass's begin_pass while
+        // `zoom_factor()` still reports the old value; divide the insets by
+        // the value this pass enforces.
+        scale.max(0.1)
+    } else {
+        ctx.zoom_factor().max(0.1)
+    };
+    // Insets are window pixels; egui wants points before zoom.
+    let pt = |px: i32| px.max(0) as f32 / ppp / zoom;
+    raw.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+        left: pt(r.left),
+        top: pt(r.top),
+        right: pt(r.right),
+        bottom: pt(r.bottom),
+    }));
+    // winit does not expose the theme on Android, and the ndk crate does
+    // not wrap font scale, so night mode and fontScale come from this one
+    // JNI report (the glue does refresh its Configuration on
+    // ConfigChanged, and the raw NDK has ACONFIGURATION_FONT_SCALE —
+    // neither is reachable through the APIs eframe surfaces).
+    let t = if r.night {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    };
+    if ctx.options(|o| o.fallback_theme) != t {
+        log::info!("night mode -> {t:?}");
+        ctx.options_mut(|o| o.fallback_theme = t);
     }
     sync_bar_icons(ctx.theme() == egui::Theme::Light);
+    // Hand reduce-motion / UTC offset to the host when they change.
+    let cur = (r.reduce_motion, r.utc_offset_secs);
+    let mut handed = HANDED.lock().unwrap_or_else(|e| e.into_inner());
+    if *handed != Some(cur) {
+        *handed = Some(cur);
+        drop(handed);
+        Some(cur)
+    } else {
+        None
+    }
 }
 
 /// Last bar style sent to the window; None until the first send.
@@ -111,6 +196,12 @@ fn sync_bar_icons(light_ui: bool) {
     let Some(app) = app() else { return };
     let app2 = app.clone();
     app.run_on_java_main_thread(Box::new(move || {
+        // Teardown guard: android-activity nulls the activity pointer during
+        // the destroy pass, but queued runnables may still execute after it;
+        // touching the stale jobject then would be use-after-free.
+        if app2.activity_as_ptr().is_null() {
+            return;
+        }
         let vm = unsafe { jni::JavaVM::from_raw(app2.vm_as_ptr().cast()) };
         let res = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
             let activity = unsafe {
@@ -168,6 +259,11 @@ fn sync_bar_icons(light_ui: bool) {
                 }
                 Ok(())
             })();
+            // The activity jobject is a *borrowed global ref* owned by the
+            // AndroidApp: jni 0.22's JObject has no Drop (never deletes
+            // refs), so dropping it is a no-op — this forget is
+            // defense-in-depth against a future owning wrapper, which would
+            // delete the borrowed global and abort ART.
             std::mem::forget(activity);
             r
         });
@@ -179,7 +275,15 @@ fn sync_bar_icons(light_ui: bool) {
 
 fn maybe_query(ctx: &egui::Context) {
     if IN_FLIGHT.load(Ordering::Acquire) {
-        return;
+        let wedged = IN_FLIGHT_SINCE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some_and(|t| t.elapsed() > IN_FLIGHT_TIMEOUT);
+        if !wedged {
+            return;
+        }
+        log::warn!("window query wedged >{IN_FLIGHT_TIMEOUT:?}; re-arming");
+        IN_FLIGHT.store(false, Ordering::Release);
     }
     let now = Instant::now();
     {
@@ -189,21 +293,38 @@ fn maybe_query(ctx: &egui::Context) {
         }
         *last = Some(now);
     }
+    post_query(Some(ctx.clone()));
+}
+
+/// Post the JNI query to the Java main thread. `ctx`, when given, gets a
+/// repaint request once the report changes; the priming call from
+/// `android_main` has no context yet.
+fn post_query(ctx: Option<egui::Context>) {
     let Some(app) = app() else { return };
     IN_FLIGHT.store(true, Ordering::Release);
-    let ctx = ctx.clone();
+    *IN_FLIGHT_SINCE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     let app2 = app.clone();
     // Views may only be touched on the Java main thread.
     app.run_on_java_main_thread(Box::new(move || {
         let res = query(&app2);
         IN_FLIGHT.store(false, Ordering::Release);
+        *IN_FLIGHT_SINCE.lock().unwrap_or_else(|e| e.into_inner()) = None;
         match res {
             Ok(Some(r)) => {
-                let mut cur = REPORT.lock().unwrap_or_else(|e| e.into_inner());
-                if *cur != Some(r) {
-                    log::info!("window report: {r:?}");
-                    *cur = Some(r);
-                    ctx.request_repaint();
+                let changed = {
+                    let mut cur = REPORT.lock().unwrap_or_else(|e| e.into_inner());
+                    if *cur != Some(r) {
+                        log::info!("window report: {r:?}");
+                        *cur = Some(r);
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if changed {
+                    if let Some(ctx) = &ctx {
+                        ctx.request_repaint();
+                    }
                 }
             }
             Ok(None) => {} // view not attached yet; try again next frame
@@ -217,9 +338,15 @@ fn maybe_query(ctx: &egui::Context) {
 /// keyboard. So read the root view's `WindowInsets`: system bars and cutout on
 /// every side, and the larger of navigation bar and keyboard at the bottom.
 /// API 24-29 fall back to the `getSystemWindowInset*` getters, which already
-/// include the keyboard. `fontScale` comes from the configuration (the NDK
-/// exposes no accessor for it).
+/// include the keyboard. Night mode, font scale (the ndk crate wraps no
+/// accessor for it), the animator scale and the zone offset all ride the same
+/// trip: one consistent source, JNI.
 fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
+    // Teardown guard: the activity is being destroyed and this queued
+    // runnable arrived after it; there is nothing to query.
+    if app.activity_as_ptr().is_null() {
+        return Ok(None);
+    }
     let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
     vm.attach_current_thread(|env| -> jni::errors::Result<Option<Report>> {
         let activity = unsafe {
@@ -249,6 +376,70 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
                 .get_field(&config, jni::jni_str!("uiMode"), jni::jni_sig!("I"))?
                 .i()?;
             let night = ui_mode & 0x30 == 0x20; // UI_MODE_NIGHT_MASK, UI_MODE_NIGHT_YES
+
+            // `Settings$Global.getFloat(resolver, name, default)` never
+            // throws (unlike the 2-arg variant's SettingNotFoundException).
+            // The 3-arg overload has existed since API 17; minSdk is 24.
+            let reduce_motion = (|| -> jni::errors::Result<bool> {
+                let resolver = env
+                    .call_method(
+                        &activity,
+                        jni::jni_str!("getContentResolver"),
+                        jni::jni_sig!("()Landroid/content/ContentResolver;"),
+                        &[],
+                    )?
+                    .l()?;
+                let key = env.new_string("animator_duration_scale")?;
+                let settings = env.find_class(jni::jni_str!("android/provider/Settings$Global"))?;
+                let scale = env
+                    .call_static_method(
+                        &settings,
+                        jni::jni_str!("getFloat"),
+                        jni::jni_sig!("(Landroid/content/ContentResolver;Ljava/lang/String;F)F"),
+                        &[
+                            jni::JValue::from(&resolver),
+                            jni::JValue::from(&key),
+                            jni::JValue::from(1.0f32),
+                        ],
+                    )?
+                    .f()?;
+                Ok(scale == 0.0)
+            }())
+            .unwrap_or(false);
+
+            // `TimeZone.getDefault().getOffset(System.currentTimeMillis())`
+            // in seconds. Both lookups are failures-of-nothing classes; if
+            // either errors the report still ships with a UTC default.
+            let utc_offset_secs = (|| -> jni::errors::Result<i32> {
+                let tz_class = env.find_class(jni::jni_str!("java/util/TimeZone"))?;
+                let tz = env
+                    .call_static_method(
+                        &tz_class,
+                        jni::jni_str!("getDefault"),
+                        jni::jni_sig!("()Ljava/util/TimeZone;"),
+                        &[],
+                    )?
+                    .l()?;
+                let sys = env.find_class(jni::jni_str!("java/lang/System"))?;
+                let now_ms = env
+                    .call_static_method(
+                        &sys,
+                        jni::jni_str!("currentTimeMillis"),
+                        jni::jni_sig!("()J"),
+                        &[],
+                    )?
+                    .j()?;
+                let off_ms = env
+                    .call_method(
+                        &tz,
+                        jni::jni_str!("getOffset"),
+                        jni::jni_sig!("(J)I"),
+                        &[jni::JValue::from(now_ms)],
+                    )?
+                    .i()?;
+                Ok(off_ms / 1000)
+            }())
+            .unwrap_or(0);
 
             let window = env
                 .call_method(
@@ -282,10 +473,20 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
             let modern = (|| -> jni::errors::Result<[i32; 4]> {
                 let types = env.find_class(jni::jni_str!("android/view/WindowInsets$Type"))?;
                 let bars = env
-                    .call_static_method(&types, jni::jni_str!("systemBars"), jni::jni_sig!("()I"), &[])?
+                    .call_static_method(
+                        &types,
+                        jni::jni_str!("systemBars"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )?
                     .i()?;
                 let cutout = env
-                    .call_static_method(&types, jni::jni_str!("displayCutout"), jni::jni_sig!("()I"), &[])?
+                    .call_static_method(
+                        &types,
+                        jni::jni_str!("displayCutout"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )?
                     .i()?;
                 let ime = env
                     .call_static_method(&types, jni::jni_str!("ime"), jni::jni_sig!("()I"), &[])?
@@ -306,11 +507,21 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
                         &[jni::JValue::from(ime)],
                     )?
                     .l()?;
-                let left = env.get_field(&sys, jni::jni_str!("left"), jni::jni_sig!("I"))?.i()?;
-                let top = env.get_field(&sys, jni::jni_str!("top"), jni::jni_sig!("I"))?.i()?;
-                let right = env.get_field(&sys, jni::jni_str!("right"), jni::jni_sig!("I"))?.i()?;
-                let bottom = env.get_field(&sys, jni::jni_str!("bottom"), jni::jni_sig!("I"))?.i()?;
-                let kb_bottom = env.get_field(&kb, jni::jni_str!("bottom"), jni::jni_sig!("I"))?.i()?;
+                let left = env
+                    .get_field(&sys, jni::jni_str!("left"), jni::jni_sig!("I"))?
+                    .i()?;
+                let top = env
+                    .get_field(&sys, jni::jni_str!("top"), jni::jni_sig!("I"))?
+                    .i()?;
+                let right = env
+                    .get_field(&sys, jni::jni_str!("right"), jni::jni_sig!("I"))?
+                    .i()?;
+                let bottom = env
+                    .get_field(&sys, jni::jni_str!("bottom"), jni::jni_sig!("I"))?
+                    .i()?;
+                let kb_bottom = env
+                    .get_field(&kb, jni::jni_str!("bottom"), jni::jni_sig!("I"))?
+                    .i()?;
                 Ok([left, top, right, bottom.max(kb_bottom)])
             })();
             let [left, top, right, bottom] = match modern {
@@ -319,14 +530,34 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
                     // API < 30: WindowInsets$Type does not exist.
                     env.exception_clear();
                     [
-                        env.call_method(&insets, jni::jni_str!("getSystemWindowInsetLeft"), jni::jni_sig!("()I"), &[])?
-                            .i()?,
-                        env.call_method(&insets, jni::jni_str!("getSystemWindowInsetTop"), jni::jni_sig!("()I"), &[])?
-                            .i()?,
-                        env.call_method(&insets, jni::jni_str!("getSystemWindowInsetRight"), jni::jni_sig!("()I"), &[])?
-                            .i()?,
-                        env.call_method(&insets, jni::jni_str!("getSystemWindowInsetBottom"), jni::jni_sig!("()I"), &[])?
-                            .i()?,
+                        env.call_method(
+                            &insets,
+                            jni::jni_str!("getSystemWindowInsetLeft"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )?
+                        .i()?,
+                        env.call_method(
+                            &insets,
+                            jni::jni_str!("getSystemWindowInsetTop"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )?
+                        .i()?,
+                        env.call_method(
+                            &insets,
+                            jni::jni_str!("getSystemWindowInsetRight"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )?
+                        .i()?,
+                        env.call_method(
+                            &insets,
+                            jni::jni_str!("getSystemWindowInsetBottom"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )?
+                        .i()?,
                     ]
                 }
             };
@@ -337,33 +568,16 @@ fn query(app: &AndroidApp) -> jni::errors::Result<Option<Report>> {
                 bottom,
                 font_scale,
                 night,
+                reduce_motion,
+                utc_offset_secs,
             }))
         })();
-        // The activity reference belongs to NativeActivity; never release it.
+        // The activity jobject is a *borrowed global ref* owned by the
+        // AndroidApp: jni 0.22's JObject has no Drop (never deletes refs),
+        // so dropping it is a no-op — this forget is defense-in-depth
+        // against a future owning wrapper, which would delete the borrowed
+        // global and abort ART.
         std::mem::forget(activity);
         r
     })
-}
-
-/// Back at the root of the app: finish the activity like a native app does.
-/// winit marks every key as handled, so the system would never do this.
-pub(crate) fn finish_activity() {
-    let Some(app) = app() else { return };
-    let app2 = app.clone();
-    app.run_on_java_main_thread(Box::new(move || {
-        let vm = unsafe { jni::JavaVM::from_raw(app2.vm_as_ptr().cast()) };
-        let res = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
-            let activity = unsafe {
-                jni::objects::JObject::from_raw(env, app2.activity_as_ptr() as jni::sys::jobject)
-            };
-            let r = env
-                .call_method(&activity, jni::jni_str!("finish"), jni::jni_sig!("()V"), &[])
-                .map(|_| ());
-            std::mem::forget(activity);
-            r
-        });
-        if let Err(e) = res {
-            log::warn!("finish() failed: {e}");
-        }
-    }));
 }
