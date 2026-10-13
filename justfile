@@ -26,7 +26,7 @@ default:
 [private]
 android-stage:
     @rustup target add aarch64-linux-android
-    cargo build -p rustnotes --target aarch64-linux-android --release
+    cargo build -p rustnotes --lib --target aarch64-linux-android --release
     rm -rf build/apk
     mkdir -p build/apk/lib/arm64-v8a
     cp build/target/aarch64-linux-android/release/librustnotes.so build/apk/lib/arm64-v8a/
@@ -100,7 +100,7 @@ android-run device='adb:emulator-5554':
 # Cross-compile and assemble the .app bundle
 [private]
 ios-build target:
-    cargo build -p rustnotes-ios --target {{target}} --release
+    cargo build -p rustnotes --bin rustnotes --target {{target}} --release
     rm -rf build/ios
     mkdir -p "{{ios_app}}"
     cp build/target/{{target}}/release/rustnotes "{{ios_app}}/rustnotes"
@@ -231,5 +231,5 @@ ios-install: ios-device ios-sign
 # (the workspace can't be checked as a whole: ndk-sys only compiles for Android)
 check:
     cargo check -p rustnotes-core
-    cargo check -p rustnotes --target aarch64-linux-android
-    cargo check -p rustnotes-ios --target aarch64-apple-ios-sim
+    cargo check -p rustnotes --lib --target aarch64-linux-android
+    cargo check -p rustnotes --bin rustnotes --target aarch64-apple-ios-sim

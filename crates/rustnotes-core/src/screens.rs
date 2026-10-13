@@ -10,7 +10,7 @@ use crate::layout::{
     self, add_button, back_button, bar_title, bottom_nav, icon_notes, icon_settings, BarLine,
     Metrics, Nav, NavItem, Palette, Scaffold, WindowClass,
 };
-use crate::{notes, util, App, Platform, Screen, Tab, DELETE_ARM_WINDOW, EDITOR_ID};
+use crate::{notes, util, App, Screen, Tab, DELETE_ARM_WINDOW, EDITOR_ID};
 use egui::{
     pos2, vec2, Align, Align2, Id, Layout, Rect, ScrollArea, Sense, Shape, Stroke, Ui, UiBuilder,
 };
@@ -99,9 +99,10 @@ fn editor_bar(ui: &mut Ui, new_note: bool, show_back: bool, pal: &Palette, m: &M
 }
 
 impl App {
-    /// Root of the UI for one frame.
-    pub(crate) fn ui(&mut self, root: &mut Ui, plat: &dyn Platform) {
+    /// Root of the UI for one frame. The host calls this from `eframe::App::ui`.
+    pub fn ui(&mut self, root: &mut Ui) {
         let ctx = root.ctx().clone();
+        self.time = ctx.input(|i| i.time);
         let pal = Palette::of(&ctx);
         let m = Metrics::DEFAULT;
         let class = WindowClass::of(&ctx);
@@ -130,16 +131,15 @@ impl App {
             match cmd {
                 Cmd::NewNote => {
                     self.armed_delete = None;
-                    self.open_editor(0, plat);
+                    self.open_editor(0);
                 }
                 Cmd::OpenNote(id) => {
                     self.armed_delete = None;
-                    self.open_editor(id, plat);
+                    self.open_editor(id);
                 }
-                Cmd::Back => self.close_editor(plat),
+                Cmd::Back => self.close_editor(),
                 Cmd::Tab(t) => {
                     self.tab = t;
-                    self.dirty = true;
                 }
             }
         }
@@ -272,8 +272,14 @@ impl App {
         let ctx = root.ctx().clone();
         let vp = ctx.viewport_rect();
         let rows: [(&str, String); 7] = [
-            ("Display scale", format!("{:.2} px per point", self.density_ppp)),
-            ("Text scale", format!("{:.2}x", self.text_scale)),
+            (
+                "Display scale",
+                format!(
+                    "{:.2} px per point",
+                    ctx.native_pixels_per_point().unwrap_or(1.0)
+                ),
+            ),
+            ("Text scale", format!("{:.2}x", ctx.zoom_factor())),
             ("Window", format!("{:.0} x {:.0} pt", vp.width(), vp.height())),
             (
                 "Size class",
@@ -641,7 +647,7 @@ impl App {
                 // The field fills the whole body so a tap anywhere below the
                 // bar lands on it; TextEdit scrolls its cursor into view.
                 let min = vec2(ui.available_width(), (body_h - m.sp(2)).max(0.0));
-                ui.add(
+                let resp = ui.add(
                     egui::TextEdit::multiline(&mut self.buffer)
                         .id(id)
                         .frame(egui::Frame::NONE.inner_margin(egui::Margin {
@@ -657,6 +663,13 @@ impl App {
                         .hint_text("Start typing...")
                         .lock_focus(true),
                 );
+                // egui-winit only toggles the keyboard when focus changes, so
+                // a keyboard the OS dismissed while the editor kept focus
+                // would never come back. A tap in the editor re-asks for it.
+                if resp.clicked() {
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
+                }
             });
     }
 }

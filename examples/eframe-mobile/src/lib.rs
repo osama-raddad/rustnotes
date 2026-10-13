@@ -32,8 +32,36 @@ pub fn native_options() -> eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         // Mobile has no window chrome; eframe maximises on iOS by itself.
         viewport: egui::ViewportBuilder::default().with_title(APP_NAME),
+        #[cfg(target_os = "ios")]
+        wgpu_options: ios_wgpu_options(),
         ..Default::default()
     }
+}
+
+/// egui-wgpu asks for WebGPU's default limits, which iOS Metal devices (the
+/// simulator included) do not all meet: `max_inter_stage_shader_variables`
+/// is 15 there against a default of 16, and eframe exits at startup. Ask for
+/// what the adapter actually supports instead; egui's shaders need far less.
+#[cfg(target_os = "ios")]
+fn ios_wgpu_options() -> eframe::WgpuConfiguration {
+    use eframe::egui_wgpu::WgpuSetup;
+    use eframe::wgpu;
+    let mut cfg = eframe::WgpuConfiguration::default();
+    if let WgpuSetup::CreateNew(create) = &mut cfg.wgpu_setup {
+        create.device_descriptor = std::sync::Arc::new(|adapter: &wgpu::Adapter| {
+            let supported = adapter.limits();
+            wgpu::DeviceDescriptor {
+                label: Some("egui wgpu device"),
+                required_limits: wgpu::Limits {
+                    // Full-screen textures on high-density displays.
+                    max_texture_dimension_2d: supported.max_texture_dimension_2d.min(8192),
+                    ..supported
+                },
+                ..Default::default()
+            }
+        });
+    }
+    cfg
 }
 
 /// Start the app with the given options. Blocks until the app exits.

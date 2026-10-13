@@ -2,11 +2,9 @@
 name = "rustnotes-core"
 version = "0.1.0"
 edition = "2021"
-description = "Platform-agnostic core of Rust Notes: app state, UI layout, GL renderer, storage"
+description = "Rust Notes app logic: notes storage, screens and the mobile layout layer (pure egui)"
 
 [dependencies]
 log.workspace = true
-glow.workspace = true
 egui.workspace = true
-egui_glow.workspace = true
 rusqlite.workspace = true
