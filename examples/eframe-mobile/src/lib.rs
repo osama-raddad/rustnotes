@@ -64,7 +64,7 @@ fn android_main(app: android_activity::AndroidApp) {
     options.persistence_path = app.internal_data_path().map(|dir| dir.join("app.ron"));
     // Keep a handle for per-frame queries egui-winit does not forward
     // (content rect for safe-area insets, night mode for Theme::System).
-    let _ = android::APP.set(app.clone());
+    android::set_app(app.clone());
     // winit needs the AndroidApp handle to build its event loop.
     options.android_app = Some(app);
 
@@ -78,10 +78,20 @@ fn android_main(app: android_activity::AndroidApp) {
 pub(crate) mod android {
     use android_activity::ndk::configuration::UiModeNight;
     use android_activity::AndroidApp;
-    use std::sync::OnceLock;
+    use std::sync::Mutex;
 
-    /// Set once in `android_main`, before eframe starts.
-    pub(crate) static APP: OnceLock<AndroidApp> = OnceLock::new();
+    /// Set in `android_main` before eframe starts. A Mutex rather than a
+    /// OnceLock: NativeActivity can call `android_main` again in the same
+    /// process after the activity is recreated, and the new handle must win.
+    static APP: Mutex<Option<AndroidApp>> = Mutex::new(None);
+
+    pub(crate) fn set_app(app: AndroidApp) {
+        *APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(app);
+    }
+
+    fn app() -> Option<AndroidApp> {
+        APP.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
 
     /// Safe-area insets in points, derived from NativeActivity's content
     /// rect (window pixels) versus the viewport. egui-winit only fills
@@ -94,7 +104,7 @@ pub(crate) mod android {
     /// bar insets on those devices needs JNI (`View.getRootWindowInsets`) or
     /// a theme with `windowOptOutEdgeToEdgeEnforcement`.
     pub(crate) fn safe_area_insets(screen: egui::Rect, ppp: f32) -> Option<egui::SafeAreaInsets> {
-        let rect = APP.get()?.content_rect();
+        let rect = app()?.content_rect();
         if rect.right <= rect.left || rect.bottom <= rect.top || ppp <= 0.0 {
             return None; // not reported yet
         }
@@ -109,7 +119,7 @@ pub(crate) mod android {
     /// The OS dark-mode setting. winit's `Window::theme()` is None on
     /// Android, so egui never learns it without asking the configuration.
     pub(crate) fn night_mode() -> Option<egui::Theme> {
-        match APP.get()?.config().ui_mode_night() {
+        match app()?.config().ui_mode_night() {
             UiModeNight::Yes => Some(egui::Theme::Dark),
             UiModeNight::No => Some(egui::Theme::Light),
             _ => None,
