@@ -1,5 +1,8 @@
 # rust-i18n v2 layout: one key, every language. Loaded at compile time by
 # `i18n!("locales")`, so `t!()` is a cheap lookup inside the render loop.
+#
+# `ar` is a glyph-coverage demo: egui 0.36 has no right-to-left reordering
+# or Arabic shaping, so these strings render in logical (wrong) order.
 _version: 2
 app.title:
   en: Mobile App

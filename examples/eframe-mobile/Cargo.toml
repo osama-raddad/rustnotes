@@ -35,6 +35,11 @@ serde = { version = "1", features = ["derive"] }
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 eframe = { version = "0.36", default-features = false, features = ["glow"] }
 
+# Linux desktop: with default features off nothing selects a winit windowing
+# backend, so name both explicitly.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.36", default-features = false, features = ["x11", "wayland"] }
+
 [target.'cfg(target_os = "ios")'.dependencies]
 eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
 
@@ -42,6 +47,7 @@ eframe = { version = "0.36", default-features = false, features = ["wgpu"] }
 eframe = { version = "0.36", default-features = false, features = ["android-native-activity"] }
 android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.14"
+jni = "0.22"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 env_logger = "0.11"
