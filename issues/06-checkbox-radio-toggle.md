@@ -6,6 +6,9 @@ priority: high
 blocked-by: [04, 03]
 blocks: [11]
 estimate: medium
+status: done
+completed: 2026-10-14T02:33:33+0200
+commit: b47cc83516f82fdabc61078065541bcef28a31a5
 modules:
   - crates/ui-kit/src/components/checkbox.rs
   - crates/ui-kit/src/components/radio.rs
