@@ -34,6 +34,10 @@ const PULL_THRESHOLD: f32 = 64.0;
 const SWIPE_DELETE_FRACTION: f32 = 0.4;
 /// Movement, in points, before a touch commits to scrolling or swiping.
 const AXIS_LOCK_SLOP: f32 = 8.0;
+/// What an armed row says in place of its date. The first tap on the cross
+/// only arms the delete; without this the button looks broken, because
+/// nothing else tells the user a second tap is wanted.
+const DELETE_HINT: &str = "Tap again to delete";
 
 /// Navigation changes requested while drawing.
 pub(crate) enum Cmd {
@@ -672,15 +676,32 @@ impl App {
                         pal.text_weak,
                     );
                 }
-                p.text(
-                    pos2(tx + text_w, card.bottom() - card_pad),
-                    Align2::RIGHT_BOTTOM,
-                    // Cached when the list loaded (MED-5), not reformatted
-                    // per row per frame.
-                    date,
-                    m.font(m.text.caption),
-                    pal.text_faint,
-                );
+                // The date's slot: bottom-right of the text area.
+                let slot = pos2(tx + text_w, card.bottom() - card_pad);
+                if armed {
+                    // The armed row trades its date for the instruction. A
+                    // long snippet can run under the slot and the words are
+                    // wider than a date, so they sit on a patch of the
+                    // card's own colour instead of being written through it.
+                    let galley = p.layout_no_wrap(
+                        DELETE_HINT.to_owned(),
+                        m.font(m.text.caption),
+                        pal.danger,
+                    );
+                    let hint = Align2::RIGHT_BOTTOM.anchor_size(slot, galley.size());
+                    p.rect_filled(hint.expand(m.sp(0)), 0.0, fill);
+                    p.galley(hint.min, galley, pal.danger);
+                } else {
+                    p.text(
+                        slot,
+                        Align2::RIGHT_BOTTOM,
+                        // Cached when the list loaded (MED-5), not reformatted
+                        // per row per frame.
+                        date,
+                        m.font(m.text.caption),
+                        pal.text_faint,
+                    );
+                }
             }
             ui.add_space(m.sp(3));
 
@@ -811,5 +832,162 @@ impl App {
                         .send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, RawInput};
+    use std::time::Duration;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("rn-screens-test-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// One egui pass, as the host runs it: the app draws into a root `Ui`
+    /// covering the screen between begin_pass/end_pass. Returns the text the
+    /// pass painted, one string per galley, so a test can ask what is on
+    /// screen.
+    fn run_pass(app: &mut App, ctx: &egui::Context, events: Vec<Event>, t: f64) -> Vec<String> {
+        let screen = Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 800.0));
+        ctx.begin_pass(RawInput {
+            time: Some(t),
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        });
+        let mut root = Ui::new(
+            ctx.clone(),
+            Id::new("test-root"),
+            UiBuilder::new().max_rect(screen),
+        );
+        app.ui(&mut root);
+        let mut out = ctx.end_pass();
+        // No renderer applies the glyph-atlas delta; clear it or epaint
+        // panics on the drop.
+        out.textures_delta.clear();
+        let mut painted = vec![];
+        collect_text(
+            out.shapes.iter().map(|clipped| &clipped.shape),
+            &mut painted,
+        );
+        painted
+    }
+
+    /// The text of every `Shape::Text` among `shapes`, looking inside
+    /// `Shape::Vec` groups.
+    fn collect_text<'a>(shapes: impl Iterator<Item = &'a Shape>, into: &mut Vec<String>) {
+        for shape in shapes {
+            match shape {
+                Shape::Text(text) => into.push(text.galley.text().to_owned()),
+                Shape::Vec(inner) => collect_text(inner.iter(), into),
+                _ => {}
+            }
+        }
+    }
+
+    /// A tap at `pos`: move, press, release, all in one pass.
+    fn click(pos: egui::Pos2) -> Vec<Event> {
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        vec![Event::PointerMoved(pos), button(true), button(false)]
+    }
+
+    /// A fresh app listing two saved notes, newest first.
+    fn app_with_two_notes(ctx: &egui::Context, name: &str) -> App {
+        let mut app = App::new(temp(name).join("data"), ctx, None);
+        for body in ["first note", "second note"] {
+            app.open_editor(0);
+            app.buffer = body.to_owned();
+            app.close_editor();
+        }
+        assert_eq!(app.notes.len(), 2);
+        app
+    }
+
+    /// How many delete hints were painted.
+    fn hints(painted: &[String]) -> usize {
+        painted.iter().filter(|text| *text == DELETE_HINT).count()
+    }
+
+    /// How many of the list's cached row dates were painted.
+    fn dates(app: &App, painted: &[String]) -> usize {
+        painted
+            .iter()
+            .filter(|text| app.row_dates.contains(text))
+            .count()
+    }
+
+    /// The first tap on a row's cross only arms the delete, so the armed row
+    /// has to say a second tap is wanted: its date gives way to the hint from
+    /// the frame after the tap, and the other row is left alone.
+    #[test]
+    fn tapping_the_cross_shows_the_delete_hint_in_place_of_the_date() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "hint-shows");
+        let id = app.notes[0].id;
+
+        let idle = run_pass(&mut app, &ctx, vec![], 1.0);
+        assert_eq!(hints(&idle), 0, "no hint before the tap");
+        assert_eq!(dates(&app, &idle), 2, "both rows show their dates");
+
+        // Read the cross's rect back from the widget registry: the same rect
+        // egui hit-tests against.
+        let cross = ctx
+            .read_response(Id::new(("del", id)))
+            .expect("the delete cross is laid out")
+            .rect
+            .center();
+        run_pass(&mut app, &ctx, click(cross), 2.0);
+        assert_eq!(
+            app.armed_delete.map(|(armed, _)| armed),
+            Some(id),
+            "the tap arms the row"
+        );
+
+        // The tap arms after the rows were painted, so the hint is on screen
+        // from the next frame.
+        let armed = run_pass(&mut app, &ctx, vec![], 2.1);
+        assert_eq!(hints(&armed), 1, "one hint, for the armed row");
+        assert_eq!(
+            dates(&app, &armed),
+            1,
+            "the armed row's date gave way; the other row keeps its own"
+        );
+    }
+
+    /// The hint lives exactly as long as the arm: a re-list clears it, and so
+    /// does the arm running out of its window (back-dated here, because the
+    /// window runs on `Instant`).
+    #[test]
+    fn delete_hint_goes_when_the_arm_does() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "hint-clears");
+        let id = app.notes[0].id;
+        run_pass(&mut app, &ctx, vec![], 1.0);
+
+        app.armed_delete = Some((id, Instant::now()));
+        let armed = run_pass(&mut app, &ctx, vec![], 1.1);
+        assert_eq!(hints(&armed), 1, "an armed row shows the hint");
+
+        app.refresh_notes();
+        let relisted = run_pass(&mut app, &ctx, vec![], 1.2);
+        assert_eq!(hints(&relisted), 0, "a re-list clears the arm and the hint");
+        assert_eq!(dates(&app, &relisted), 2, "the dates are back");
+
+        let stale = Instant::now()
+            .checked_sub(DELETE_ARM_WINDOW + Duration::from_secs(1))
+            .expect("the clock has run for longer than the arm window");
+        app.armed_delete = Some((id, stale));
+        let expired = run_pass(&mut app, &ctx, vec![], 1.3);
+        assert_eq!(hints(&expired), 0, "an expired arm shows no hint");
+        assert!(app.armed_delete.is_none(), "the expiry drops the arm");
     }
 }

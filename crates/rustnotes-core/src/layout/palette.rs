@@ -83,10 +83,14 @@ impl Palette {
         // the faintest one.
         v.weak_text_color = Some(self.text_weak);
         v.hyperlink_color = self.accent;
-        // Selected text keeps the normal text colour, so the fill has to
-        // contrast with it: near-black light-theme text needs the light
-        // `selected` surface, while the dark theme's near-white text can
-        // afford the darkened accent.
+        // egui recolours selected text itself: the glyphs take
+        // `selection.stroke.color` and sit on `selection.bg_fill`
+        // (`text_selection/visuals.rs`), so the two are one pair and move
+        // together: the accent has to read on the fill. A darkened accent
+        // behind accent glyphs fails that on the light theme, which takes the
+        // light `selected` surface instead; the dark theme's darkened accent
+        // is translucent (`gamma_multiply` scales alpha too), so whatever it
+        // is painted over lifts it.
         v.selection.bg_fill = match theme {
             Theme::Light => self.selected,
             Theme::Dark => self.accent.gamma_multiply(0.35),
@@ -137,9 +141,27 @@ mod tests {
         );
     }
 
+    /// `fill` laid over an opaque `backdrop` with the usual source-over
+    /// blend. egui stores colours premultiplied, so the fill's own RGB is
+    /// already scaled by its alpha. The dark selection fill is translucent:
+    /// its raw RGB is far darker than what reaches the screen, so contrast
+    /// has to be measured after this blend, not against the raw value.
+    fn over(fill: Color32, backdrop: Color32) -> Color32 {
+        let keep = 1.0 - f32::from(fill.a()) / 255.0;
+        let mix = |f: u8, b: u8| (f32::from(f) + f32::from(b) * keep).round().min(255.0) as u8;
+        Color32::from_rgb(
+            mix(fill.r(), backdrop.r()),
+            mix(fill.g(), backdrop.g()),
+            mix(fill.b(), backdrop.b()),
+        )
+    }
+
     /// Every text token must be readable on the backgrounds it lands on:
     /// body-level tokens at WCAG AA (4.5:1), de-emphasised and accent pairings
-    /// at the large-text/UI minimum (3:1).
+    /// at the large-text/UI minimum (3:1). `danger` also writes caption-size
+    /// text (the storage-error strip, the armed-delete hint): AA on `bg` and
+    /// `surface`, and the 3:1 minimum on the `selected` row, where it falls a
+    /// little short of AA.
     #[test]
     fn text_tokens_read_on_their_backgrounds() {
         for pal in [Palette::LIGHT, Palette::DARK] {
@@ -152,20 +174,35 @@ mod tests {
             at_least(pal.text_faint, pal.surface, 3.0, "faint text on surface");
             at_least(pal.on_accent, pal.accent, 3.0, "on_accent on accent");
             at_least(pal.danger, pal.danger_bg, 3.0, "danger on danger_bg");
-            at_least(pal.danger, pal.surface, 3.0, "danger on surface");
+            at_least(pal.danger, pal.bg, 4.5, "danger text on bg");
+            at_least(pal.danger, pal.surface, 4.5, "danger text on surface");
+            at_least(pal.danger, pal.selected, 3.0, "danger on selected");
         }
     }
 
-    /// egui paints selected text in the normal text colour over
-    /// `selection.bg_fill`; that pair must stay readable in both themes (the
-    /// light theme used to darken the accent into a navy under near-black
-    /// text, ≈1.2:1).
+    /// egui recolours selected text itself: the glyphs take
+    /// `selection.stroke.color` and sit on `selection.bg_fill`
+    /// (`text_selection/visuals.rs`), so that pair has to read at the 3:1 UI
+    /// minimum in both themes. The fill is measured as the user sees it,
+    /// composited over each backdrop it can land on: the light theme's old
+    /// darkened-accent fill scored only about 2.5 to 2.7:1 that way. Text
+    /// that keeps the normal colour must stay readable on the same fill too.
     #[test]
     fn selected_text_stays_readable_in_both_themes() {
         for (pal, theme) in [(Palette::LIGHT, Theme::Light), (Palette::DARK, Theme::Dark)] {
             let v = pal.visuals(theme);
             let text = v.override_text_color.expect("palette sets the text colour");
-            at_least(text, v.selection.bg_fill, 4.5, "selected text");
+            for (backdrop, name) in [(pal.bg, "bg"), (pal.surface, "surface")] {
+                let fill = over(v.selection.bg_fill, backdrop);
+                let what = format!("{theme:?} selection over {name}");
+                at_least(
+                    v.selection.stroke.color,
+                    fill,
+                    3.0,
+                    &format!("{what}: stroke"),
+                );
+                at_least(text, fill, 4.5, &format!("{what}: text"));
+            }
         }
     }
 
