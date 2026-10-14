@@ -683,17 +683,15 @@ pub(crate) fn paint_pass<R>(
     (result.expect("the pass ran the widget"), shapes)
 }
 
-/// Every laid-out text a frame painted, as (origin, galley) pairs in
-/// paint order: how the headless tests ask where a label really landed
-/// instead of trusting the arithmetic that put it there. Widgets may
-/// nest their shapes in a `Shape::Vec`, so the walk descends into those.
+/// Every text shape a frame painted, in paint order: how the headless
+/// tests ask where a label really landed, and in what colour, instead of
+/// trusting the arithmetic that put it there. Widgets may nest their
+/// shapes in a `Shape::Vec`, so the walk descends into those.
 #[cfg(test)]
-fn text_shapes(
-    shapes: &[egui::epaint::ClippedShape],
-) -> Vec<(egui::Pos2, std::sync::Arc<egui::Galley>)> {
-    fn walk(shape: &egui::Shape, found: &mut Vec<(egui::Pos2, std::sync::Arc<egui::Galley>)>) {
+fn text_shapes(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::epaint::TextShape> {
+    fn walk(shape: &egui::Shape, found: &mut Vec<egui::epaint::TextShape>) {
         match shape {
-            egui::Shape::Text(text) => found.push((text.pos, text.galley.clone())),
+            egui::Shape::Text(text) => found.push(text.clone()),
             egui::Shape::Vec(nested) => nested.iter().for_each(|shape| walk(shape, found)),
             _ => {}
         }
@@ -705,33 +703,33 @@ fn text_shapes(
     found
 }
 
-/// The one text a frame painted as `text`: its origin and its galley.
-/// Components paint icon glyphs and neighbouring labels through the same
-/// shape kind, so a label is picked out by what it reads. A miss panics
-/// naming what the frame did paint; a text painted twice panics naming
-/// where.
+/// The one text shape a frame painted as `text`: its origin, its galley
+/// and its colours. Components paint icon glyphs and neighbouring labels
+/// through the same shape kind, so a label is picked out by what it
+/// reads. A miss panics naming what the frame did paint; a text painted
+/// twice panics naming where.
 #[cfg(test)]
-fn painted_text(
+pub(crate) fn painted_text(
     shapes: &[egui::epaint::ClippedShape],
     text: &str,
-) -> (egui::Pos2, std::sync::Arc<egui::Galley>) {
+) -> egui::epaint::TextShape {
     let all = text_shapes(shapes);
     let hits: Vec<_> = all
         .iter()
-        .filter(|(_, galley)| galley.text() == text)
+        .filter(|shape| shape.galley.text() == text)
         .collect();
     match hits.as_slice() {
-        [(pos, galley)] => (*pos, galley.clone()),
+        [shape] => (*shape).clone(),
         [] => panic!(
             "no text reading {text:?} was painted; the frame painted {:?}",
             all.iter()
-                .map(|(_, galley)| galley.text())
+                .map(|shape| shape.galley.text())
                 .collect::<Vec<_>>()
         ),
         many => panic!(
             "{text:?} was painted {} times, at {:?}",
             many.len(),
-            many.iter().map(|(pos, _)| *pos).collect::<Vec<_>>()
+            many.iter().map(|shape| shape.pos).collect::<Vec<_>>()
         ),
     }
 }
@@ -753,8 +751,8 @@ pub(crate) fn assert_painted_inside(
     text: &str,
     rect: egui::Rect,
 ) -> egui::Pos2 {
-    let (pos, galley) = painted_text(shapes, text);
-    let painted = galley.rect.translate(pos.to_vec2());
+    let shape = painted_text(shapes, text);
+    let painted = shape.galley.rect.translate(shape.pos.to_vec2());
     assert!(
         painted.left() >= rect.left() - 0.5 && painted.right() <= rect.right() + 0.5,
         "{text:?} paints across x {:.1}..{:.1} but its box spans {:.1}..{:.1}",
@@ -1348,7 +1346,7 @@ mod tests {
         let all = super::text_shapes(&shapes);
         let found: Vec<(&str, egui::Pos2)> = all
             .iter()
-            .map(|(pos, galley)| (galley.text(), *pos))
+            .map(|shape| (shape.galley.text(), shape.pos))
             .collect();
         assert_eq!(
             found,
