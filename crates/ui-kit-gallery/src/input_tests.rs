@@ -369,6 +369,20 @@ fn sideways_touch_drag_scrolls_a_specimen_row() {
     );
 }
 
+/// Dismiss the Feedback panel's info banner by touch, the topmost close
+/// glyph on the page, and check that the panel then offers to restore
+/// it: a tap inside the scrolling page lands.
+fn dismiss_the_info_banner(h: &mut Harness) {
+    let close = ui_kit::icons::Icon::Close.as_char().to_string();
+    let dismiss = h.painted(&close).expect("the info banner's dismiss");
+    h.tap(dismiss.center());
+    h.idle(2);
+    assert!(
+        h.painted(copy::BANNERS_RESTORE).is_some(),
+        "a tap inside the page dismisses the banner and offers the restore"
+    );
+}
+
 /// Once touches have been seen (egui's drag-to-scroll is armed), taps
 /// still land: one on the tab strip switches panels, one inside the
 /// scrolling page dismisses a banner, and the restore button appears
@@ -391,15 +405,7 @@ fn taps_still_land_after_touches_have_been_seen() {
         "all four banners show at first, so there is nothing to restore"
     );
 
-    // The info banner's dismiss is the topmost close glyph on the page.
-    let close = ui_kit::icons::Icon::Close.as_char().to_string();
-    let dismiss = h.painted(&close).expect("the info banner's dismiss");
-    h.tap(dismiss.center());
-    h.idle(2);
-    assert!(
-        h.painted(copy::BANNERS_RESTORE).is_some(),
-        "a tap inside the page dismisses the banner and offers the restore"
-    );
+    dismiss_the_info_banner(&mut h);
 }
 
 /// The first touch after launch can be a sideways swipe on the tab
@@ -495,7 +501,7 @@ fn the_theme_menu_switches_themes_and_closes_on_a_tap_outside() {
     assert!(h.painted(dark).is_none(), "the menu starts closed");
 
     let trigger = h
-        .painted(copy::THEME_MENU)
+        .node(Role::Button, copy::THEME_MENU)
         .expect("the bar's theme trigger");
     h.tap(trigger.center());
     h.idle(2);
@@ -584,42 +590,63 @@ fn the_search_popover_closes_on_a_tap_outside_and_gives_way_to_the_theme_menu() 
 }
 
 /// The bar keeps its working controls clear of the rest of its row
-/// from the narrowest phones to a laptop (320, the first iPhone SE and
-/// the small Androids; 600, the compact breakpoint; 768 and 834, iPad
-/// mini and iPad Air portrait; 1024, iPad landscape) with the longest
-/// theme name live: the theme trigger and the search button keep at
-/// least the bar's action gap from every nav link and from the
-/// wordmark. Touching counts as crowding: laid out without measuring,
-/// the search button came within half a point of the last nav link at
-/// 1024.
+/// from the narrowest phones to a wide desktop (320, the first iPhone
+/// SE and the small Androids; 600, the compact breakpoint; 768 and 834,
+/// iPad mini and iPad Air portrait; 1024, iPad landscape; 1200 and
+/// 1440, desktops, the widest holding the fullest bar) in every theme,
+/// each with its own faces and name: the theme trigger and the search
+/// button keep at least the bar's action gap from every nav link and
+/// from the wordmark. Touching counts as crowding: laid out without
+/// measuring, the search button came within half a point of the last
+/// nav link at 1024.
 #[test]
 fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
-    let longest = *ThemeId::ALL
-        .iter()
-        .max_by_key(|id| id.name().len())
-        .expect("the gallery's themes");
     let gap = ui_kit::components::top_app_bar::ACTIONS_GAP;
     let mut crowded = Vec::new();
-    for width in [320.0, 600.0, 768.0, 834.0, 1024.0] {
-        let mut h = Harness::window(egui::vec2(width, 800.0));
-        h.app.gallery.theme = longest;
-        crate::gallery::apply_theme(longest, &h.ctx);
-        h.idle(2);
-        let trigger = h
-            .node(Role::Button, copy::THEME_MENU)
-            .expect("the bar's theme trigger");
-        let search = h
-            .node(Role::Button, copy::SEARCH_BUTTON_NAME)
-            .expect("the bar's search button");
-        let mut neighbours = nav_links(&h);
-        neighbours.push(("the wordmark".to_owned(), wordmark(&h, trigger)));
-        for (control, rect) in [("theme trigger", trigger), ("search button", search)] {
-            let reach = rect.expand2(egui::vec2(gap, 0.0));
-            for (name, neighbour) in &neighbours {
-                if reach.intersects(*neighbour) {
-                    crowded.push(format!(
-                        "at {width}pt the {control} {rect:?} crowds {name} {neighbour:?}"
-                    ));
+    // One app, resized as a window is: the bar measures its row afresh
+    // every frame. It is the same bar over every panel, and the
+    // Feedback panel is the cheapest one to lay out beneath it.
+    let mut h = Harness::window(egui::vec2(320.0, 800.0));
+    h.app.gallery.tab = 3;
+    for width in [320.0, 600.0, 768.0, 834.0, 1024.0, 1200.0, 1440.0] {
+        h.window = egui::vec2(width, 800.0);
+        for theme in ThemeId::ALL {
+            h.app.gallery.theme = *theme;
+            crate::gallery::apply_theme(*theme, &h.ctx);
+            h.idle(2);
+            let trigger = h
+                .node(Role::Button, copy::THEME_MENU)
+                .expect("the bar's theme trigger");
+            let search = h
+                .node(Role::Button, copy::SEARCH_BUTTON_NAME)
+                .expect("the bar's search button");
+            if width >= 1440.0 {
+                // The widest window holds the fullest bar, so the check
+                // below covers it: the trigger naming the theme and the
+                // call to action beside it.
+                let named = format!("{} · {}", copy::THEME_MENU, theme.name());
+                let holds = |name: &str| {
+                    h.nodes
+                        .iter()
+                        .any(|(role, label, _)| *role == Role::Button && label == name)
+                };
+                assert!(
+                    holds(&named) && holds(copy::START_A_PROJECT),
+                    "at {width}pt in {} the bar holds everything",
+                    theme.name()
+                );
+            }
+            let mut neighbours = nav_links(&h);
+            neighbours.push(("the wordmark".to_owned(), wordmark(&h, trigger)));
+            for (control, rect) in [("theme trigger", trigger), ("search button", search)] {
+                let reach = rect.expand2(egui::vec2(gap, 0.0));
+                for (name, neighbour) in &neighbours {
+                    if reach.intersects(*neighbour) {
+                        crowded.push(format!(
+                            "at {width}pt in {} the {control} {rect:?} crowds {name} {neighbour:?}",
+                            theme.name()
+                        ));
+                    }
                 }
             }
         }

@@ -187,9 +187,11 @@ pub fn count_text(count: u32) -> String {
     }
 }
 
-/// The icon button's accessibility label, composed the preview's way:
-/// "Notifications, 3 unread", "Mail, more than 99 unread" above the
-/// cap, "Messages, new activity" for the dot.
+/// The accessibility label of an icon button that shows a count or the
+/// activity dot, composed the preview's way: "Notifications, 3 unread",
+/// "Mail, more than 99 unread" above the cap, and with no count (`None`,
+/// the dot) "Messages, new activity". A button showing neither keeps
+/// its bare name ([`IconButton`]).
 pub fn count_accessibility_label(name: &str, count: Option<u32>) -> String {
     match count {
         Some(count) if count <= COUNT_CAP => format!("{name}, {count} unread"),
@@ -435,16 +437,16 @@ impl<'a> IconButton<'a> {
             painter.circle_stroke(center, 5.0, Stroke::new(2.0, colors.surface));
         }
 
-        // The name a screen reader is told: what the button shows rides
-        // it, the count or else the dot's "new activity", and with
-        // neither it is the bare name.
-        let name = if self.count.is_some() || self.dot {
-            count_accessibility_label(self.name, self.count)
-        } else {
-            self.name.to_owned()
-        };
+        // The name a screen reader is told, built only when asked for:
+        // what the button shows rides it, the count or else the dot's
+        // "new activity", and with neither it is the bare name.
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, self.enabled, &name)
+            let name = if self.count.is_some() || self.dot {
+                count_accessibility_label(self.name, self.count)
+            } else {
+                self.name.to_owned()
+            };
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, self.enabled, name)
         });
 
         FocusRing::new()
