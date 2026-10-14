@@ -22,12 +22,12 @@
 
 use egui::{Color32, CornerRadius, FontId, Response, Sense, Ui, Vec2};
 
-use crate::components::card::Card;
+use crate::components::card::{Card, CardPadding};
 use crate::icon::{family_for_theme, icon, IconSize};
 use crate::icons::Icon;
 use crate::states::UiKitFlags;
 use crate::theme::ThemeId;
-use crate::tokens::{radii, spacing, type_scale, ThemeColors};
+use crate::tokens::{breakpoints, radii, spacing, type_scale, ThemeColors};
 use crate::typography::{display_bold_family, specimen_job, tracked_text, TrackedLabel, TypeStyle};
 
 /// One voice card's content width; four of them and their gutters fit
@@ -67,6 +67,140 @@ fn is_emoji(c: char) -> bool {
         | 0x2B00..=0x2BFF   // arrows and stars
         | 0xFE0F            // variation selector
         | 0x200D) // zero-width joiner
+}
+
+// ---- the card rows ----------------------------------------------------------
+
+/// How many cards `width` wide sit side by side, `gap` apart, in
+/// `available`: one under the compact breakpoint (`breakpoint-tablet`,
+/// where the design system's mobile layout ends), so a phone stacks
+/// them; above it as many as fit, up to the section's own row of `max`,
+/// and never fewer than one.
+pub(crate) fn card_columns(available: f32, width: f32, gap: f32, max: usize) -> usize {
+    if available < breakpoints::BREAKPOINT_TABLET {
+        return 1;
+    }
+    let fit = ((available + gap) / (width + gap)).floor().max(1.0) as usize;
+    fit.min(max.max(1))
+}
+
+/// Lay `items` out as cards in rows of [`card_columns`], `gap` apart
+/// and `gap` between the rows, each card placed at its `width` up
+/// front. egui's `horizontal_wrapped` moves a widget to the next line
+/// only when it knows the widget's size before laying it out, which a
+/// card (a child `Ui`) never offers, so a wrapped row of cards runs on
+/// past the window's edge. The up-front width is what lets the rows
+/// break, and it bounds a card whose own rows reach for all the width
+/// they are given (a right-aligned pill, a full-width rule). Rows hang
+/// from their tops, the cards' heights their own.
+pub(crate) fn card_rows<T>(
+    ui: &mut Ui,
+    width: f32,
+    gap: f32,
+    max: usize,
+    items: &[T],
+    mut card: impl FnMut(&mut Ui, &T),
+) {
+    let per_row = card_columns(ui.available_width(), width, gap, max);
+    for (index, row) in items.chunks(per_row).enumerate() {
+        if index > 0 {
+            // The item spacing already rides after the row above.
+            ui.add_space((gap - ui.spacing().item_spacing.y).max(0.0));
+        }
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for item in row {
+                ui.allocate_ui_with_layout(
+                    Vec2::new(width, 0.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| card(ui, item),
+                );
+            }
+        });
+    }
+}
+
+/// Lay a showcase out headless in a column `width` wide, every theme's
+/// faces installed in a warm-up pass, and hand back its laid-out size
+/// beside every text it painted with that text's top edge: the
+/// showcases' layout tests read their rows off where the card titles
+/// land. The column runs tall so nothing is culled.
+#[cfg(test)]
+pub(crate) fn lay_out(width: f32, mut paint: impl FnMut(&mut Ui)) -> (Vec2, Vec<(String, f32)>) {
+    fn walk(shape: &egui::Shape, found: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                found.push((
+                    text.galley.text().to_owned(),
+                    text.pos.y + text.galley.rect.top(),
+                ));
+            }
+            egui::Shape::Vec(nested) => nested.iter().for_each(|shape| walk(shape, found)),
+            _ => {}
+        }
+    }
+    let ctx = egui::Context::default();
+    ctx.run_ui(egui::RawInput::default(), |ui| {
+        crate::icon::install(ui.ctx());
+        for theme in ThemeId::ALL {
+            crate::typography::install(*theme, ui.ctx());
+        }
+    })
+    .drop_without_applying_deltas();
+    let mut size = Vec2::ZERO;
+    let mut found = Vec::new();
+    // A few passes, so the cards' sizing passes settle.
+    for _ in 0..3 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(width, 10_000.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            paint(ui);
+            size = ui.min_rect().size();
+        });
+        found.clear();
+        for clipped in std::mem::take(&mut out.shapes) {
+            walk(&clipped.shape, &mut found);
+        }
+        out.drop_without_applying_deltas();
+    }
+    (size, found)
+}
+
+/// The row each of `wanted` sits in, counting the distinct top edges
+/// among them from the top (half a point of slack): how the layout
+/// tests read a grid of cards. A text the layout never painted panics.
+#[cfg(test)]
+pub(crate) fn rows_of(painted: &[(String, f32)], wanted: &[&str]) -> Vec<usize> {
+    let tops: Vec<f32> = wanted
+        .iter()
+        .map(|text| {
+            painted
+                .iter()
+                .find(|(seen, _)| seen == text)
+                .map(|(_, top)| *top)
+                .unwrap_or_else(|| panic!("{text:?} was never painted"))
+        })
+        .collect();
+    let mut distinct: Vec<f32> = Vec::new();
+    for top in &tops {
+        if !distinct.iter().any(|seen| (seen - top).abs() < 0.5) {
+            distinct.push(*top);
+        }
+    }
+    distinct.sort_by(f32::total_cmp);
+    tops.iter()
+        .map(|top| {
+            distinct
+                .iter()
+                .position(|seen| (seen - top).abs() < 0.5)
+                .expect("every top is among the distinct ones")
+        })
+        .collect()
 }
 
 // ---- the copy --------------------------------------------------------------
@@ -318,9 +452,15 @@ impl BrandShowcase {
             Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
         )));
         ui.add_space(spacing::SPACE_2);
-        // Wrapped, not one long row: the cards stack on a phone.
-        ui.horizontal_wrapped(|ui| {
-            for (label, register, example) in VOICE_POSITIONS {
+        // The four tones in one row where they fit, stacked one to a row
+        // on a phone (see `card_rows`).
+        card_rows(
+            ui,
+            VOICE_CARD_WIDTH + 2.0 * CardPadding::Compact.spacing(),
+            spacing::SPACE_3,
+            VOICE_POSITIONS.len(),
+            VOICE_POSITIONS,
+            |ui, (label, register, example)| {
                 Card::new().filled().compact().ui(ui, theme, flags, |ui| {
                     ui.set_min_width(VOICE_CARD_WIDTH);
                     // The indicator rule across the card's top, the
@@ -357,69 +497,75 @@ impl BrandShowcase {
                         Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
                     )));
                 });
-                ui.add_space(spacing::SPACE_3);
-            }
-        });
+            },
+        );
 
         // Headlines: the three approved modes as do and don't pairs,
         // the verdict carried by the icon and the word, never colour
-        // alone.
+        // alone. A pair to a row where two tiles fit; on a phone the
+        // tiles stack, each no wider than the page.
         ui.add_space(spacing::SPACE_6);
         ui.label(HEADLINES_HEADING);
         ui.add_space(spacing::SPACE_2);
-        egui::Grid::new("brand-headline-modes")
-            .num_columns(2)
-            .spacing([spacing::SPACE_3, spacing::SPACE_3])
-            .show(ui, |ui| {
-                for (index, (label, example)) in HEADLINE_MODES.iter().enumerate() {
-                    let is_do = label.starts_with("Do");
-                    let (fill, ink, glyph) = if is_do {
-                        (
-                            colors.success_container,
-                            colors.on_success_container,
-                            Icon::CheckCircle,
-                        )
-                    } else {
-                        (
-                            colors.error_container,
-                            colors.on_error_container,
-                            Icon::Block,
-                        )
-                    };
-                    egui::Frame::default()
-                        .fill(fill)
-                        .corner_radius(radii::RADIUS_MD as u8)
-                        .inner_margin(spacing::SPACE_4)
-                        .show(ui, |ui| {
-                            ui.set_min_width(MODE_TILE_WIDTH);
-                            ui.horizontal(|ui| {
-                                icon(ui, glyph, IconSize::Sm, ink);
-                                ui.add_space(spacing::SPACE_2);
-                                ui.add(TrackedLabel::new(
-                                    label,
-                                    TypeStyle::Eyebrow.font_id(theme),
-                                    0.18,
-                                    ink,
-                                ));
-                            });
+        let tile_width = (MODE_TILE_WIDTH + 2.0 * spacing::SPACE_4).min(ui.available_width());
+        card_rows(
+            ui,
+            tile_width,
+            spacing::SPACE_3,
+            2,
+            HEADLINE_MODES,
+            |ui, (label, example)| {
+                let is_do = label.starts_with("Do");
+                let (fill, ink, glyph) = if is_do {
+                    (
+                        colors.success_container,
+                        colors.on_success_container,
+                        Icon::CheckCircle,
+                    )
+                } else {
+                    (
+                        colors.error_container,
+                        colors.on_error_container,
+                        Icon::Block,
+                    )
+                };
+                egui::Frame::default()
+                    .fill(fill)
+                    .corner_radius(radii::RADIUS_MD as u8)
+                    .inner_margin(spacing::SPACE_4)
+                    .show(ui, |ui| {
+                        ui.set_min_width(tile_width - 2.0 * spacing::SPACE_4);
+                        ui.horizontal(|ui| {
+                            icon(ui, glyph, IconSize::Sm, ink);
                             ui.add_space(spacing::SPACE_2);
-                            ui.add(egui::Label::new(tracked_text(
-                                example,
-                                FontId {
-                                    size: 18.0,
-                                    family: TypeStyle::Headline3.family(theme),
-                                },
-                                -0.01,
-                                Some(24.0),
+                            // A row's labels keep one line by default; this
+                            // one wraps beside the icon instead, where the
+                            // tile runs out of width (a phone's tile is no
+                            // wider than the page, and "the considered
+                            // observation" outruns it).
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                            ui.add(TrackedLabel::new(
+                                label,
+                                TypeStyle::Eyebrow.font_id(theme),
+                                0.18,
                                 ink,
-                                Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
-                            )));
+                            ));
                         });
-                    if index % 2 == 1 {
-                        ui.end_row();
-                    }
-                }
-            });
+                        ui.add_space(spacing::SPACE_2);
+                        ui.add(egui::Label::new(tracked_text(
+                            example,
+                            FontId {
+                                size: 18.0,
+                                family: TypeStyle::Headline3.family(theme),
+                            },
+                            -0.01,
+                            Some(24.0),
+                            ink,
+                            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+                        )));
+                    });
+            },
+        );
 
         // Photography: the direction copy, then the five tinted
         // placeholder tiles, the lead one tall beside a two-by-two.
@@ -434,22 +580,45 @@ impl BrandShowcase {
             Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
         )));
         ui.add_space(spacing::SPACE_2);
-        ui.horizontal(|ui| {
-            let (lead_ground, lead_caption) = PHOTO_TILES[0];
+        let (lead_ground, lead_caption) = PHOTO_TILES[0];
+        // The lead tile beside the two-by-two where that composition
+        // fits; on a phone, and wherever it would not, the lead tile
+        // leads and the small tiles follow in rows of what fits, one to
+        // a row under the compact breakpoint. The composition's
+        // footprint is the lead tile and two small ones across, each
+        // followed by its gap: the row's item spacing and the 12px
+        // space.
+        let gap = spacing::SPACE_3 + ui.spacing().item_spacing.x;
+        let composition = PHOTO_TILE_WIDE.x + 2.0 * PHOTO_TILE_SMALL.x + 3.0 * gap;
+        let available = ui.available_width();
+        if available < breakpoints::BREAKPOINT_TABLET || available < composition {
             photo_tile(ui, theme, lead_ground, lead_caption, PHOTO_TILE_WIDE);
             ui.add_space(spacing::SPACE_3);
-            ui.vertical(|ui| {
-                for pair in PHOTO_TILES[1..].chunks(2) {
-                    ui.horizontal(|ui| {
-                        for (ground, caption) in pair {
-                            photo_tile(ui, theme, *ground, caption, PHOTO_TILE_SMALL);
-                            ui.add_space(spacing::SPACE_3);
-                        }
-                    });
-                    ui.add_space(spacing::SPACE_3);
-                }
+            card_rows(
+                ui,
+                PHOTO_TILE_SMALL.x,
+                spacing::SPACE_3,
+                2,
+                &PHOTO_TILES[1..],
+                |ui, (ground, caption)| photo_tile(ui, theme, *ground, caption, PHOTO_TILE_SMALL),
+            );
+        } else {
+            ui.horizontal(|ui| {
+                photo_tile(ui, theme, lead_ground, lead_caption, PHOTO_TILE_WIDE);
+                ui.add_space(spacing::SPACE_3);
+                ui.vertical(|ui| {
+                    for pair in PHOTO_TILES[1..].chunks(2) {
+                        ui.horizontal(|ui| {
+                            for (ground, caption) in pair {
+                                photo_tile(ui, theme, *ground, caption, PHOTO_TILE_SMALL);
+                                ui.add_space(spacing::SPACE_3);
+                            }
+                        });
+                        ui.add_space(spacing::SPACE_3);
+                    }
+                });
             });
-        });
+        }
         ui.add_space(spacing::SPACE_2);
         ui.add(egui::Label::new(specimen_job(
             PHOTO_NOTE,
@@ -620,6 +789,56 @@ mod tests {
         assert!(PRINCIPLE_BODY.starts_with("Not ornament."));
         assert!(PRINCIPLE_BODY.contains("the answer is more whitespace"));
         assert!(PRINCIPLE_BODY.ends_with("It's a discipline."));
+    }
+
+    /// The showcase fits its column at every width, and its cards fall
+    /// into the rows the width allows, read off where their labels land:
+    /// on a 360pt phone's page column (312pt inside the gallery's
+    /// margins) the four voice cards and the first do and don't pair
+    /// stack one to a row; on a 700pt window's (652pt) two voice cards
+    /// share a row and the pair, too wide for two, still stacks; on a
+    /// desktop's (1152pt) the four tones share one row and the pair
+    /// another. (The cards once ran 1044pt past the phone's column: a
+    /// wrapped row never breaks before a card, each voice card's top
+    /// rule claimed the rest of its line, and the do and don't grid
+    /// kept two 412pt tiles side by side.)
+    #[test]
+    fn cards_fit_the_column_and_share_rows_where_they_fit() {
+        let flags = crate::states::UiKitFlags::default();
+        let voices: Vec<String> = VOICE_POSITIONS
+            .iter()
+            .map(|(label, _, _)| label.to_uppercase())
+            .collect();
+        let voices: Vec<&str> = voices.iter().map(String::as_str).collect();
+        let pair: Vec<String> = HEADLINE_MODES[..2]
+            .iter()
+            .map(|(label, _)| label.to_uppercase())
+            .collect();
+        let pair: Vec<&str> = pair.iter().map(String::as_str).collect();
+        for (width, voice_rows, pair_rows) in [
+            (312.0, [0, 1, 2, 3], [0, 1]),
+            (652.0, [0, 0, 1, 1], [0, 1]),
+            (1152.0, [0, 0, 0, 0], [0, 0]),
+        ] {
+            let (size, painted) = super::lay_out(width, |ui| {
+                super::BrandShowcase::new().ui(ui, ThemeId::Light, &flags);
+            });
+            assert!(
+                size.x <= width + 0.5,
+                "at {width}pt the showcase runs {}pt past its column",
+                size.x - width
+            );
+            assert_eq!(
+                super::rows_of(&painted, &voices),
+                voice_rows,
+                "the voice cards' rows at {width}pt"
+            );
+            assert_eq!(
+                super::rows_of(&painted, &pair),
+                pair_rows,
+                "the first do and don't pair's rows at {width}pt"
+            );
+        }
     }
 
     /// The showcase paints headless in every theme (fonts installed in

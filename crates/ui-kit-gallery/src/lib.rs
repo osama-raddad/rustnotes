@@ -12,12 +12,15 @@
 //!
 //! Input reaches egui untouched. egui-winit turns every finger into an
 //! `Event::Touch` (plus a parallel pointer stream for the first finger,
-//! which is what taps and focus ride on), and the touches are what tell
-//! egui the screen is a touch screen: from then on its own
-//! drag-to-scroll moves the page and the sideways specimen rows under
-//! the finger, with the kinetic fling on release. The gallery's labels
-//! are not selectable (a gallery is not a document), so a drag that
-//! starts on text scrolls instead of selecting it.
+//! which is what taps and focus ride on), and egui's own drag-to-scroll
+//! moves the page, the sideways specimen rows and the tab strip under
+//! the finger, with the kinetic fling on release. On phones the drag is
+//! armed from the first frame, so the very first swipe after launch
+//! scrolls; desktop keeps egui's default, which arms it only once the
+//! touches have told egui the screen is a touch screen, so a mouse drag
+//! never scrolls there (`gallery::drag_scroll` has the why). The
+//! gallery's labels are not selectable (a gallery is not a document),
+//! so a drag that starts on text scrolls instead of selecting it.
 
 use std::path::PathBuf;
 

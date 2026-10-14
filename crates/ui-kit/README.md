@@ -37,12 +37,16 @@ The mobile-input facts live in the app crate:
   root that covers the whole viewport); the margins behind the insets
   are painted with the live theme's canvas.
 - Touch scrolling is egui's own. `GalleryApp::filter_input` filters
-  nothing: egui-winit's touches reach egui, egui then knows the screen
-  is a touch screen, and its drag-to-scroll moves the page under the
-  finger, with the kinetic fling on release. The page's scroll area
-  carries its own id salt, because the kit's Tabs strip above it is an
-  unsalted scroll area in the same `Ui`; sharing one id, the strip
-  clamped the page's offset back to zero every frame.
+  nothing: egui-winit's touches reach egui, and its drag-to-scroll
+  moves the page under the finger, with the kinetic fling on release.
+  On phones the page, the sideways rows and the kit's Tabs strip drag
+  from the very first touch (`DragScroll::Always`, which the strip
+  takes through `Tabs::drag_to_scroll`); desktop keeps egui's default,
+  which arms the drag only once it has seen a touch, so a mouse drag
+  never scrolls there. The page's scroll area and the Tabs strip each
+  carry their own id salt: an unsalted scroll area takes its id from
+  its `Ui` alone, and while the strip had none it shared the page's
+  state and clamped the page's offset back to zero every frame.
 - The gallery's labels are not selectable (a gallery is not a
   document), so a drag that starts on text scrolls the page instead of
   selecting it.
@@ -52,23 +56,26 @@ The mobile-input facts live in the app crate:
   the page is a follow-up).
 
 Headless input tests (`src/input_tests.rs`) drive the real app the way
-egui-winit delivers a finger and pin all of it: the page following a
-swipe and flinging on, a row scrolling sideways, taps landing once
-touches have been seen, the wheel, and the theme menu. One egui
-behaviour to know: the drag-to-scroll arms on the first touch, so on a
-fresh launch the very first swipe lands on nothing and every later one
-scrolls.
+egui-winit delivers a finger and pin all of it: the page following the
+first swipe after launch and flinging on, a row and the Tabs strip
+scrolling sideways on the first touch, taps landing once touches have
+been seen and after a swipe, the wheel, and the theme menu. One egui
+behaviour to know: egui binds a press to its drag target against the
+previous frame's widgets, and its default drag-to-scroll registers no
+drag target before it has seen a touch, so under that default the
+very first swipe after launch lands on nothing. The phone builds drag
+`Always` for that reason, and the tests take the phone path.
 
 On a phone-width window the bar drops its nav links and call to action
 (the Tabs strip switches panels) and its theme menu keeps the bare
 label; the caption under the tab strip steps aside; the button rows and
 the Foundations specimens wrap, the card grid and the form grids stack,
-and the specimen rows scroll sideways as the web previews do. Layout
-tests hold the Foundations, Components and Feedback panels to a 360pt
-phone and to a 1200pt desktop window. The Brand tab's showcase pages
-still lay their cards out in wide rows (egui's `horizontal_wrapped`
-does not wrap a card, which is a child `Ui`); phone-tight rows there
-are a follow-up.
+and the specimen rows scroll sideways as the web previews do. The
+Brand tab's showcase cards fill rows of what fits at their fixed
+widths and stack one to a row under the 600pt compact breakpoint; the
+rows are laid out by hand, because egui's `horizontal_wrapped` does not
+wrap a card, which is a child `Ui`. Layout tests hold all four panels
+to a 360pt phone and to a 1200pt desktop window.
 
 ## Using the kit in an egui app
 

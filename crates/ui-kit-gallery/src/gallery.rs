@@ -52,9 +52,9 @@
 //! steps aside; the button rows and the Foundations specimens wrap
 //! (the specimens through `wrapping_row`, since egui's
 //! `horizontal_wrapped` never wraps a plain group); the card grid and
-//! the form grids stack. The page and the sideways rows scroll under
-//! the finger through egui's own drag-to-scroll (lib.rs tells the
-//! input story).
+//! the form grids stack. The page, the sideways rows and the tab strip
+//! scroll under the finger through egui's own drag-to-scroll, from the
+//! first touch (lib.rs tells the input story).
 //!
 //! This module is the app's whole UI, hosted by the `rustnotes` host
 //! through `GalleryApp` (lib.rs): the host supplies the platform glue
@@ -65,6 +65,7 @@
 //! `just ios-install app=ui-kit-gallery`, and on Android with
 //! `just run-android app=ui-kit-gallery`.
 
+use egui::scroll_area::{DragScroll, ScrollSource};
 use egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
 use ui_kit::components::badge::{Badge, IconButton};
@@ -100,13 +101,15 @@ use ui_kit::typography::{install, specimen_job, TrackedLabel, TypeStyle};
 /// the design system's own compact breakpoint (`breakpoint-compact`).
 const NARROW_WIDTH: f32 = 600.0;
 
-/// The page scroll area's id salt. The kit's Tabs strip, laid out just
-/// above the page in the same `Ui`, is itself an unsalted horizontal
-/// `ScrollArea`, so an unsalted page would resolve to the same id and
-/// the two would share one `scroll_area::State`: the strip clamps the
-/// shared vertical offset back to zero every frame, and neither the
-/// wheel nor a finger could move the page for longer than a frame. The
-/// salt gives the page a state of its own.
+/// The page scroll area's id salt. An unsalted `ScrollArea` takes its
+/// id from its `Ui` alone, so two unsalted areas in one `Ui` share one
+/// `scroll_area::State`. The kit's Tabs strip, laid out just above the
+/// page in the same `Ui`, once had no salt of its own, and sharing the
+/// page's state the strip (which scrolls sideways only) clamped the
+/// vertical offset back to zero every frame: neither the wheel nor a
+/// finger could move the page for longer than a frame. The strip
+/// carries its own salt now; this one keeps the page's state its own
+/// whatever else the panel holds.
 const PAGE_SCROLL: &str = "gallery-page";
 
 /// The theme menu's popover width: the longest toggle row ("Reduced
@@ -146,13 +149,39 @@ impl Gallery {
     }
 }
 
+/// When a drag scrolls the gallery's scroll areas (the page, the
+/// sideways specimen rows and the kit's Tabs strip): from the very
+/// first touch on a phone, never with a desktop mouse. egui's default,
+/// [`DragScroll::OnTouch`], turns drag-to-scroll on only once egui has
+/// seen a touch, and egui binds a press to its drag target against the
+/// previous frame's widgets: on a fresh launch the first finger meets
+/// areas that registered no drag target the frame before, so the first
+/// swipe moves nothing and only the later ones scroll. A phone's
+/// pointer is a finger, so there the areas drag [`DragScroll::Always`].
+/// Desktop keeps the default: a mouse drag never scrolls a page there
+/// (the wheel and the scroll bars do), and a touch screen still arms
+/// the drag once it is touched. The headless tests take the phone
+/// path, so they pin the first swipe.
+fn drag_scroll() -> DragScroll {
+    if cfg!(any(target_os = "android", target_os = "ios", test)) {
+        DragScroll::Always
+    } else {
+        DragScroll::OnTouch
+    }
+}
+
 /// A specimen row that can outgrow the page: laid out horizontally
 /// inside a horizontal scroll, so a narrow window scrolls the row
 /// instead of clipping its tail. The web previews scroll the same
-/// rows; `id` keeps the scroll areas distinct.
+/// rows; `id` keeps the scroll areas distinct. A finger drags the row
+/// on [`drag_scroll`]'s terms.
 fn scrolling_row(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::ScrollArea::horizontal()
         .id_salt(id)
+        .scroll_source(ScrollSource {
+            drag: drag_scroll(),
+            ..ScrollSource::default()
+        })
         .show(ui, |ui| ui.horizontal(add));
 }
 
@@ -2266,16 +2295,18 @@ impl Gallery {
 
 impl Gallery {
     /// The page under the tab strip: the active panel in the page's
-    /// vertical scroll area. The area keeps egui's default scroll
-    /// source: the wheel and the scroll bar everywhere, and on a touch
-    /// screen egui's own drag-to-scroll, the page following the finger
-    /// with the kinetic fling on release. (egui arms the drag only once
-    /// it has seen a touch, so on a fresh launch the very first swipe
-    /// lands on nothing; every later one scrolls.) The output's
+    /// vertical scroll area. The wheel and the scroll bar scroll it
+    /// everywhere, and egui's own drag-to-scroll on [`drag_scroll`]'s
+    /// terms: on a phone from the very first touch, the page following
+    /// the finger with the kinetic fling on release. The output's
     /// `content_size` is the panel's laid-out extent.
     fn page(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
         egui::ScrollArea::vertical()
             .id_salt(PAGE_SCROLL)
+            .scroll_source(ScrollSource {
+                drag: drag_scroll(),
+                ..ScrollSource::default()
+            })
             .show(ui, |ui| {
                 match self.tab {
                     0 => self.brand_panel(ui),
@@ -2334,12 +2365,12 @@ impl Gallery {
                     .show(ui, |ui| {
                         // The Tabs strip: the widget's own real demo, the
                         // gallery's panel switcher. It stays above the
-                        // scroll, as navigation does.
-                        let tabs = Tabs::new(copy::TABS).selected(self.tab).ui(
-                            ui,
-                            self.theme,
-                            &self.flags,
-                        );
+                        // scroll, as navigation does, and where it
+                        // outgrows a phone it drags as the page does.
+                        let tabs = Tabs::new(copy::TABS)
+                            .selected(self.tab)
+                            .drag_to_scroll(drag_scroll())
+                            .ui(ui, self.theme, &self.flags);
                         if let Some(moved_to) = tabs.changed {
                             self.tab = moved_to;
                         }
@@ -2402,10 +2433,13 @@ mod tests {
     /// A desktop window, wide enough for every two-column layout.
     const DESKTOP_WIDTH: f32 = 1200.0;
 
-    /// The panels the guard holds to the window's width. (The Brand
-    /// panel is the known exception: the kit's showcase pages still lay
-    /// their cards out in rows that do not wrap.)
-    const PANELS: [(usize, &str); 3] = [(1, "Foundations"), (2, "Components"), (3, "Feedback")];
+    /// The panels the guard holds to the window's width: all four.
+    const PANELS: [(usize, &str); 4] = [
+        (0, "Brand"),
+        (1, "Foundations"),
+        (2, "Components"),
+        (3, "Feedback"),
+    ];
 
     /// Lay `tab`'s panel out on a window `width` wide inside the
     /// chrome's own page margins (the content panel's frame, then the
@@ -2454,10 +2488,9 @@ mod tests {
         overflow
     }
 
-    /// The Foundations, Components and Feedback panels fit a 360pt
-    /// phone: every row of fixed-width widgets wraps or scrolls, the
-    /// card grid stacks, and nothing runs past the right edge to be
-    /// clipped.
+    /// Every panel fits a 360pt phone: every row of fixed-width widgets
+    /// wraps or scrolls, the card grid and the Brand tab's showcase
+    /// cards stack, and nothing runs past the right edge to be clipped.
     #[test]
     fn phone_panels_fit_a_360pt_window() {
         for (tab, name) in PANELS {
@@ -2470,7 +2503,8 @@ mod tests {
     }
 
     /// The same panels in their wide layouts (the card grid's two
-    /// columns, the paired form columns) fit a desktop window.
+    /// columns, the paired form columns, the showcase cards sharing
+    /// rows) fit a desktop window.
     #[test]
     fn wide_panels_fit_a_desktop_window() {
         for (tab, name) in PANELS {

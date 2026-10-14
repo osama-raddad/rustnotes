@@ -2,12 +2,13 @@
 //! the `rustnotes::App` seam the host drives (`new`, then
 //! `filter_input` and `ui` every frame), at phone size on ONE
 //! persistent context. Fingers arrive the way egui-winit delivers them
-//! from a touch screen, so these pin what a phone sees: the page and
-//! the sideways specimen rows scroll under the finger through egui's
-//! own drag-to-scroll, taps keep landing once touches have been seen,
-//! and the bar's theme menu works by touch. The context must persist
-//! across frames: egui resolves a click from a press in one pass and
-//! its release in a later one, and a drag from the frames between.
+//! from a touch screen, so these pin what a phone sees: the page, the
+//! sideways specimen rows and the tab strip scroll under the finger
+//! through egui's own drag-to-scroll from the very first swipe, taps
+//! keep landing once touches have been seen, and the bar's theme menu
+//! works by touch. The context must persist across frames: egui
+//! resolves a click from a press in one pass and its release in a
+//! later one, and a drag from the frames between.
 //!
 //! Two oracles: the page's scroll offset, read back from egui's memory
 //! (the page area's `scroll_area::State`), and where a known string
@@ -112,8 +113,8 @@ impl Harness {
     }
 
     /// A first touch on the page margin: egui treats the screen as a
-    /// touch screen only once it has seen a touch, and arms its
-    /// drag-to-scroll from then on.
+    /// touch screen only once it has seen a touch, the state a phone is
+    /// in after its first tap.
     fn touch_screen(&mut self) {
         self.tap(self.margin());
         assert!(
@@ -248,11 +249,11 @@ fn touch(phase: egui::TouchPhase, pos: egui::Pos2) -> egui::Event {
 
 /// A finger swiping up the Brand page scrolls it natively: the page
 /// follows the finger 1:1 while it is down and keeps going after the
-/// lift (egui's kinetic fling).
+/// lift (egui's kinetic fling). The swipe is the first touch after
+/// launch, the one egui's touch-armed default lets land on nothing.
 #[test]
 fn touch_drag_scrolls_the_page() {
     let mut h = Harness::phone();
-    h.touch_screen();
     let before = h.page_offset().y;
     h.swipe(egui::pos2(190.0, 700.0), egui::pos2(190.0, 300.0), 10);
     let released = h.page_offset().y;
@@ -270,13 +271,13 @@ fn touch_drag_scrolls_the_page() {
 
 /// A sideways swipe over the Foundations state tiles scrolls that row
 /// under the finger (the row's own horizontal scroll area takes the
-/// drag) and leaves the page where it was.
+/// drag) and leaves the page where it was. The wheel brings the tiles
+/// into view, so the swipe is the first touch after launch.
 #[test]
 fn sideways_touch_drag_scrolls_a_specimen_row() {
     let mut h = Harness::phone();
     h.app.gallery.tab = 1;
     h.idle(3);
-    h.touch_screen();
     // The pressed tile's caption sits mid-row: on screen before the
     // swipe and after it.
     let caption = copy::STATE_CAPTIONS[2];
@@ -323,6 +324,50 @@ fn taps_still_land_after_touches_have_been_seen() {
         "all four banners show at first, so there is nothing to restore"
     );
 
+    // The info banner's dismiss is the topmost close glyph on the page.
+    let close = ui_kit::icons::Icon::Close.as_char().to_string();
+    let dismiss = h.painted(&close).expect("the info banner's dismiss");
+    h.tap(dismiss.center());
+    h.idle(2);
+    assert!(
+        h.painted(copy::BANNERS_RESTORE).is_some(),
+        "a tap inside the page dismisses the banner and offers the restore"
+    );
+}
+
+/// The first touch after launch can be a sideways swipe on the tab
+/// strip, which outgrows a phone: the strip follows that very swipe,
+/// bringing its clipped last tab in, and the swipe is no tap on the tab
+/// under the finger. The taps after it still land: one on the tab the
+/// swipe brought in switches panels, one inside the page dismisses a
+/// banner.
+#[test]
+fn a_first_swipe_on_the_tab_strip_scrolls_it_and_taps_still_land() {
+    let mut h = Harness::phone();
+    // The strip ends at the content panel's inset; Feedback, its last
+    // tab, runs past that edge until the strip scrolls.
+    let edge = h.window.x - ui_kit::tokens::spacing::SPACE_6;
+    let before = h.painted(copy::TABS[3]).expect("the tab strip is painted");
+    assert!(
+        before.right() > edge,
+        "the four tabs must outgrow a phone's strip: Feedback ends at {}, the strip at {edge}",
+        before.right()
+    );
+    let y = before.center().y;
+    h.swipe(egui::pos2(300.0, y), egui::pos2(40.0, y), 10);
+    h.idle(30);
+    let after = h.painted(copy::TABS[3]).expect("the tab strip is painted");
+    assert!(
+        after.right() <= edge,
+        "the strip must follow the first swipe: Feedback ends at {} -> {} (the strip at {edge})",
+        before.right(),
+        after.right()
+    );
+    assert_eq!(h.app.gallery.tab, 0, "a swipe is not a tap on a tab");
+
+    h.tap(after.center());
+    assert_eq!(h.app.gallery.tab, 3, "a tap on Feedback switches panels");
+    h.idle(2);
     // The info banner's dismiss is the topmost close glyph on the page.
     let close = ui_kit::icons::Icon::Close.as_char().to_string();
     let dismiss = h.painted(&close).expect("the info banner's dismiss");

@@ -27,6 +27,7 @@
 //! The gallery is the component's real demo: its own panel switcher is
 //! a [`Tabs`] row (see `examples/gallery.rs`).
 
+use egui::scroll_area::{DragScroll, ScrollSource};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Ui, Vec2};
 
 use crate::components::focus_ring::FocusRing;
@@ -125,6 +126,9 @@ pub fn rule_rect(row_rect: Rect) -> Rect {
 pub struct Tabs<'a> {
     labels: &'a [&'a str],
     selected: usize,
+    /// When a drag scrolls the strip; egui's own default unless the host
+    /// says otherwise.
+    drag_to_scroll: DragScroll,
 }
 
 impl<'a> Tabs<'a> {
@@ -133,12 +137,27 @@ impl<'a> Tabs<'a> {
         Self {
             labels,
             selected: 0,
+            drag_to_scroll: DragScroll::OnTouch,
         }
     }
 
     /// Set the active index; out-of-range values clamp at draw time.
     pub const fn selected(mut self, selected: usize) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Set when a drag scrolls the strip once it outgrows the width,
+    /// the row's [`egui::Window::drag_to_scroll`]. The default is egui's
+    /// own, [`DragScroll::OnTouch`]: a drag scrolls only once egui has
+    /// seen a touch, so a mouse drag on desktop never does. A
+    /// touch-first host passes [`DragScroll::Always`], as for its own
+    /// scroll areas: egui binds a press to its drag target against the
+    /// previous frame, so under `OnTouch` the first swipe after launch
+    /// finds nothing to drag and lands on nothing. The kit carries no
+    /// platform switch of its own; the host knows its screen.
+    pub const fn drag_to_scroll(mut self, drag_to_scroll: DragScroll) -> Self {
+        self.drag_to_scroll = drag_to_scroll;
         self
     }
 
@@ -197,6 +216,12 @@ impl<'a> Tabs<'a> {
         // The row: full-width viewport so a row that outgrows the
         // width scrolls sideways rather than wrapping, the tabs held
         // 28px apart at the label's line box plus their 14px paddings.
+        // The viewport carries its own id salt: an unsalted scroll area
+        // takes its id from its `Ui` alone, so an unsalted neighbour in
+        // the same `Ui` (a host's page area right below the strip)
+        // would share the strip's scroll state, and the strip, which
+        // scrolls sideways only, would clamp that page's vertical
+        // offset back to zero every frame.
         let saved_spacing = ui.spacing().item_spacing;
         ui.spacing_mut().item_spacing = Vec2::new(TAB_GAP, 0.0);
         let line_height = TAB_TEXT_SIZE * crate::tokens::leading::LEADING_NORMAL;
@@ -204,6 +229,11 @@ impl<'a> Tabs<'a> {
         let mut active_rect: Option<Rect> = None;
         let mut row: Option<Rect> = None;
         let scroll = egui::ScrollArea::horizontal()
+            .id_salt(id.with("strip"))
+            .scroll_source(ScrollSource {
+                drag: self.drag_to_scroll,
+                ..ScrollSource::default()
+            })
             .scroll_bar_visibility(egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .auto_shrink([false, true])
             .show(ui, |ui| {
@@ -530,6 +560,46 @@ mod tests {
             assert_eq!(response.selected, 2, "clamped to the last label");
         })
         .drop_without_applying_deltas();
+    }
+
+    /// The strip's sideways scroll area keeps a state of its own. An
+    /// unsalted `ScrollArea` takes its id from its `Ui` alone, so the
+    /// strip and an unsalted page area below it in the same `Ui` once
+    /// shared one `scroll_area::State`: the strip, which scrolls
+    /// sideways only, clamped the shared vertical offset back to zero
+    /// every frame, and the page never moved. A page area scrolled to
+    /// 300pt stays there pass after pass.
+    #[test]
+    fn the_strip_leaves_a_neighbouring_scroll_area_alone() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+        let labels = ["Brand", "Foundations", "Components", "Feedback"];
+        let mut offsets = Vec::new();
+        for pass in 0..4 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(360.0, 640.0))),
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| {
+                Tabs::new(&labels).ui(ui, theme, &flags);
+                // The page: unsalted, tall content, scrolled once.
+                let mut page = egui::ScrollArea::vertical().max_height(400.0);
+                if pass == 0 {
+                    page = page.vertical_scroll_offset(300.0);
+                }
+                let out = page.show(ui, |ui| {
+                    ui.allocate_space(Vec2::new(200.0, 2000.0));
+                });
+                offsets.push(out.state.offset.y);
+            })
+            .drop_without_applying_deltas();
+        }
+        assert!(
+            offsets.iter().all(|y| (y - 300.0).abs() < 0.5),
+            "the page must hold its 300pt offset every pass: {offsets:?}"
+        );
     }
 
     /// The row lays out in the theme's faces at the spec's spacing and
