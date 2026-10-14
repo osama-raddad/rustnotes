@@ -868,7 +868,6 @@ mod tests {
             LOGO_NOTE,
             ACTIONS_EYEBROW,
             BUTTONS_LABEL,
-            START_A_PROJECT,
             BUTTON_READ_CASE_STUDY,
             BUTTON_HIRE_A_TEAM,
             BUTTON_CANCEL,
@@ -1054,6 +1053,37 @@ mod tests {
             let failures = voice_failures(text, false);
             assert!(failures.is_empty(), "{text:?}: {failures:?}");
         }
+    }
+
+    /// The registry is complete: every `&str` constant this module
+    /// declares, plus every table entry, is registered — a constant
+    /// added without a slot in `all_copy` fails here rather than
+    /// silently escaping the lint, and so does a duplicate
+    /// registration or a dropped one, since both skew the count.
+    /// Distinct constants sharing one string value are fine; the
+    /// guard counts slots against declarations.
+    #[test]
+    fn all_copy_registers_every_string_constant() {
+        let declared = include_str!("gallery_copy.rs")
+            .lines()
+            .filter(|line| line.starts_with("pub const ") && line.contains(": &str"))
+            .count();
+        let tables = TABS.len()
+            + STATE_CAPTIONS.len()
+            + SPECIMEN.len()
+            + CHIP_FILTERS.len()
+            + BADGES.len()
+            + REGIONS.len()
+            + OFFICES.len()
+            + TEAM_SIZES.len()
+            + CURRENCIES.len()
+            + PRACTICE_AREAS.len()
+            + START_OPTIONS.len();
+        assert_eq!(
+            all_copy().len(),
+            declared + tables,
+            "every &str constant and every table entry is registered exactly once"
+        );
     }
 
     /// The component copy tables — the cover, the themes showcase and

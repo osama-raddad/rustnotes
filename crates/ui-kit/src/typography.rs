@@ -16,8 +16,9 @@
 //! line heights, and [`TrackedLabel`] is the eyebrow widget on top of
 //! it, uppercasing its text as the style specifies.
 //! [`tracked_text_width`] is the advance model the spacing follows:
-//! glyph widths plus one track after every glyph, the last included, as
-//! CSS letter-spacing adds it.
+//! glyph widths plus one track between each pair of glyphs, none after
+//! the last, exactly as the shaper spaces the clusters — not CSS
+//! letter-spacing, which adds a trailing track too.
 //!
 //! Installing. [`install`] registers the theme's faces through
 //! [`Context::add_font`], which merges by name into the live font
@@ -503,10 +504,15 @@ pub fn display_pairing_holds() -> bool {
 // ---- tracked text ---------------------------------------------------------
 
 /// The total advance of tracked text: the glyph widths plus one track
-/// after every glyph, the last included, as CSS letter-spacing adds it.
+/// between each pair of glyphs — `sum + (n-1)·track` — the model egui's
+/// `extra_letter_spacing` paints (a track before every cluster that is
+/// not the first of its section, epaint `text_layout.rs`'s
+/// `is_first_glyph_in_section` rule). Not CSS letter-spacing, which
+/// adds a trailing track after the last glyph as well.
 pub fn tracked_text_width(widths: &[f32], tracking_em: f32, size: f32) -> f32 {
     let track = tracking_em * size;
-    widths.iter().sum::<f32>() + widths.len() as f32 * track
+    let between = widths.len().saturating_sub(1) as f32;
+    widths.iter().sum::<f32>() + between * track
 }
 
 /// A single-section [`LayoutJob`] carrying tracking and an optional line
@@ -555,13 +561,13 @@ pub fn specimen_job(
     )
 }
 
-/// `text` in `font_id`, advanced by `tracking_em` after every glyph at
-/// an optional line height, in `color`: the same path
-/// [`specimen_job`] takes, for the component styles that are not one of
-/// the specimen's (the metric figure's −4% at 56px, the editorial
-/// headline's −2% at 24px). Unlike [`TrackedLabel`] this never
-/// uppercases: figures and headlines keep their case. The job wraps at
-/// the containing `Ui`'s wrap width, as any label does.
+/// `text` in `font_id`, advanced by one `tracking_em` track between
+/// each pair of glyphs at an optional line height, in `color`: the same
+/// path [`specimen_job`] takes, for the component styles that are not
+/// one of the specimen's (the metric figure's −4% at 56px, the
+/// editorial headline's −2% at 24px). Unlike [`TrackedLabel`] this
+/// never uppercases: figures and headlines keep their case. The job
+/// wraps at the containing `Ui`'s wrap width, as any label does.
 pub fn tracked_text(
     text: &str,
     font_id: FontId,
@@ -596,9 +602,10 @@ pub struct TrackedLabel<'a> {
 }
 
 impl<'a> TrackedLabel<'a> {
-    /// The label: `text` in `font_id`, advanced by `tracking_em` em
-    /// after every glyph, painted in `color`. Use the eyebrow's font id
-    /// and [`TypeStyle::tracking`] for the signature label.
+    /// The label: `text` in `font_id`, advanced by one `tracking_em`
+    /// track between each pair of glyphs, painted in `color`. Use the
+    /// eyebrow's font id and [`TypeStyle::tracking`] for the signature
+    /// label.
     pub const fn new(text: &'a str, font_id: FontId, tracking_em: f32, color: Color32) -> Self {
         Self {
             text,
@@ -976,18 +983,69 @@ mod tests {
         assert!((format.extra_letter_spacing - 0.24 * 11.0).abs() < 1e-4);
     }
 
-    /// Tracked text advances by its glyph widths plus one track after
-    /// every glyph, the last included, matching CSS letter-spacing.
+    /// Tracked text advances by its glyph widths plus one track
+    /// between each pair of glyphs — `sum + (n-1)·track` — the model
+    /// egui's `extra_letter_spacing` paints (a track before every
+    /// cluster that is not the first of its section, epaint
+    /// `text_layout.rs`'s `is_first_glyph_in_section` rule). Not CSS
+    /// letter-spacing, which adds a trailing track after the last
+    /// glyph too.
     #[test]
-    fn tracked_width_adds_one_track_after_every_glyph() {
-        // 10 + 20 + 30 = 60 of glyphs, three tracks of 0.24em at 11px
-        // (2.64px each): 67.92 total.
+    fn tracked_width_adds_one_track_between_glyphs() {
+        // 10 + 20 + 30 = 60 of glyphs, two tracks of 0.24em at 11px
+        // (2.64px each): 65.28 total.
         let width = tracked_text_width(&[10.0, 20.0, 30.0], 0.24, 11.0);
-        assert!((width - 67.92).abs() < 1e-4);
-        // A single glyph carries its trailing track too.
-        assert!((tracked_text_width(&[10.0], 0.24, 11.0) - 12.64).abs() < 1e-4);
+        assert!((width - 65.28).abs() < 1e-4);
+        // A single glyph carries no track: nothing follows it.
+        assert!((tracked_text_width(&[10.0], 0.24, 11.0) - 10.0).abs() < 1e-4);
         // Zero tracking collapses to the plain advance.
         assert!((tracked_text_width(&[10.0, 20.0, 30.0], 0.0, 11.0) - 60.0).abs() < 1e-4);
+    }
+
+    /// The model against the engine itself: a real galley of the
+    /// eyebrow's tracked style measures what the helper predicts from
+    /// that galley's own glyph advances — one track between glyphs,
+    /// none after the last. Galley widths round to the pixel grid,
+    /// hence the 1px tolerance; the trailing track the CSS model would
+    /// add is 2.64px here, well outside it.
+    #[test]
+    fn tracked_width_matches_a_real_egui_galley() {
+        let ctx = egui::Context::default();
+        let install_pass = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::install(ThemeId::Light, ui.ctx())
+        });
+        install_pass.drop_without_applying_deltas();
+        let layout_pass = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let job = super::specimen_job(
+                "TRACKEDWIDTH",
+                TypeStyle::Eyebrow,
+                ThemeId::Light,
+                Color32::BLACK,
+            );
+            let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+            let advances: Vec<f32> = galley.rows[0]
+                .glyphs
+                .iter()
+                .map(|glyph| glyph.advance_width)
+                .collect();
+            assert_eq!(
+                advances.len(),
+                "TRACKEDWIDTH".chars().count(),
+                "one glyph per character, one cluster each"
+            );
+            let expected = tracked_text_width(
+                &advances,
+                TypeStyle::Eyebrow.tracking(),
+                TypeStyle::Eyebrow.size(),
+            );
+            assert!(
+                (galley.size().x - expected).abs() <= 1.0,
+                "engine width {} vs the helper's {}",
+                galley.size().x,
+                expected
+            );
+        });
+        layout_pass.drop_without_applying_deltas();
     }
 
     /// The pairing rule: Fraunces display must sit at least 2.5x the body

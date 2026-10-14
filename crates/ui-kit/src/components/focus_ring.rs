@@ -27,13 +27,23 @@ use crate::tokens::radii;
 /// set [`radius`](Self::radius) when the element is not a default (md)
 /// widget, then [`wrap`](Self::wrap) or [`paint`](Self::paint).
 ///
-/// ```ignore
+/// ```no_run
+/// # use ui_kit::components::FocusRing;
+/// # use ui_kit::states::UiKitFlags;
+/// # use ui_kit::theme::ThemeId;
+/// # let ctx = egui::Context::default();
+/// # let theme = ThemeId::Light;
+/// # let flags = UiKitFlags::default();
+/// # let out = ctx.run_ui(egui::RawInput::default(), |ui| {
 /// let response = FocusRing::new().wrap(
 ///     ui,
 ///     theme,
 ///     &flags,
 ///     |ui| ui.add(egui::Button::new("Start a project")),
 /// );
+/// # let _ = response;
+/// # });
+/// # out.drop_without_applying_deltas();
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct FocusRing {

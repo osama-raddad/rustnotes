@@ -162,9 +162,11 @@ fn anchors_match_the_brand_book() {
     );
 }
 
-/// The contrast floors the brand book states: body pairs at 4.5:1, and
-/// the accent-text floor of 3:1 for on-primary (the pure-white exception)
-/// and text-accent.
+/// The contrast floors the brand book states: body pairs at 4.5:1, the
+/// accent-text floor of 3:1 for on-primary (the pure-white exception)
+/// and text-accent, and the non-text floor of 3:1 the README claims for
+/// every border, ring and mark — focus-ring, outline and indicator on
+/// their canvas — in all six themes.
 #[test]
 fn text_roles_clear_their_wcag_floors() {
     for theme in ThemeId::ALL {
@@ -193,6 +195,24 @@ fn text_roles_clear_their_wcag_floors() {
             c.surface_container_low,
             3.0,
             &format!("{name}: text-accent on surface-container-low"),
+        );
+        at_least(
+            c.focus_ring,
+            c.surface,
+            3.0,
+            &format!("{name}: focus-ring on surface"),
+        );
+        at_least(
+            c.outline,
+            c.surface,
+            3.0,
+            &format!("{name}: outline on surface"),
+        );
+        at_least(
+            c.indicator,
+            c.surface,
+            3.0,
+            &format!("{name}: indicator on surface"),
         );
     }
 }

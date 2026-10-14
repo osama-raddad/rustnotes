@@ -18,9 +18,11 @@
 //! disabled the 38% content over a 12% container where the emphasis has
 //! a container. The label is set in the theme's body face at weight 600
 //! ([`crate::typography::body_semibold_family`]), 13/14/16px by size,
-//! and icons ride at [`IconSize::Md`] with `arrow_forward` trailing a
-//! call to action and `arrow_outward` marking a link that leaves the
-//! app. Labels are verb-first sentence case ("Start a project"); an
+//! tracked open at the CSS's `letter-spacing: 0.01em`
+//! ([`LABEL_TRACKING_EM`]), and icons ride at [`IconSize::Md`], with
+//! `arrow_forward` trailing a call to action and `arrow_outward`
+//! marking a link that leaves the app. Labels are verb-first sentence
+//! case ("Start a project"); an
 //! icon-only button names its action for assistive technology through
 //! the required label of [`Button::icon_only`], carried on the egui
 //! response's widget info.
@@ -48,6 +50,10 @@ use crate::tokens::{radii, spacing, type_scale};
 /// The touch floor the README sets: touch targets at least 44px tall,
 /// so the default or large size on touch surfaces.
 pub const TOUCH_TARGET_MIN: f32 = 44.0;
+
+/// The CSS's `letter-spacing: 0.01em` on `.btn` labels: the hairline
+/// of open tracking the label job carries between its glyphs.
+pub const LABEL_TRACKING_EM: f32 = 0.01;
 
 /// Which button, from the Button spec's one default and three
 /// modifiers. Tertiary is the one accent moment per surface: never two
@@ -282,6 +288,20 @@ pub fn min_width(size: ButtonSize, label_width: f32, icon: bool, icon_only: bool
     2.0 * size.padding_x() + icon_width + label_width
 }
 
+/// The label's layout job: the given face, tracked open at the CSS's
+/// `0.01em`, in the placeholder colour the paint pass replaces with
+/// the state-resolved label colour — the same delayed colour
+/// `layout_delayed_color` produces, with the tracking riding the job.
+fn label_job(label: &str, font_id: egui::FontId) -> egui::text::LayoutJob {
+    crate::typography::tracked_text(
+        label,
+        font_id,
+        LABEL_TRACKING_EM,
+        None,
+        Color32::PLACEHOLDER,
+    )
+}
+
 /// The button widget: custom-painted (not `egui::Button`) so the states
 /// follow the spec exactly, sensing interaction through `ui.interact`.
 ///
@@ -410,9 +430,8 @@ impl<'a> Button<'a> {
         let galley = if self.icon_only {
             None
         } else {
-            Some(ui.ctx().fonts_mut(|fonts| {
-                fonts.layout_delayed_color(self.label.to_owned(), font_id, f32::INFINITY)
-            }))
+            let job = label_job(self.label, font_id);
+            Some(ui.ctx().fonts_mut(|fonts| fonts.layout_job(job)))
         };
         let label_width = galley.as_ref().map_or(0.0, |galley| galley.size().x);
         // The icon only rides when there is something beside it, or
@@ -548,7 +567,10 @@ mod tests {
     use crate::theme::ThemeId;
     use crate::tokens::{radii, spacing, type_scale};
 
-    use super::{emphasis_look, min_width, Button, ButtonEmphasis, ButtonSize, TOUCH_TARGET_MIN};
+    use super::{
+        emphasis_look, label_job, min_width, Button, ButtonEmphasis, ButtonSize, LABEL_TRACKING_EM,
+        TOUCH_TARGET_MIN,
+    };
 
     /// Install the faces the button paints with: the icon families and
     /// the theme's type faces bind at the pass boundary, so a warm-up
@@ -808,6 +830,29 @@ mod tests {
                 expected,
                 "{}: --font-body at weight 600",
                 theme.name()
+            );
+        }
+    }
+
+    /// The label job carries the stylesheet's `letter-spacing: 0.01em`
+    /// on `.btn` labels: 0.13/0.14/0.16pt at the three sizes' 13/14/16px
+    /// type, between the label's glyphs.
+    #[test]
+    fn label_jobs_carry_the_css_tracking() {
+        for size in ButtonSize::ALL {
+            let font_id = egui::FontId {
+                size: size.text_size(),
+                family: crate::typography::body_semibold_family(ThemeId::Light),
+            };
+            let job = label_job("Start a project", font_id);
+            assert!(
+                (job.sections[0].format.extra_letter_spacing
+                    - LABEL_TRACKING_EM * size.text_size())
+                .abs()
+                    < 1e-6,
+                "{}: 0.01em at {}px",
+                size.name(),
+                size.text_size()
             );
         }
     }
