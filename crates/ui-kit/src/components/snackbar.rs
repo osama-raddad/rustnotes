@@ -366,14 +366,18 @@ impl SnackbarHost {
                 if tile {
                     reserved += STATUS_TILE + spacing::SPACE_3;
                 }
+                // The action's pill: its label between a space-3 padding
+                // on each side. The wrap, the width and the pill's rect
+                // all count it from here, so they cannot drift apart.
+                let action_width = action_galley
+                    .as_ref()
+                    .map_or(0.0, |galley| galley.size().x + 2.0 * spacing::SPACE_3);
                 let wrap = (MAX_WIDTH
                     - 2.0 * spacing::SPACE_3
                     - spacing::SPACE_2
                     - reserved
-                    - action_galley
-                        .as_ref()
-                        .map_or(0.0, |galley| galley.size().x + 2.0 * spacing::SPACE_3))
-                .max(120.0);
+                    - action_width)
+                    .max(120.0);
                 let line_galley = ui.ctx().fonts_mut(|fonts| {
                     let mut job = one_line(
                         line_text,
@@ -400,7 +404,7 @@ impl SnackbarHost {
                 let width = (spacing::SPACE_4
                     + spacing::SPACE_2
                     + reserved
-                    + action_galley.as_ref().map_or(0.0, |galley| galley.size().x)
+                    + action_width
                     + line_galley.size().x
                     + spacing::SPACE_2)
                     .min(MAX_WIDTH)
@@ -461,16 +465,10 @@ impl SnackbarHost {
                 if let Some(galley) = &action_galley {
                     let action_rect = Rect::from_min_size(
                         Pos2::new(
-                            rect.right()
-                                - DISMISS_SIZE
-                                - spacing::SPACE_2
-                                - (galley.size().x + 2.0 * spacing::SPACE_3),
+                            rect.right() - DISMISS_SIZE - spacing::SPACE_2 - action_width,
                             rect.center().y - ACTION_MIN_HEIGHT / 2.0,
                         ),
-                        egui::Vec2::new(
-                            galley.size().x + 2.0 * spacing::SPACE_3,
-                            ACTION_MIN_HEIGHT,
-                        ),
+                        egui::Vec2::new(action_width, ACTION_MIN_HEIGHT),
                     );
                     let action = ui.interact(action_rect, id.with("action"), Sense::click());
                     let state = crate::states::WidgetState::of(&action);
@@ -556,6 +554,9 @@ impl SnackbarHost {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Dismiss")
                 });
                 paused_now |= dismiss.hovered() || dismiss.has_focus();
+                if dismiss.clicked() {
+                    event = self.dismiss();
+                }
 
                 // The surface hover pauses the timer too.
                 paused_now |= surface.hovered();
@@ -586,10 +587,17 @@ impl SnackbarHost {
     }
 }
 
-/// A one-line layout job in one format.
+/// A one-line layout job in one format. The colour is left to the
+/// painter (the placeholder): the paint passes the look's colour,
+/// faded by the entrance, as the fallback, and epaint swaps it in for
+/// the placeholder only. A colour set here would win over both.
 fn one_line(text: &str, font_id: egui::FontId) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    job.append(text, 0.0, egui::TextFormat::simple(font_id, Color32::WHITE));
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat::simple(font_id, Color32::PLACEHOLDER),
+    );
     job
 }
 
@@ -638,6 +646,8 @@ pub fn snackbar_look(status: SnackbarStatus, theme: ThemeId) -> SnackbarLook {
 
 #[cfg(test)]
 mod tests {
+    use egui::Color32;
+
     use crate::icons::Icon;
     use crate::states::UiKitFlags;
     use crate::theme::ThemeId;
@@ -649,6 +659,32 @@ mod tests {
         SnackbarStatus, ACTION_DURATION_MS, ACTION_MIN_HEIGHT, BOTTOM_MARGIN, DISMISS_SIZE,
         ENTRANCE_MS, INFO_DURATION_MS, MAX_WIDTH, MIN_HEIGHT, STATUS_TILE,
     };
+
+    /// The text shape the frame painted as `text`. The snackbar paints
+    /// each line through `Painter::galley`, so the shape sits at the top
+    /// level of the frame's shapes.
+    fn text_shape(shapes: &[egui::epaint::ClippedShape], text: &str) -> egui::epaint::TextShape {
+        shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(shape) if shape.galley.text() == text => Some(shape.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no text reading {text:?} was painted"))
+    }
+
+    /// The colour a painted text shows in, resolved the way epaint's
+    /// tessellator does it: the shape's override, else the galley's own
+    /// colour, else the shape's fallback where the galley leaves the
+    /// colour to the painter (`Color32::PLACEHOLDER`).
+    fn shown_colour(shape: &egui::epaint::TextShape) -> Color32 {
+        let own = shape.galley.job.sections[0].format.color;
+        match shape.override_text_color {
+            Some(over) => over,
+            None if own == Color32::PLACEHOLDER => shape.fallback_color,
+            None => own,
+        }
+    }
 
     /// The spec's timing table: info and success leave after about 6
     /// seconds, 10 with an action; errors stay until dismissed or
@@ -909,15 +945,18 @@ mod tests {
         }
     }
 
-    /// The action sits where the layout puts it: its rect ends a space-2
-    /// gap short of the dismiss circle, and its label starts one space-3
+    /// The action sits where the layout puts it: its rect starts a
+    /// space-2 gap or more past the message's end and ends a space-2 gap
+    /// short of the dismiss circle, and its label starts one space-3
     /// padding inside the rect, centred on the snackbar's midline. The
     /// rect's x once carried a height term (the action's minimum height
     /// less the label's), which slid the button about 14px further from
-    /// the dismiss circle than the layout intends. The rects are read
-    /// back through the ids the host gives its surface and its action.
+    /// the dismiss circle than the layout intends; and the width left out
+    /// the pill's own side padding, so the pill still overlapped the
+    /// message by 4px. The rects are read back through the ids the host
+    /// gives its surface and its action.
     #[test]
-    fn the_action_ends_a_gap_short_of_the_dismiss_circle() {
+    fn the_action_sits_clear_of_the_message_and_the_dismiss_circle() {
         let ctx = egui::Context::default();
         let theme = ThemeId::Light;
         let out = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -930,10 +969,12 @@ mod tests {
         host.show(Snackbar::info("Timesheet submitted for week 41.").action("Undo"));
 
         // The anchored area is invisible on its first frame, while egui
-        // learns its size: one pass settles it, the next is the one read.
-        paint_pass(&ctx, |ui| {
-            host.paint(ui.ctx(), theme, &flags);
-        });
+        // learns its size: two passes settle it, the next is the one read.
+        for _ in 0..2 {
+            paint_pass(&ctx, |ui| {
+                host.paint(ui.ctx(), theme, &flags);
+            });
+        }
         let ((surface, action), shapes) = paint_pass(&ctx, |ui| {
             host.paint(ui.ctx(), theme, &flags);
             let id = egui::Id::new("vynatix-snackbar");
@@ -959,5 +1000,142 @@ mod tests {
             "the action ends at x {} but a gap short of the dismiss circle is {action_edge}",
             action.right()
         );
+
+        // The pill clears the message: it starts a space-2 gap or more
+        // past the end of the message's painted box.
+        let message = text_shape(&shapes, "Timesheet submitted for week 41.");
+        let message_end = message.galley.rect.translate(message.pos.to_vec2()).right();
+        assert!(
+            action.left() >= message_end + spacing::SPACE_2 - 0.01,
+            "the action starts at x {} but a space-2 gap past the message's end ({message_end}) is {}",
+            action.left(),
+            message_end + spacing::SPACE_2
+        );
+    }
+
+    /// A press and release on the painted dismiss cross dismisses the
+    /// snackbar: the release frame reports the dismissed event and the
+    /// host has nothing left on screen, while the press alone does
+    /// nothing. The pointer goes to the centre of the cross as the frame
+    /// painted it, with the entrance over so nothing slides under it. The
+    /// cross once did not act on a click at all: the circle was painted,
+    /// hoverable and focusable, and the host never read its click.
+    #[test]
+    fn clicking_the_dismiss_cross_dismisses_the_snackbar() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            crate::typography::install(theme, ui.ctx());
+        });
+        out.drop_without_applying_deltas();
+        let flags = UiKitFlags::default();
+        let mut host = SnackbarHost::new();
+        host.show(Snackbar::info("Link copied.").action("Undo"));
+        host.tick(ENTRANCE_MS);
+
+        // Two passes settle the anchored area; the next shows the cross.
+        for _ in 0..2 {
+            paint_pass(&ctx, |ui| {
+                host.paint(ui.ctx(), theme, &flags);
+            });
+        }
+        let (_, shapes) = paint_pass(&ctx, |ui| {
+            host.paint(ui.ctx(), theme, &flags);
+        });
+        let cross = text_shape(&shapes, &Icon::Close.as_char().to_string());
+        let at = cross.galley.rect.translate(cross.pos.to_vec2()).center();
+
+        let mut events = Vec::new();
+        for pressed in [true, false] {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::PointerMoved(at));
+            input.events.push(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            });
+            let mut event = None;
+            ctx.run_ui(input, |ui| {
+                event = host.paint(ui.ctx(), theme, &flags);
+            })
+            .drop_without_applying_deltas();
+            events.push(event);
+        }
+        assert_eq!(
+            events,
+            vec![None, Some(SnackbarEvent::Dismissed)],
+            "the release dismisses, the press alone does not"
+        );
+        assert!(!host.is_showing(), "the snackbar is gone");
+        assert_eq!(host.current(), None, "nothing is left on screen");
+    }
+
+    /// The text takes the look's colours and rides the entrance fade:
+    /// the title and the line paint in `inverse-on-surface`, the action
+    /// in `inverse-primary`, in every theme (the inverse surface flips
+    /// between the light and the dark ones, so a fixed colour reads on
+    /// one and not the other), and mid-entrance each colour is faded by
+    /// the entrance fraction. The galleys once carried an explicit
+    /// white, which epaint never swaps for the fallback colour the paint
+    /// passes, so neither the look's colours nor the fade reached the
+    /// text.
+    #[test]
+    fn text_takes_the_looks_colours_and_rides_the_fade() {
+        for theme in ThemeId::ALL {
+            let name = theme.name();
+            let ctx = egui::Context::default();
+            // egui fades a new area in by itself, over its style's
+            // animation time, on top of the snackbar's own entrance. That
+            // second fade is not what is under test, so it is switched off.
+            ctx.all_styles_mut(|style| style.animation_time = 0.0);
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                crate::icon::install(ui.ctx());
+                crate::typography::install(*theme, ui.ctx());
+            });
+            out.drop_without_applying_deltas();
+            let flags = UiKitFlags::default();
+            let look = snackbar_look(SnackbarStatus::Info, *theme);
+            let mut host = SnackbarHost::new();
+            host.show(
+                Snackbar::info("Timesheet submitted for week 41.")
+                    .title("Workspace archived")
+                    .line("Read-only access for 30 days.")
+                    .action("Undo"),
+            );
+            // The anchored area is invisible on its first frame.
+            paint_pass(&ctx, |ui| {
+                host.paint(ui.ctx(), *theme, &flags);
+            });
+
+            // Mid-entrance first, then with the entrance over.
+            for entered in [false, true] {
+                if entered {
+                    host.tick(ENTRANCE_MS);
+                }
+                let (fraction, shapes) = paint_pass(&ctx, |ui| {
+                    let fraction = host.entrance_fraction(&flags);
+                    host.paint(ui.ctx(), *theme, &flags);
+                    fraction
+                });
+                assert_eq!(
+                    fraction == 1.0,
+                    entered,
+                    "{name}: entrance fraction {fraction}"
+                );
+                for (text, colour) in [
+                    ("Workspace archived", look.text),
+                    ("Read-only access for 30 days.", look.text),
+                    ("Undo", look.action),
+                ] {
+                    assert_eq!(
+                        shown_colour(&text_shape(&shapes, text)),
+                        colour.gamma_multiply(fraction),
+                        "{name}: {text:?} at entrance fraction {fraction}"
+                    );
+                }
+            }
+        }
     }
 }
