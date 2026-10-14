@@ -187,9 +187,11 @@ pub fn count_text(count: u32) -> String {
     }
 }
 
-/// The icon button's accessibility label, composed the preview's way:
-/// "Notifications, 3 unread", "Mail, more than 99 unread" above the
-/// cap, "Messages, new activity" for the dot.
+/// The accessibility label of an icon button that shows a count or the
+/// activity dot, composed the preview's way: "Notifications, 3 unread",
+/// "Mail, more than 99 unread" above the cap, and with no count (`None`,
+/// the dot) "Messages, new activity". A button showing neither keeps
+/// its bare name ([`IconButton`]).
 pub fn count_accessibility_label(name: &str, count: Option<u32>) -> String {
     match count {
         Some(count) if count <= COUNT_CAP => format!("{name}, {count} unread"),
@@ -277,7 +279,7 @@ impl<'a> Badge<'a> {
             cursor += icon_px + BADGE_GAP;
         }
         painter.galley(
-            egui::Pos2::new(cursor, rect.center().y) - galley.size() / 2.0,
+            crate::typography::left_center(cursor, rect.center().y, galley.size()),
             galley,
             look.label,
         );
@@ -293,7 +295,8 @@ impl<'a> Badge<'a> {
 /// top right, ringed in the surface it sits on.
 ///
 /// The name is the accessibility label the spec requires of an
-/// icon-only control; the count rides it the preview's way.
+/// icon-only control; the count, or the dot's "new activity", rides it
+/// the preview's way, and a button showing neither keeps its bare name.
 ///
 /// ```
 /// use ui_kit::components::badge::IconButton;
@@ -434,12 +437,16 @@ impl<'a> IconButton<'a> {
             painter.circle_stroke(center, 5.0, Stroke::new(2.0, colors.surface));
         }
 
+        // The name a screen reader is told, built only when asked for:
+        // what the button shows rides it, the count or else the dot's
+        // "new activity", and with neither it is the bare name.
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                self.enabled,
-                count_accessibility_label(self.name, self.count),
-            )
+            let name = if self.count.is_some() || self.dot {
+                count_accessibility_label(self.name, self.count)
+            } else {
+                self.name.to_owned()
+            };
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, self.enabled, name)
         });
 
         FocusRing::new()
@@ -451,10 +458,12 @@ impl<'a> IconButton<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::icon::IconSize;
     use crate::icons::Icon;
     use crate::states::UiKitFlags;
     use crate::theme::ThemeId;
     use crate::tokens::type_scale;
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         badge_height, badge_look, badge_radius, count_accessibility_label, count_min_width,
@@ -602,6 +611,41 @@ mod tests {
         assert_eq!(clicked, vec![false], "a badge is not a control");
     }
 
+    /// The word starts one badge padding in from the pill's left edge,
+    /// or after the leading mark and its gap when the tone carries an
+    /// icon. The paint once also subtracted half the word's width from
+    /// that left anchor, so the word ran out of the pill's left edge.
+    /// (The count figures centre on their pill, where the whole
+    /// half-size subtraction is right.)
+    #[test]
+    fn words_start_a_padding_in_from_the_pill_edge() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Badge::new("Featured", BadgeTone::Accent).ui(ui, theme).rect
+        });
+        let pos = assert_painted_inside(&shapes, "Featured", rect);
+        assert!(
+            (pos.x - (rect.left() + BADGE_PAD_X)).abs() < 0.01,
+            "bare word: starts at x {} but one padding in is {}",
+            pos.x,
+            rect.left() + BADGE_PAD_X
+        );
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Badge::new("Shipped", BadgeTone::Success).ui(ui, theme).rect
+        });
+        let pos = assert_painted_inside(&shapes, "Shipped", rect);
+        let after_icon = rect.left() + BADGE_PAD_X + IconSize::Sm.px() + BADGE_GAP;
+        assert!(
+            (pos.x - after_icon).abs() < 0.01,
+            "leading icon: starts at x {} but after the icon and its gap is {after_icon}",
+            pos.x
+        );
+    }
+
     /// The icon button is the preview's 44px square: it takes focus
     /// (Tab order), senses the click, and the count rides its
     /// accessibility label.
@@ -654,5 +698,53 @@ mod tests {
             .drop_without_applying_deltas();
         }
         assert!(clicked, "press then release fires");
+    }
+
+    /// The icon button's name as a screen reader is told it: the bare
+    /// name with neither a count nor the dot, "new activity" when the
+    /// dot shows, and the count spelled out when there is one (a count
+    /// shows in place of the dot, so it names the button even with
+    /// the dot set).
+    #[test]
+    fn icon_button_names_its_count_its_dot_or_nothing_more() {
+        let flags = UiKitFlags::default();
+        let announced = |button: IconButton<'_>| {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            install_faces(&ctx, ThemeId::Light);
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                button.ui(ui, ThemeId::Light, &flags);
+            });
+            let names: Vec<String> = out
+                .platform_output
+                .accesskit_update
+                .iter()
+                .flat_map(|update| &update.nodes)
+                .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+                .filter_map(|(_, node)| node.label().map(str::to_owned))
+                .collect();
+            out.drop_without_applying_deltas();
+            names
+        };
+        assert_eq!(
+            announced(IconButton::new("Search", Icon::Search)),
+            ["Search"]
+        );
+        assert_eq!(
+            announced(IconButton::new("Messages", Icon::Chat).activity_dot()),
+            ["Messages, new activity"]
+        );
+        assert_eq!(
+            announced(IconButton::new("Notifications", Icon::Notifications).count(3)),
+            ["Notifications, 3 unread"]
+        );
+        assert_eq!(
+            announced(
+                IconButton::new("Notifications", Icon::Notifications)
+                    .count(3)
+                    .activity_dot()
+            ),
+            ["Notifications, 3 unread"]
+        );
     }
 }

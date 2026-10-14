@@ -23,8 +23,9 @@
 
 use egui::{Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 
+use crate::components::brand_showcase::card_rows;
 use crate::components::button::{Button, ButtonEmphasis};
-use crate::components::card::Card;
+use crate::components::card::{Card, CardPadding};
 use crate::components::chip::Chip;
 use crate::logo::Logo;
 use crate::states::UiKitFlags;
@@ -278,18 +279,20 @@ impl ThemesShowcase {
         )));
         ui.add_space(spacing::SPACE_6);
 
-        // The preview's two rows: the light three, then the dark three.
+        // The preview's two rows: the light three, then the dark three,
+        // each breaking into as many cards as fit and stacked one to a
+        // row on a phone (see `card_rows`).
         for (row, group) in [(LIGHT_ROW, &CARDS[..3]), (DARK_ROW, &CARDS[3..])] {
             ui.label(row);
             ui.add_space(spacing::SPACE_2);
-            // Wrapped, not one long row: on a phone the cards stack
-            // instead of overflowing the screen.
-            ui.horizontal_wrapped(|ui| {
-                for copy in group {
-                    theme_card(ui, flags, copy);
-                    ui.add_space(spacing::SPACE_3);
-                }
-            });
+            card_rows(
+                ui,
+                CARD_WIDTH + 2.0 * CardPadding::Compact.spacing(),
+                spacing::SPACE_3,
+                group.len(),
+                group,
+                |ui, copy| theme_card(ui, flags, copy),
+            );
             ui.add_space(spacing::SPACE_6);
         }
 
@@ -570,6 +573,35 @@ mod tests {
         }
         for text in texts {
             assert!(copy_passes_voice_checks(text), "{text}");
+        }
+    }
+
+    /// The showcase fits its column at every width, and the light three
+    /// fall into the rows the width allows, read off where their names
+    /// land: on a 360pt phone's page column (312pt inside the gallery's
+    /// margins) they stack one to a row; on a 700pt window's (652pt) two
+    /// share a row and the third wraps; on a desktop's (1152pt) the three
+    /// share the preview's one row. (The cards once ran 1304pt past the
+    /// phone's column: each card's right-aligned id pill claimed the rest
+    /// of its line, and a wrapped row never breaks before a card.)
+    #[test]
+    fn cards_fit_the_column_and_share_rows_where_they_fit() {
+        let flags = crate::states::UiKitFlags::default();
+        let names = [ThemeId::Light, ThemeId::TealLight, ThemeId::MonoLight].map(ThemeId::name);
+        for (width, rows) in [(312.0, [0, 1, 2]), (652.0, [0, 0, 1]), (1152.0, [0, 0, 0])] {
+            let (size, painted) = crate::components::brand_showcase::lay_out(width, |ui| {
+                super::ThemesShowcase::new().ui(ui, ThemeId::Light, &flags);
+            });
+            assert!(
+                size.x <= width + 0.5,
+                "at {width}pt the showcase runs {}pt past its column",
+                size.x - width
+            );
+            assert_eq!(
+                crate::components::brand_showcase::rows_of(&painted, &names),
+                rows,
+                "the light three's rows at {width}pt"
+            );
         }
     }
 

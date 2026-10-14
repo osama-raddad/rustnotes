@@ -12,7 +12,9 @@ use crate::layout::{
 };
 use crate::{debounce, notes, App, DebounceAction, Screen, Tab, DELETE_ARM_WINDOW, EDITOR_ID};
 use egui::{
-    pos2, vec2, Align, Align2, Id, Layout, Rect, ScrollArea, Sense, Shape, Stroke, Ui, UiBuilder,
+    pos2,
+    text::{LayoutJob, TextWrapping},
+    vec2, Align, Align2, Id, Layout, Rect, ScrollArea, Sense, Shape, Stroke, Ui, UiBuilder,
 };
 use std::time::Instant;
 
@@ -34,6 +36,10 @@ const PULL_THRESHOLD: f32 = 64.0;
 const SWIPE_DELETE_FRACTION: f32 = 0.4;
 /// Movement, in points, before a touch commits to scrolling or swiping.
 const AXIS_LOCK_SLOP: f32 = 8.0;
+/// What an armed row says in place of its date. The first tap on the cross
+/// only arms the delete; without this the button looks broken, because
+/// nothing else tells the user a second tap is wanted.
+const DELETE_HINT: &str = "Tap again to delete";
 
 /// Navigation changes requested while drawing.
 pub(crate) enum Cmd {
@@ -656,6 +662,33 @@ impl App {
                 let tx = card.left() + card_pad;
                 let clip = Rect::from_min_size(pos2(tx, card.top()), vec2(text_w, card_h));
                 let pc = p.with_clip_rect(clip);
+                // The date's slot: bottom-right of the text area. Its text is
+                // the row's date, or the delete hint while the row is armed.
+                // Either way it is one line, cut with an ellipsis on its right
+                // when the column is narrower than its words (large text
+                // sizes) rather than losing its first words off the column's
+                // left edge.
+                let (slot_text, slot_color) = if armed {
+                    (DELETE_HINT, pal.danger)
+                } else {
+                    // Cached when the list loaded (MED-5), not reformatted
+                    // per row per frame.
+                    (date.as_str(), pal.text_faint)
+                };
+                let mut job = LayoutJob::simple_singleline(
+                    slot_text.to_owned(),
+                    m.font(m.text.caption),
+                    slot_color,
+                );
+                job.wrap = TextWrapping {
+                    overflow_character: Some('…'),
+                    ..TextWrapping::truncate_at_width(text_w.max(0.0))
+                };
+                let slot_galley = p.layout_job(job);
+                let slot_rect = Align2::RIGHT_BOTTOM.anchor_size(
+                    pos2(tx + text_w, card.bottom() - card_pad),
+                    slot_galley.size(),
+                );
                 pc.text(
                     pos2(tx, card.top() + card_pad),
                     Align2::LEFT_TOP,
@@ -664,7 +697,15 @@ impl App {
                     pal.text,
                 );
                 if let Some(sn) = notes::snippet_of(&note.body) {
-                    pc.text(
+                    // The snippet runs along the slot's line, so whatever owns
+                    // the slot has it to itself: the snippet stops short of it
+                    // rather than running under it (or being painted over),
+                    // the way it is already cut at the column's edge when it
+                    // is merely long. If the slot's text leaves no room at
+                    // all, the clip collapses to nothing instead of going
+                    // negative.
+                    let right = (slot_rect.left() - m.sp(1)).max(clip.left());
+                    p.with_clip_rect(clip.with_max_x(right)).text(
                         pos2(tx, card.top() + card_pad + m.text.body_large * 1.45),
                         Align2::LEFT_TOP,
                         sn,
@@ -672,15 +713,7 @@ impl App {
                         pal.text_weak,
                     );
                 }
-                p.text(
-                    pos2(tx + text_w, card.bottom() - card_pad),
-                    Align2::RIGHT_BOTTOM,
-                    // Cached when the list loaded (MED-5), not reformatted
-                    // per row per frame.
-                    date,
-                    m.font(m.text.caption),
-                    pal.text_faint,
-                );
+                pc.galley(slot_rect.min, slot_galley, slot_color);
             }
             ui.add_space(m.sp(3));
 
@@ -778,6 +811,7 @@ impl App {
         }
         let body_h = ui.available_height();
         let side = m.sp(3) as i8;
+        self.editor_drawn(ui);
         ScrollArea::vertical()
             .id_salt("editor")
             .auto_shrink(false)
@@ -811,5 +845,369 @@ impl App {
                         .send_viewport_cmd(egui::ViewportCommand::IMEAllowed(true));
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, RawInput};
+    use std::time::Duration;
+
+    /// Copy of `temp` in lib.rs's tests (private to that module), under its own prefix,
+    /// plus a wipe: nothing cleans these directories up and process ids are recycled.
+    fn temp(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("rn-screens-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A text shape as a pass painted it.
+    struct Painted {
+        text: String,
+        /// What of `text` is on screen: all of it, unless the galley is elided.
+        shown: String,
+        /// The glyph box.
+        rect: Rect,
+        /// The clip rect it was painted under: what shows of it.
+        clip: Rect,
+    }
+
+    /// One egui pass at a phone's size, as the host runs it: the app draws
+    /// into a root `Ui` covering the screen between begin_pass/end_pass.
+    /// Returns the text the pass painted, so a test can ask what is on screen
+    /// and where. Modelled on `run_pass` in lib.rs's tests (private to that module).
+    fn run_pass(app: &mut App, ctx: &egui::Context, events: Vec<Event>, t: f64) -> Vec<Painted> {
+        run_pass_sized(app, ctx, vec2(400.0, 800.0), events, t)
+    }
+
+    /// `run_pass` at any screen size.
+    fn run_pass_sized(
+        app: &mut App,
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        events: Vec<Event>,
+        t: f64,
+    ) -> Vec<Painted> {
+        let screen = Rect::from_min_size(egui::Pos2::ZERO, size);
+        ctx.begin_pass(RawInput {
+            time: Some(t),
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        });
+        let mut root = Ui::new(
+            ctx.clone(),
+            Id::new("test-root"),
+            UiBuilder::new().max_rect(screen),
+        );
+        app.ui(&mut root);
+        let mut out = ctx.end_pass();
+        // No renderer applies the glyph-atlas delta; clear it or epaint
+        // panics on the drop.
+        out.textures_delta.clear();
+        let mut painted = vec![];
+        for clipped in &out.shapes {
+            collect_text(&clipped.shape, clipped.clip_rect, &mut painted);
+        }
+        painted
+    }
+
+    /// Every `Shape::Text` in `shape`, looking inside `Shape::Vec` groups,
+    /// which are painted under their parent's clip rect.
+    fn collect_text(shape: &Shape, clip: Rect, into: &mut Vec<Painted>) {
+        match shape {
+            Shape::Text(text) => into.push(Painted {
+                text: text.galley.text().to_owned(),
+                shown: text.galley.rows.iter().map(|row| row.text()).collect(),
+                rect: Rect::from_min_size(text.pos, text.galley.size()),
+                clip,
+            }),
+            Shape::Vec(inner) => inner.iter().for_each(|s| collect_text(s, clip, into)),
+            _ => {}
+        }
+    }
+
+    /// The first text of that string a pass painted. Rows paint top to
+    /// bottom, so when two rows carry the same string (two dates in the same
+    /// minute) this is the top row's.
+    fn find<'a>(all: &'a [Painted], text: &str) -> &'a Painted {
+        all.iter()
+            .find(|p| p.text == text)
+            .unwrap_or_else(|| panic!("nothing painted {text:?}"))
+    }
+
+    /// A tap at `pos`: move, press, release, all in one pass. Copy of `click`
+    /// in lib.rs's tests (private to that module).
+    fn click(pos: egui::Pos2) -> Vec<Event> {
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        vec![Event::PointerMoved(pos), button(true), button(false)]
+    }
+
+    /// A fresh app listing `bodies` as saved notes, the last one on top
+    /// (newest first).
+    fn app_with_notes(ctx: &egui::Context, name: &str, bodies: &[&str]) -> App {
+        let mut app = App::new(temp(name).join("data"), ctx, None);
+        for body in bodies {
+            app.open_editor(0);
+            app.buffer = (*body).to_owned();
+            app.close_editor();
+        }
+        assert_eq!(app.notes.len(), bodies.len());
+        app
+    }
+
+    /// A fresh app listing two saved notes, newest first.
+    fn app_with_two_notes(ctx: &egui::Context, name: &str) -> App {
+        app_with_notes(ctx, name, &["first note", "second note"])
+    }
+
+    /// How many delete hints were painted.
+    fn hints(painted: &[Painted]) -> usize {
+        painted.iter().filter(|p| p.text == DELETE_HINT).count()
+    }
+
+    /// How many of the list's cached row dates were painted.
+    fn dates(app: &App, painted: &[Painted]) -> usize {
+        painted
+            .iter()
+            .filter(|p| app.row_dates.contains(&p.text))
+            .count()
+    }
+
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.01
+    }
+
+    /// The first tap on a row's cross only arms the delete, so the armed row
+    /// has to say a second tap is wanted: its date gives way to the hint from
+    /// the frame after the tap, and the other row is left alone.
+    #[test]
+    fn tapping_the_cross_shows_the_delete_hint_in_place_of_the_date() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "hint-shows");
+        let id = app.notes[0].id;
+
+        let idle = run_pass(&mut app, &ctx, vec![], 1.0);
+        assert_eq!(hints(&idle), 0, "no hint before the tap");
+        assert_eq!(dates(&app, &idle), 2, "both rows show their dates");
+
+        // Read the cross's rect back from the widget registry: the same rect
+        // egui hit-tests against.
+        let cross = ctx
+            .read_response(Id::new(("del", id)))
+            .expect("the delete cross is laid out")
+            .rect
+            .center();
+        run_pass(&mut app, &ctx, click(cross), 2.0);
+        assert_eq!(
+            app.armed_delete.map(|(armed, _)| armed),
+            Some(id),
+            "the tap arms the row"
+        );
+
+        // The tap arms after the rows were painted, so the hint is on screen
+        // from the next frame.
+        let armed = run_pass(&mut app, &ctx, vec![], 2.1);
+        assert_eq!(hints(&armed), 1, "one hint, for the armed row");
+        assert_eq!(
+            dates(&app, &armed),
+            1,
+            "the armed row's date gave way; the other row keeps its own"
+        );
+    }
+
+    /// The hint lives exactly as long as the arm: a re-list clears it, and so
+    /// does the arm running out of its window (back-dated here, because the
+    /// window runs on `Instant`).
+    #[test]
+    fn delete_hint_goes_when_the_arm_does() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "hint-clears");
+        let id = app.notes[0].id;
+        run_pass(&mut app, &ctx, vec![], 1.0);
+
+        app.armed_delete = Some((id, Instant::now()));
+        let armed = run_pass(&mut app, &ctx, vec![], 1.1);
+        assert_eq!(hints(&armed), 1, "an armed row shows the hint");
+
+        app.refresh_notes();
+        let relisted = run_pass(&mut app, &ctx, vec![], 1.2);
+        assert_eq!(hints(&relisted), 0, "a re-list clears the arm and the hint");
+        assert_eq!(dates(&app, &relisted), 2, "the dates are back");
+
+        let stale = Instant::now()
+            .checked_sub(DELETE_ARM_WINDOW + Duration::from_secs(1))
+            .expect("the clock has run for longer than the arm window");
+        app.armed_delete = Some((id, stale));
+        let expired = run_pass(&mut app, &ctx, vec![], 1.3);
+        assert_eq!(hints(&expired), 0, "an expired arm shows no hint");
+        assert!(app.armed_delete.is_none(), "the expiry drops the arm");
+    }
+
+    /// A note's second line, long enough to run the whole width of its row.
+    const LONG_SNIPPET: &str =
+        "this line after the title runs on well past the end of the text column and under the slot";
+
+    /// The hint takes the date's slot (the text column wide, the date's own
+    /// line tall, ending where the date ends) and nothing outside it. The
+    /// snippet shares that line, so whatever owns the slot (the date, or the
+    /// hint while the row is armed) has it to itself: the snippet stops one
+    /// gap short of it instead of running under it or being painted over.
+    /// Nothing else in the row gives way.
+    #[test]
+    fn armed_hint_takes_the_date_slot_and_a_long_snippet_makes_room() {
+        let ctx = egui::Context::default();
+        let long_note = format!("long note\n{LONG_SNIPPET}");
+        let mut app = app_with_notes(&ctx, "hint-slot", &["first note", long_note.as_str()]);
+        let id = app.notes[0].id;
+
+        let idle = run_pass(&mut app, &ctx, vec![], 1.0);
+        let cross = ctx
+            .read_response(Id::new(("del", id)))
+            .expect("the delete cross is laid out")
+            .rect;
+        app.armed_delete = Some((id, Instant::now()));
+        let armed = run_pass(&mut app, &ctx, vec![], 1.1);
+
+        let date = find(&idle, &app.row_dates[0]);
+        let title = find(&armed, "long note");
+        let snippet = find(&armed, LONG_SNIPPET);
+        let hint = find(&armed, DELETE_HINT);
+
+        // In the date's place. The slot is the text column wide (the title
+        // starts it) and the date's own line tall, ending where the date ends.
+        let slot = Rect::from_min_max(pos2(title.rect.left(), date.rect.top()), date.rect.max);
+        assert!(
+            slot.expand(0.01).contains_rect(hint.rect),
+            "the hint stays in the date slot: {:?} outside {slot:?}",
+            hint.rect
+        );
+        assert!(
+            near(hint.rect.right(), date.rect.right()),
+            "it ends where the date ended"
+        );
+        assert!(
+            near(hint.rect.bottom(), date.rect.bottom()),
+            "on the date's baseline"
+        );
+        assert!(
+            hint.rect.right() <= cross.left(),
+            "clear of the delete cross"
+        );
+        assert_eq!(
+            hint.clip, title.clip,
+            "painted under the text column's clip, like the rest of the row's text"
+        );
+        assert!(
+            hint.clip.expand(0.01).contains_rect(hint.rect),
+            "not cut off"
+        );
+
+        // The snippet shares the slot's line and runs past the whole of it
+        // (the premises: without them the next assertions prove nothing)...
+        assert!(
+            snippet.rect.top() < hint.rect.bottom() && hint.rect.top() < snippet.rect.bottom(),
+            "the snippet is on the slot's line"
+        );
+        assert!(
+            snippet.rect.right() > hint.rect.right(),
+            "the snippet runs past the whole slot"
+        );
+        // ...so it stops one gap short of the date when idle, and of the hint
+        // when armed. The title above it does not give way.
+        let gap = Metrics::DEFAULT.sp(1);
+        let idle_snippet = find(&idle, LONG_SNIPPET);
+        assert!(
+            near(idle_snippet.clip.right(), date.rect.left() - gap),
+            "idle, the snippet shows up to {} but should stop {gap} short of the date at {}",
+            idle_snippet.clip.right(),
+            date.rect.left()
+        );
+        assert!(
+            near(snippet.clip.right(), hint.rect.left() - gap),
+            "armed, the snippet shows up to {} but should stop {gap} short of the hint at {}",
+            snippet.clip.right(),
+            hint.rect.left()
+        );
+        assert_eq!(
+            find(&idle, "long note").clip,
+            title.clip,
+            "the title does not give way"
+        );
+        assert_eq!(
+            date.clip, title.clip,
+            "the date is clipped to the text column too: one path for the slot's text"
+        );
+    }
+
+    /// In a column narrower than its words (Android's font scale 2.0 on a
+    /// 360 dp phone leaves about 180 pt) whatever owns the date's slot is cut
+    /// short with an ellipsis on its right instead of losing its first words
+    /// on its left, and the snippet has no room at all: its clip collapses to
+    /// nothing instead of going negative.
+    #[test]
+    fn slot_text_truncates_in_a_column_narrower_than_itself() {
+        let ctx = egui::Context::default();
+        let long_note = format!("long note\n{LONG_SNIPPET}");
+        let mut app = app_with_notes(&ctx, "slot-narrow", &["first note", long_note.as_str()]);
+        let id = app.notes[0].id;
+        run_pass(&mut app, &ctx, vec![], 1.0);
+        app.armed_delete = Some((id, Instant::now()));
+        let wide = run_pass(&mut app, &ctx, vec![], 1.1);
+        let narrow = run_pass_sized(&mut app, &ctx, vec2(180.0, 800.0), vec![], 1.2);
+
+        // The hint keeps its first words and loses its end to an ellipsis.
+        let (whole, hint) = (find(&wide, DELETE_HINT), find(&narrow, DELETE_HINT));
+        assert!(
+            hint.rect.left() >= hint.clip.left() - 0.01,
+            "the hint does not start left of its column: {:?} in {:?}",
+            hint.rect,
+            hint.clip
+        );
+        assert!(
+            whole.rect.width() > hint.clip.width(),
+            "the premise: the whole hint is wider than the column"
+        );
+        assert!(
+            hint.shown.starts_with("Tap") && hint.shown.ends_with('…'),
+            "the hint is cut at its end: {:?}",
+            hint.shown
+        );
+
+        // The snippet has no room: its clip is empty, not negative.
+        let snippet = find(&narrow, LONG_SNIPPET);
+        assert!(
+            snippet.clip.width() >= 0.0,
+            "the snippet's clip is empty, not negative: {:?}",
+            snippet.clip
+        );
+        assert!(
+            snippet.clip.right() <= hint.rect.left(),
+            "and it stops short of the hint"
+        );
+
+        // An idle row's date takes the same road: a long one is cut at its end.
+        app.armed_delete = None;
+        app.row_dates[0] = "Sep 30, 2025".to_owned();
+        let idle = run_pass_sized(&mut app, &ctx, vec2(180.0, 800.0), vec![], 1.3);
+        let date = find(&idle, "Sep 30, 2025");
+        assert!(
+            date.rect.left() >= date.clip.left() - 0.01,
+            "the date does not start left of its column: {:?} in {:?}",
+            date.rect,
+            date.clip
+        );
+        assert!(
+            date.shown.starts_with("Sep") && date.shown.ends_with('…'),
+            "the date is cut at its end: {:?}",
+            date.shown
+        );
     }
 }

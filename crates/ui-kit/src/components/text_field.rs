@@ -213,7 +213,7 @@ pub fn error_row(ui: &mut Ui, theme: ThemeId, message: &str) -> Rect {
         },
         colors.error,
     );
-    let text = Pos2::new(rect.left() + icon_px + gap, rect.center().y) - galley.size() / 2.0;
+    let text = typography::left_center(rect.left() + icon_px + gap, rect.center().y, galley.size());
     ui.painter().galley(text, galley, colors.error);
     rect
 }
@@ -400,7 +400,9 @@ impl<'a> TextField<'a> {
         let response = ui.put(rect, edit);
 
         // The ring: the live response, the box's own rect.
-        FocusRing::new().paint(ui, &response, theme, flags);
+        FocusRing::new()
+            .text_input()
+            .paint(ui, &response, theme, flags);
 
         // The message row: the error replaces the hint, the preview
         // pointing the field at one or the other.
@@ -454,12 +456,14 @@ pub struct TextFieldResponse {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Pos2, RawInput, Rect, Stroke, Vec2};
+    use egui::epaint::ClippedShape;
+    use egui::{PointerButton, Pos2, RawInput, Rect, Shape, Stroke, StrokeKind, Vec2};
 
     use crate::icon::IconSize;
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
-    use crate::tokens::{radii, type_scale};
+    use crate::tokens::{radii, spacing, type_scale};
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         field_look, leading_icon_center, multiline_height, TextField, CONTROL_HEIGHT, FIELD_GAP,
@@ -705,6 +709,54 @@ mod tests {
         );
     }
 
+    /// The message rows start where their rect says: the hint's text at
+    /// the row's left edge, and the error's after the 16px error icon
+    /// and its 4px gap. The error row once subtracted half the message's
+    /// width from that left anchor, so the text ran back over its icon
+    /// and out of the field's left edge (the Select and Radio error
+    /// rows are this row).
+    #[test]
+    fn message_rows_start_where_their_rect_says() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        let hint = "As it appears in the proposal.";
+        let mut name = String::new();
+        let (row, shapes) = paint_pass(&ctx, |ui| {
+            TextField::new("Project name", &mut name)
+                .hint(hint)
+                .ui(ui, theme, &flags)
+                .message_rect
+                .expect("the hint row is laid out")
+        });
+        let pos = assert_painted_inside(&shapes, hint, row);
+        assert!(
+            (pos.x - row.left()).abs() < 0.01,
+            "hint: starts at x {} but the row's left edge is {}",
+            pos.x,
+            row.left()
+        );
+
+        let message = "That address is missing its @ sign.";
+        let mut email = String::new();
+        let (row, shapes) = paint_pass(&ctx, |ui| {
+            TextField::new("Work email", &mut email)
+                .error(message)
+                .ui(ui, theme, &flags)
+                .message_rect
+                .expect("the error row is laid out")
+        });
+        let pos = assert_painted_inside(&shapes, message, row);
+        let after_icon = row.left() + IconSize::Sm.px() + spacing::SPACE_1;
+        assert!(
+            (pos.x - after_icon).abs() < 0.01,
+            "error: starts at x {} but after the icon and its gap is {after_icon}",
+            pos.x
+        );
+    }
+
     /// The field edits through egui's TextEdit: requested focus holds,
     /// typed text lands in the buffer and reports changed, and leaving
     /// reports lost_focus exactly once.
@@ -770,5 +822,90 @@ mod tests {
         })
         .drop_without_applying_deltas();
         assert_eq!(reference, "A-2026-114", "the buffer is untouched");
+    }
+
+    /// The pointer moving to `pos` and pressing or releasing there.
+    fn pointer_button_at(pos: Pos2, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    /// Whether `shapes` hold the focus ring around `control`: the 2px
+    /// outline stroked `Outside` the control box grown by the 2px
+    /// offset. Matched by geometry, not colour: the ring's first frame
+    /// paints at fade 0, in a transparent stroke.
+    fn paints_ring_around(shapes: &[ClippedShape], control: Rect) -> bool {
+        fn is_ring(shape: &Shape, around: Rect) -> bool {
+            match shape {
+                Shape::Rect(rect) => {
+                    rect.rect == around
+                        && rect.stroke.width == states::FOCUS_RING_WIDTH
+                        && rect.stroke_kind == StrokeKind::Outside
+                }
+                Shape::Vec(nested) => nested.iter().any(|shape| is_ring(shape, around)),
+                _ => false,
+            }
+        }
+        let around = control.expand(states::FOCUS_RING_OFFSET);
+        shapes.iter().any(|clipped| is_ring(&clipped.shape, around))
+    }
+
+    /// A click gives the field focus and the ring comes with it: a text
+    /// input rings pointer focus too (the browsers' `:focus-visible`
+    /// rule for text fields), where every other widget keeps the ring
+    /// down under a pointer's focus. The field's ring is built with
+    /// `.text_input()`; without it the click would leave the focused
+    /// field unringed and this test fails.
+    #[test]
+    fn a_clicked_field_shows_its_focus_ring() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+        let mut name = String::new();
+
+        // One frame of the field carrying `events`: its control box,
+        // whether its edit holds focus, and the shapes it painted.
+        let mut frame = |events: Vec<egui::Event>| {
+            let mut seen = None;
+            let mut out = ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let field = TextField::new("Project name", &mut name).ui(ui, theme, &flags);
+                    seen = Some((field.control_rect, field.response.has_focus()));
+                },
+            );
+            let shapes = std::mem::take(&mut out.shapes);
+            out.drop_without_applying_deltas();
+            let (control, focused) = seen.expect("the pass ran the field");
+            (control, focused, shapes)
+        };
+
+        let (control, focused, shapes) = frame(vec![]);
+        assert!(!focused, "nothing focuses the field before the click");
+        assert!(
+            !paints_ring_around(&shapes, control),
+            "and it paints no ring"
+        );
+
+        // The click: the press, then the release.
+        let at = control.center();
+        frame(pointer_button_at(at, true));
+        let (_, focused, shapes) = frame(pointer_button_at(at, false));
+        assert!(focused, "the click focused the edit");
+        assert!(
+            paints_ring_around(&shapes, control),
+            "a clicked text field wears its focus ring"
+        );
     }
 }

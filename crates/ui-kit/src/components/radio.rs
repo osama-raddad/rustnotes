@@ -341,8 +341,11 @@ impl<'a, T: Copy + Eq> RadioGroup<'a, T> {
             if let Some(colour) = look.dot {
                 painter.circle_filled(circle.center(), DOT_SIZE / 2.0, colour);
             }
-            let label_pos = Pos2::new(rect.left() + CIRCLE_SIZE + LABEL_GAP, rect.center().y)
-                - galley.size() / 2.0;
+            let label_pos = crate::typography::left_center(
+                rect.left() + CIRCLE_SIZE + LABEL_GAP,
+                rect.center().y,
+                galley.size(),
+            );
             painter.galley(label_pos, galley, look.label);
 
             response.widget_info(|| {
@@ -445,11 +448,23 @@ pub struct RadioResponse<T> {
 mod tests {
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         circle_rect, option, radio_look, row_min_width, step_selection, RadioGroup, CIRCLE_BORDER,
         CIRCLE_SIZE, DOT_SIZE, LABEL_GAP, ROW_HEIGHT,
     };
+
+    /// Install the faces the group paints with: the icon families and
+    /// the theme's type faces bind at the pass boundary, so a warm-up
+    /// pass makes them resolvable for the widget passes that follow.
+    fn install_faces(ctx: &egui::Context, theme: ThemeId) {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            crate::typography::install(theme, ui.ctx());
+        });
+        out.drop_without_applying_deltas();
+    }
 
     /// The region options, the Radio preview's own example domain.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -770,6 +785,38 @@ mod tests {
         render(&ctx, None, egui::RawInput::default());
         let (committed, _) = render(&ctx, None, key_input(egui::Key::Space));
         assert_eq!(committed, Some(Region::Nordics));
+    }
+
+    /// Each option's label starts after the circle and its 10px gap, on
+    /// the label's own row. The paint once also subtracted half the
+    /// label's width from that left anchor, so the label ran back over
+    /// its circle. The group answers with the selected row's rect, so
+    /// each option is selected in turn to read its row.
+    #[test]
+    fn labels_start_after_the_circle_and_its_gap() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        for option in REGIONS {
+            let (row, shapes) = paint_pass(&ctx, |ui| {
+                RadioGroup::new("Region")
+                    .options(REGIONS)
+                    .selected(Some(option.value))
+                    .ui(ui, theme, &flags)
+                    .response
+                    .rect
+            });
+            let pos = assert_painted_inside(&shapes, option.label, row);
+            let after_circle = row.left() + CIRCLE_SIZE + LABEL_GAP;
+            assert!(
+                (pos.x - after_circle).abs() < 0.01,
+                "{}: starts at x {} but after the circle and its gap is {after_circle}",
+                option.label,
+                pos.x
+            );
+        }
     }
 
     /// One raw input carrying a single key press.

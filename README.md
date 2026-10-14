@@ -38,7 +38,9 @@ only what they lack on mobile.
 - Create / edit / delete (tap ✕ twice within 2 s to confirm)
 - Word-wrapped plain-text editor (egui `TextEdit`): blinking cursor,
   tap-to-place-cursor, drag selection
-- Scrolling list and editor, auto-scroll to keep the cursor visible
+- List and editor scroll by finger swipe; in the editor a tap places the
+  caret and a press held still for ~0.4 s starts a drag selection; the
+  editor auto-scrolls to keep the cursor visible
 - Notes persisted in SQLite across restarts — saved when the editor closes
   or switches, ~1.5 s after typing stops, on Android focus loss, and on iOS
   app backgrounding (`WillResignActive`/`DidEnterBackground` observers)
@@ -209,11 +211,12 @@ panic hook (Console.app on a device); other log output is stderr via
 `crates/ui-kit/` is the Vynatix design system as pure egui: the
 generated tokens for six themes, the typography stack with self-hosted
 fonts, and the component set — button through snackbar, plus the focus
-ring and interaction states. It has no platform glue; a desktop gallery
-is its demo surface:
+ring and interaction states. It has no platform glue; the gallery app
+(`crates/ui-kit-gallery`, hosted by `crates/rustnotes`) is its demo
+surface, on the desktop and on phones:
 
 ```sh
-cargo run -p ui-kit --example gallery
+cargo run -p ui-kit-gallery
 ```
 
 See [crates/ui-kit/README.md](crates/ui-kit/README.md) for applying a
@@ -239,8 +242,11 @@ list of where the port deviates from the brand book.
 - arm64-v8a only (add more ABIs in the `justfile`).
 - No search, no clipboard, no user-selectable theme — it's a demo of the pure-Rust stack,
   not a product.
-- Dragging inside the editor selects text (egui `TextEdit`); long notes
-  scroll by moving the cursor, not by swiping.
+- Editor touch is decided by intent, but kept basic: a swipe scrolls (no
+  fling after the finger lifts), a tap places the caret, and a press held
+  still for ~0.4 s starts a drag selection, with no handles or magnifier.
+  Start that drag within ~0.8 s of the hold: egui's own long-touch ends it
+  after that.
 
 ## Project layout
 
@@ -255,7 +261,8 @@ because xbuild reads it from the working directory.
 |---|---|
 | `crates/rustnotes-core/` | The app, pure egui: notes + SQLite, screens, `layout/` (metrics, size classes, palette, scaffold, nav, bottom nav), edge-swipe input filter, unit tests |
 | `crates/rustnotes/` | The eframe host: `src/lib.rs` (shared, `android_main` lives in `android.rs`), `src/main.rs` (iOS + desktop entry), `android.rs` (JNI), `ios.rs` (objc2/CoreText), `manifest.yaml` (xbuild) |
-| `crates/ui-kit/` | The Vynatix design system as pure egui: tokens, themes, typography, components; the gallery example is its demo (see its README) |
+| `crates/ui-kit/` | The Vynatix design system as pure egui: tokens, themes, typography, components (see its README) |
+| `crates/ui-kit-gallery/` | The kit's demo gallery as an app on the `rustnotes` host: desktop, iOS and Android |
 | `resources/AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs (+ `.game.xml` GameActivity variant for the opt-in) |
 | `resources/Info.plist` | App bundle manifest (hand-assembled .app) |
 | `tools/ios-profile-helper/` | Throwaway Xcode project that mints 7-day provisioning profiles |

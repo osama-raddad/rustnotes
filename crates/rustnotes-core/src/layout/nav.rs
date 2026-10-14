@@ -477,6 +477,43 @@ mod tests {
         assert_eq!(seen[0].route, "list");
     }
 
+    /// The mirror image: pushing in the middle of a pop picks up from the
+    /// leaving route's place on screen. The new front appears exactly where
+    /// the old one was and the route behind it does not jump, instead of the
+    /// slide restarting from off-screen.
+    #[test]
+    fn reversing_a_pop_mid_slide_is_continuous() {
+        let ctx = egui::Context::default();
+        let mut nav = Nav::new("list");
+        let mut seen = vec![];
+
+        nav.push("editor", 0.0, false);
+        nav.pop(0.0, true);
+        frame(&ctx, &mut nav, DURATION * 0.5, &mut seen);
+        let leaving_before = drawn(&seen, "editor").rect.min.x;
+        let list_before = drawn(&seen, "list").rect.min.x;
+        assert!(leaving_before > 0.0 && leaving_before < 400.0, "mid-slide");
+
+        nav.push("detail", DURATION * 0.5, true);
+        frame(&ctx, &mut nav, DURATION * 0.5, &mut seen);
+        let front_after = drawn(&seen, "detail").rect.min.x;
+        let list_after = drawn(&seen, "list").rect.min.x;
+        assert!(
+            (leaving_before - front_after).abs() < 1e-3,
+            "the new front must start where the old one was: {leaving_before} -> {front_after}"
+        );
+        assert!(
+            (list_before - list_after).abs() < 1e-3,
+            "back must not jump: {list_before} -> {list_after}"
+        );
+
+        // The new push still finishes, landing on the new route.
+        frame(&ctx, &mut nav, 1.5 * DURATION + 0.01, &mut seen);
+        assert!(!nav.is_animating());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].route, "detail");
+    }
+
     /// A push onto a running push cannot reuse the picture (the pair of
     /// routes changed), so the new front restarts from off-screen.
     #[test]

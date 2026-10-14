@@ -1,103 +1,462 @@
-//! Headless input tests for the gallery chrome: synthetic taps through
-//! the real `chrome()` at phone dimensions on ONE persistent context,
-//! asserting the interactive chrome actually responds. These exist to
-//! catch "the UI renders but input never lands" regressions on any
-//! platform, headlessly. The context must persist across frames: egui
-//! resolves a click from a press in one pass and its release in a later
-//! pass of the same context.
+//! Headless input tests for the gallery: the real app, built through
+//! the `rustnotes::App` seam the host drives (`new`, then
+//! `filter_input` and `ui` every frame), at phone size on ONE
+//! persistent context. Fingers arrive the way egui-winit delivers them
+//! from a touch screen, so these pin what a phone sees: the page, the
+//! sideways specimen rows and the tab strip scroll under the finger
+//! through egui's own drag-to-scroll from the very first swipe, taps
+//! keep landing once touches have been seen, and the bar's theme menu
+//! works by touch. The context must persist across frames: egui
+//! resolves a click from a press in one pass and its release in a
+//! later one, and a drag from the frames between.
+//!
+//! Three oracles: the page's scroll offset, read back from egui's
+//! memory (the page area's `scroll_area::State`); where a known string
+//! was painted, read from the frame's shapes (what a screenshot would
+//! show, without the screenshot); and the accessibility tree, which
+//! names each control and gives its widget's own rect (what a screen
+//! reader is told).
+
+use std::path::PathBuf;
 
 use eframe::egui;
+use eframe::egui::accesskit::Role;
+use rustnotes::App as _;
+use ui_kit::gallery_copy as copy;
+use ui_kit::theme::ThemeId;
 
-use crate::gallery::Gallery;
+use crate::GalleryApp;
 
-/// A persistent-context harness around the gallery chrome at phone
-/// size. `frame` advances one pass with the given events.
+/// The phone the tests hold: under the gallery's 600pt compact
+/// breakpoint, so the phone layout is the one under test.
+const PHONE: egui::Vec2 = egui::vec2(384.0, 855.0);
+
+/// One frame's length, the 60Hz the hosts run at: egui derives the
+/// pointer's velocity (and with it the fling) from the clock.
+const FRAME: f64 = 1.0 / 60.0;
+
+/// The persistent-context harness: the app, the context, the window,
+/// the clock, and what the last frame painted and told a screen reader.
 struct Harness {
     ctx: egui::Context,
-    gallery: Gallery,
+    app: GalleryApp,
+    window: egui::Vec2,
+    time: f64,
+    /// Every string the last frame painted, with its rect.
+    strings: Vec<(String, egui::Rect)>,
+    /// Every labelled node of the last frame's accessibility tree: its
+    /// role, its label and its widget's rect.
+    nodes: Vec<(Role, String, egui::Rect)>,
+    /// The bounds of every mesh the last frame painted.
+    meshes: Vec<egui::Rect>,
 }
 
 impl Harness {
-    fn new() -> Self {
-        let ctx = egui::Context::default();
-        ui_kit::icon::install(&ctx);
-        for id in ui_kit::theme::ThemeId::ALL {
-            ui_kit::typography::install(*id, &ctx);
-        }
-        ui_kit::theme::ThemeId::Light.apply(&ctx);
-        Self {
-            ctx,
-            gallery: Gallery::new(),
-        }
+    /// The app on the phone.
+    fn phone() -> Self {
+        Self::window(PHONE)
     }
 
+    /// The app as the host creates it, in a `window`-sized viewport,
+    /// warmed for a few frames (the sizing passes settle and the widget
+    /// ids register). The accessibility tree is on, as a screen reader
+    /// turns it on: its nodes carry each control's name and rect.
+    fn window(window: egui::Vec2) -> Self {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let app = GalleryApp::new(PathBuf::new(), &ctx, None);
+        let mut harness = Self {
+            ctx,
+            app,
+            window,
+            time: 1.0,
+            strings: Vec::new(),
+            nodes: Vec::new(),
+            meshes: Vec::new(),
+        };
+        harness.idle(3);
+        harness
+    }
+
+    /// One frame with `events`, through the app's input filter first,
+    /// as the host's `raw_input_hook` runs it.
     fn frame(&mut self, events: Vec<egui::Event>) {
-        let out = self.ctx.run_ui(
-            egui::RawInput {
-                events,
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(384.0, 855.0),
-                )),
-                time: Some(1.0),
-                ..Default::default()
-            },
-            |ui| {
-                let viewport = ui.ctx().input(|i| i.viewport_rect());
-                let canvas = self.gallery.theme.colors().background;
-                ui.painter().rect_filled(viewport, 0.0, canvas);
-                self.gallery.chrome(ui);
-            },
-        );
+        self.time += FRAME;
+        let mut raw = egui::RawInput {
+            events,
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.window)),
+            time: Some(self.time),
+            ..Default::default()
+        };
+        self.app.filter_input(&mut raw);
+        let out = self.ctx.run_ui(raw, |ui| self.app.ui(ui));
+        self.strings = painted_strings(&out.shapes);
+        self.nodes = labelled_nodes(&out.platform_output);
+        self.meshes = painted_meshes(&out.shapes);
         out.drop_without_applying_deltas();
     }
 
-    /// Warm the layout for a few passes (sizing passes settle, widget
-    /// ids register), then tap: move, press, release.
-    fn tap(&mut self, pos: (f32, f32)) {
-        let (x, y) = pos;
-        for _ in 0..3 {
-            self.frame(vec![]);
+    /// `frames` frames with no input.
+    fn idle(&mut self, frames: usize) {
+        for _ in 0..frames {
+            self.frame(Vec::new());
         }
-        self.frame(vec![egui::Event::PointerMoved(egui::pos2(x, y))]);
-        self.frame(vec![egui::Event::PointerButton {
-            pos: egui::pos2(x, y),
+    }
+
+    /// A tap: one finger down and up again at `pos`.
+    fn tap(&mut self, pos: egui::Pos2) {
+        self.frame(finger_down(pos));
+        self.frame(finger_up(pos));
+        self.idle(1);
+    }
+
+    /// A swipe: one finger down at `from`, moved to `to` over `steps`
+    /// frames, and lifted there (a lift at speed, so egui flings).
+    fn swipe(&mut self, from: egui::Pos2, to: egui::Pos2, steps: usize) {
+        self.frame(finger_down(from));
+        for step in 1..=steps {
+            self.frame(finger_move(from.lerp(to, step as f32 / steps as f32)));
+        }
+        self.frame(finger_up(to));
+    }
+
+    /// A spot on the page's left margin, low on the window: nothing
+    /// there is interactive, so a tap on it lands on nothing.
+    fn margin(&self) -> egui::Pos2 {
+        egui::pos2(8.0, self.window.y * 0.7)
+    }
+
+    /// A first touch on the page margin: egui treats the screen as a
+    /// touch screen only once it has seen a touch, the state a phone is
+    /// in after its first tap.
+    fn touch_screen(&mut self) {
+        self.tap(self.margin());
+        assert!(
+            self.ctx.input(|i| i.has_touch_screen()),
+            "the touches must reach egui untouched"
+        );
+    }
+
+    /// The page's live scroll offset, from the page area's state.
+    fn page_offset(&self) -> egui::Vec2 {
+        let id = self
+            .app
+            .gallery
+            .page_scroll_id
+            .expect("the chrome has shown the page");
+        egui::scroll_area::State::load(&self.ctx, id)
+            .expect("the page area stores its state")
+            .offset
+    }
+
+    /// Where the last frame painted `text` (its topmost occurrence), if
+    /// it painted it at all: off-screen text is culled.
+    fn painted(&self, text: &str) -> Option<egui::Rect> {
+        self.strings
+            .iter()
+            .filter(|(painted, _)| painted == text)
+            .map(|(_, rect)| *rect)
+            .min_by(|a, b| a.top().total_cmp(&b.top()))
+    }
+
+    /// The rect of the topmost `role` node in the last frame's
+    /// accessibility tree whose label starts with `label` (a name can
+    /// run on: the theme trigger's carries the live theme after the
+    /// menu's label), if there is one. The rect is the widget's own,
+    /// whatever its label paints.
+    fn node(&self, role: Role, label: &str) -> Option<egui::Rect> {
+        self.nodes
+            .iter()
+            .filter(|(node_role, name, _)| *node_role == role && name.starts_with(label))
+            .map(|(_, _, rect)| *rect)
+            .min_by(|a, b| a.top().total_cmp(&b.top()))
+    }
+
+    /// Wheel the page down until `text` is painted inside `band` (a y
+    /// range), then let the smoothed wheel settle; `None` when it never
+    /// shows.
+    fn scroll_to(&mut self, text: &str, band: std::ops::Range<f32>) -> Option<egui::Rect> {
+        let over_page = egui::pos2(self.window.x / 2.0, self.window.y * 0.6);
+        for _ in 0..600 {
+            self.frame(vec![
+                egui::Event::PointerMoved(over_page),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -12.0),
+                    modifiers: Default::default(),
+                    phase: egui::TouchPhase::Move,
+                },
+            ]);
+            if self
+                .painted(text)
+                .is_some_and(|rect| band.contains(&rect.top()))
+            {
+                self.idle(60);
+                return self.painted(text);
+            }
+        }
+        None
+    }
+}
+
+/// Every string a frame painted, with its rect, where its clip lets it
+/// show.
+fn painted_strings(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+    fn walk(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
+                if rect.intersects(clip) {
+                    out.push((text.galley.text().to_owned(), rect));
+                }
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, clip, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, clipped.clip_rect, &mut out);
+    }
+    out
+}
+
+/// Every node of a frame's accessibility tree that carries a label and
+/// a rect: what a screen reader is told, and where.
+fn labelled_nodes(output: &egui::PlatformOutput) -> Vec<(Role, String, egui::Rect)> {
+    let Some(update) = &output.accesskit_update else {
+        return Vec::new();
+    };
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, node)| {
+            let bounds = node.bounds()?;
+            let rect = egui::Rect::from_min_max(
+                egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+                egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+            );
+            Some((node.role(), node.label()?.to_owned(), rect))
+        })
+        .collect()
+}
+
+/// The bounds of every mesh a frame painted.
+fn painted_meshes(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Rect> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Mesh(mesh) => out.push(mesh.calc_bounds()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// A finger landing at `pos`, as egui-winit's `on_touch` delivers it:
+/// the touch itself, then (the first finger drives the pointer) the
+/// pointer moved there and pressed.
+fn finger_down(pos: egui::Pos2) -> Vec<egui::Event> {
+    vec![
+        touch(egui::TouchPhase::Start, pos),
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton {
+            pos,
             button: egui::PointerButton::Primary,
             pressed: true,
             modifiers: Default::default(),
-        }]);
-        self.frame(vec![egui::Event::PointerButton {
-            pos: egui::pos2(x, y),
+        },
+    ]
+}
+
+/// The finger moving to `pos`: the touch, then the pointer follows.
+fn finger_move(pos: egui::Pos2) -> Vec<egui::Event> {
+    vec![
+        touch(egui::TouchPhase::Move, pos),
+        egui::Event::PointerMoved(pos),
+    ]
+}
+
+/// The finger lifting at `pos`: the touch ends, the pointer releases,
+/// then vanishes (no hover is left behind on a touch screen).
+fn finger_up(pos: egui::Pos2) -> Vec<egui::Event> {
+    vec![
+        touch(egui::TouchPhase::End, pos),
+        egui::Event::PointerButton {
+            pos,
             button: egui::PointerButton::Primary,
             pressed: false,
             modifiers: Default::default(),
-        }]);
+        },
+        egui::Event::PointerGone,
+    ]
+}
+
+fn touch(phase: egui::TouchPhase, pos: egui::Pos2) -> egui::Event {
+    egui::Event::Touch {
+        device_id: egui::TouchDeviceId(1),
+        id: egui::TouchId(0),
+        phase,
+        pos,
+        force: None,
     }
 }
 
+/// A finger swiping up the Brand page scrolls it natively: the page
+/// follows the finger 1:1 while it is down and keeps going after the
+/// lift (egui's kinetic fling). The swipe is the first touch after
+/// launch, the one egui's touch-armed default lets land on nothing.
 #[test]
-fn tapping_the_foundations_tab_switches_panels() {
-    // Scan the tab strip's y at phone width: headless chrome carries no
-    // safe-area insets, so the strip sits higher than on device.
-    for y in [90.0, 110.0, 130.0, 150.0, 170.0, 190.0, 210.0, 230.0] {
-        let mut h = Harness::new();
-        h.tap((120.0, y));
-        if h.gallery.tab == 1 {
-            return; // found the strip; the tap works
-        }
-    }
-    panic!("no tap y switched the Foundations tab: the chrome eats input");
+fn touch_drag_scrolls_the_page() {
+    let mut h = Harness::phone();
+    let before = h.page_offset().y;
+    h.swipe(egui::pos2(190.0, 700.0), egui::pos2(190.0, 300.0), 10);
+    let released = h.page_offset().y;
+    h.idle(30);
+    let settled = h.page_offset().y;
+    assert!(
+        released >= before + 300.0,
+        "the page must follow a 400pt swipe: {before} -> {released}"
+    );
+    assert!(
+        settled > released + 50.0,
+        "the lift must fling the page on: {released} -> {settled}"
+    );
 }
 
-/// The wheel path must scroll the page: synthetic MouseWheel events
-/// move the main scroll area's offset.
+/// A sideways swipe over the Foundations state tiles scrolls that row
+/// under the finger (the row's own horizontal scroll area takes the
+/// drag) and leaves the page where it was. The wheel brings the tiles
+/// into view, so the swipe is the first touch after launch.
+#[test]
+fn sideways_touch_drag_scrolls_a_specimen_row() {
+    let mut h = Harness::phone();
+    h.app.gallery.tab = 1;
+    h.idle(3);
+    // The pressed tile's caption sits mid-row: on screen before the
+    // swipe and after it.
+    let caption = copy::STATE_CAPTIONS[2];
+    let before = h
+        .scroll_to(caption, 250.0..600.0)
+        .expect("the state tiles scroll into view");
+    let page = h.page_offset().y;
+    let y = before.center().y;
+    h.swipe(egui::pos2(340.0, y), egui::pos2(60.0, y), 10);
+    h.idle(30);
+    let after = h.painted(caption).expect("the caption stays on screen");
+    assert!(
+        after.left() < before.left() - 100.0,
+        "the row must follow the finger sideways: x {} -> {}",
+        before.left(),
+        after.left()
+    );
+    assert!(
+        (h.page_offset().y - page).abs() < 1.0,
+        "a sideways swipe must leave the page alone: {page} -> {}",
+        h.page_offset().y
+    );
+}
+
+/// Dismiss the Feedback panel's info banner by touch, the topmost close
+/// glyph on the page, and check that the panel then offers to restore
+/// it: a tap inside the scrolling page lands.
+fn dismiss_the_info_banner(h: &mut Harness) {
+    let close = ui_kit::icons::Icon::Close.as_char().to_string();
+    let dismiss = h.painted(&close).expect("the info banner's dismiss");
+    h.tap(dismiss.center());
+    h.idle(2);
+    assert!(
+        h.painted(copy::BANNERS_RESTORE).is_some(),
+        "a tap inside the page dismisses the banner and offers the restore"
+    );
+}
+
+/// Once touches have been seen (egui's drag-to-scroll is armed), taps
+/// still land: one on the tab strip switches panels, one inside the
+/// scrolling page dismisses a banner, and the restore button appears
+/// only then.
+#[test]
+fn taps_still_land_after_touches_have_been_seen() {
+    let mut h = Harness::phone();
+    h.touch_screen();
+
+    let foundations = h.painted(copy::TABS[1]).expect("the tab strip is painted");
+    h.tap(foundations.center());
+    assert_eq!(h.app.gallery.tab, 1, "a tap on Foundations switches panels");
+
+    let feedback = h.painted(copy::TABS[3]).expect("the tab strip is painted");
+    h.tap(feedback.center());
+    assert_eq!(h.app.gallery.tab, 3, "a tap on Feedback switches panels");
+    h.idle(2);
+    assert!(
+        h.painted(copy::BANNERS_RESTORE).is_none(),
+        "all four banners show at first, so there is nothing to restore"
+    );
+
+    dismiss_the_info_banner(&mut h);
+}
+
+/// The first touch after launch can be a sideways swipe on the tab
+/// strip, which outgrows a phone, the narrowest common one (360pt) the
+/// most: the strip follows that very swipe, bringing its clipped last
+/// tab in, and the swipe, pressed on Components, is no tap on it. The
+/// taps after it still land: one on the tab the swipe brought in
+/// switches panels, one inside the page dismisses a banner.
+#[test]
+fn a_first_swipe_on_the_tab_strip_scrolls_it_and_taps_still_land() {
+    let mut h = Harness::window(egui::vec2(360.0, PHONE.y));
+    // The strip ends at the content panel's inset; Feedback, its last
+    // tab, runs past that edge until the strip scrolls.
+    let edge = h.window.x - ui_kit::tokens::spacing::SPACE_6;
+    let before = h.painted(copy::TABS[3]).expect("the tab strip is painted");
+    assert!(
+        before.right() > edge,
+        "the four tabs must outgrow a phone's strip: Feedback ends at {}, the strip at {edge}",
+        before.right()
+    );
+    // The finger lands on a tab, Components, at its painted centre.
+    let press = h
+        .painted(copy::TABS[2])
+        .expect("the tab strip is painted")
+        .center();
+    h.swipe(press, press - egui::vec2(200.0, 0.0), 10);
+    h.idle(30);
+    let after = h.painted(copy::TABS[3]).expect("the tab strip is painted");
+    assert!(
+        after.right() <= edge,
+        "the strip must follow the first swipe: Feedback ends at {} -> {} (the strip at {edge})",
+        before.right(),
+        after.right()
+    );
+    assert_eq!(
+        h.app.gallery.tab, 0,
+        "a swipe is not a tap on the tab under the finger"
+    );
+
+    h.tap(after.center());
+    assert_eq!(h.app.gallery.tab, 3, "a tap on Feedback switches panels");
+    h.idle(2);
+    dismiss_the_info_banner(&mut h);
+}
+
+/// The wheel still scrolls the page, and the offset accumulates across
+/// frames rather than resetting each one.
 #[test]
 fn wheel_events_scroll_the_page() {
-    let mut h = Harness::new();
-    for _ in 0..3 {
-        h.frame(vec![]);
-    }
-    let before = h.gallery.last_scroll_offset.y;
+    let mut h = Harness::phone();
+    let before = h.page_offset().y;
     for _ in 0..30 {
         h.frame(vec![
             egui::Event::PointerMoved(egui::pos2(180.0, 500.0)),
@@ -109,108 +468,259 @@ fn wheel_events_scroll_the_page() {
             },
         ]);
     }
-    let after = h.gallery.last_scroll_offset.y;
+    h.idle(30);
+    let after = h.page_offset().y;
     assert!(
-        (after - before).abs() > 1.0,
-        "wheel must scroll: before {before} after {after}"
+        after > before + 100.0,
+        "30 wheel steps of 5pt must scroll the page: {before} -> {after}"
     );
 }
 
-/// The touch-scroll shim: finger drags through `filter_input` move the
-/// page's scroll offset.
+/// The bar's theme menu is the kit's, and it works by touch: a tap on
+/// the trigger opens the popover, a tap on a theme switches the live
+/// theme (the gallery's labels stay unselectable under it) and leaves
+/// the popover open, a tap on a toggle flips its flag, and a tap
+/// outside the popover closes it.
 #[test]
-fn touch_drag_scrolls_through_the_shim() {
-    let ctx = egui::Context::default();
-    ui_kit::icon::install(&ctx);
-    for id in ui_kit::theme::ThemeId::ALL {
-        ui_kit::typography::install(*id, &ctx);
-    }
-    ui_kit::theme::ThemeId::Light.apply(&ctx);
-    let mut gallery = Gallery::new();
-    let frame = |ctx: &egui::Context, gallery: &mut Gallery, events: Vec<egui::Event>| {
-        let mut app = crate::test_app(std::mem::replace(gallery, Gallery::new()), ctx.clone());
-        let mut raw = egui::RawInput {
-            events,
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(384.0, 855.0),
-            )),
-            time: Some(1.0),
-            ..Default::default()
-        };
-        app.filter_input_shim(&mut raw);
-        let out = ctx.run_ui(raw, |ui| {
-            let viewport = ui.ctx().input(|i| i.viewport_rect());
-            let canvas = app.gallery.theme.colors().background;
-            ui.painter().rect_filled(viewport, 0.0, canvas);
-            app.gallery.chrome(ui);
-        });
-        out.drop_without_applying_deltas();
-        *gallery = app.gallery;
-    };
-    // warm up: the chrome registers the scroll id
-    for _ in 0..3 {
-        frame(&ctx, &mut gallery, vec![]);
-    }
-    let before = gallery.last_scroll_offset.y;
-    // a finger drag up: Start, Moves, End
-    frame(
-        &ctx,
-        &mut gallery,
-        vec![touch(egui::TouchPhase::Start, 300.0)],
+fn the_theme_menu_switches_themes_and_closes_on_a_tap_outside() {
+    let mut h = Harness::phone();
+    // The Feedback panel paints no theme names of its own, so every
+    // name on screen is the menu's.
+    h.app.gallery.tab = 3;
+    h.idle(3);
+    h.touch_screen();
+    let dark = ThemeId::Dark.name();
+    assert!(h.painted(dark).is_none(), "the menu starts closed");
+
+    let trigger = h
+        .node(Role::Button, copy::THEME_MENU)
+        .expect("the bar's theme trigger");
+    h.tap(trigger.center());
+    h.idle(2);
+    let choice = h.painted(dark).expect("the open menu lists every theme");
+    h.tap(choice.center());
+    assert_eq!(
+        h.app.gallery.theme,
+        ThemeId::Dark,
+        "the tap picks the theme"
     );
-    let mut y = 280.0f32;
-    while y > 200.0 {
-        frame(&ctx, &mut gallery, vec![touch(egui::TouchPhase::Move, y)]);
-        y -= 10.0;
-    }
-    frame(
-        &ctx,
-        &mut gallery,
-        vec![touch(egui::TouchPhase::End, 200.0)],
-    );
-    let after = gallery.last_scroll_offset.y;
+    assert_eq!(h.ctx.theme(), egui::Theme::Dark, "and applies it");
     assert!(
-        after > before + 10.0,
-        "the touch drag must scroll the page: {before} -> {after}"
+        !h.ctx
+            .style_of(egui::Theme::Dark)
+            .interaction
+            .selectable_labels,
+        "labels stay unselectable under the new theme"
+    );
+
+    h.idle(2);
+    let motion = h
+        .painted(copy::REDUCED_MOTION)
+        .expect("the menu stays open after a choice");
+    let reduced = h.app.gallery.flags.reduced_motion;
+    h.tap(motion.center());
+    assert_ne!(
+        h.app.gallery.flags.reduced_motion, reduced,
+        "the toggle flips reduced motion"
+    );
+
+    h.tap(h.margin());
+    h.idle(2);
+    assert!(
+        h.painted(dark).is_none(),
+        "a tap outside the popover closes the menu"
     );
 }
 
-fn touch(phase: egui::TouchPhase, y: f32) -> egui::Event {
-    egui::Event::Touch {
-        device_id: egui::TouchDeviceId(0),
-        id: egui::TouchId(0),
-        phase,
-        pos: egui::pos2(200.0, y),
-        force: None,
-    }
+/// The bar's search popover closes on a tap outside it, as the theme
+/// menu's does, and the bar holds one popover open at a time: opening
+/// either one closes the other.
+#[test]
+fn the_search_popover_closes_on_a_tap_outside_and_gives_way_to_the_theme_menu() {
+    let mut h = Harness::phone();
+    // The Feedback panel paints neither a theme name nor the search
+    // field's label of its own, so any on screen are the popovers'.
+    h.app.gallery.tab = 3;
+    h.idle(3);
+    h.touch_screen();
+    let field = copy::SEARCH_FIELD_LABEL;
+    let dark = ThemeId::Dark.name();
+    let search = h
+        .node(Role::Button, copy::SEARCH_BUTTON_NAME)
+        .expect("the bar's search button");
+    let trigger = h
+        .node(Role::Button, copy::THEME_MENU)
+        .expect("the bar's theme trigger");
+
+    h.tap(search.center());
+    h.idle(2);
+    assert!(
+        h.painted(field).is_some(),
+        "a tap on the search button opens its popover"
+    );
+    h.tap(h.margin());
+    h.idle(2);
+    assert!(
+        h.painted(field).is_none(),
+        "a tap outside the search popover closes it"
+    );
+
+    h.tap(search.center());
+    h.idle(2);
+    h.tap(trigger.center());
+    h.idle(2);
+    assert!(
+        h.painted(field).is_none() && h.painted(dark).is_some(),
+        "opening the theme menu closes the search popover"
+    );
+    h.tap(search.center());
+    h.idle(2);
+    assert!(
+        h.painted(dark).is_none() && h.painted(field).is_some(),
+        "opening the search popover closes the theme menu"
+    );
 }
 
-/// After a real touch has been seen (touch states exist), taps must
-/// still click: egui 0.36's drag-to-scroll background interact must
-/// not eat them (the regression that killed all taps on Android).
+/// The bar keeps its working controls clear of the rest of its row
+/// from the narrowest phones to a wide desktop (320, the first iPhone
+/// SE and the small Androids; 600, the compact breakpoint; 768 and 834,
+/// iPad mini and iPad Air portrait; 1024, iPad landscape; 1200 and
+/// 1440, desktops, the widest holding the fullest bar) in every theme,
+/// each with its own faces and name: the theme trigger and the search
+/// button keep at least the bar's action gap from every nav link and
+/// from the wordmark. Touching counts as crowding: laid out without
+/// measuring, the search button came within half a point of the last
+/// nav link at 1024.
 #[test]
-fn taps_still_work_after_touches_have_been_seen() {
-    let mut h = Harness::new();
-    // A first touch (Start + End) creates the touch state.
-    h.frame(vec![touch(egui::TouchPhase::Start, 400.0)]);
-    h.frame(vec![touch(egui::TouchPhase::End, 400.0)]);
-    // Now a plain tap through the pointer path.
-    let mut worked = false;
-    for y in [90.0, 110.0, 130.0, 150.0, 170.0, 190.0, 210.0, 230.0] {
-        let mut h2 = Harness::new();
-        // recreate the touch state on the fresh context
-        h2.frame(vec![touch(egui::TouchPhase::Start, 400.0)]);
-        h2.frame(vec![touch(egui::TouchPhase::End, 400.0)]);
-        h2.tap((120.0, y));
-        if h2.gallery.tab == 1 {
-            worked = true;
-            break;
+fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
+    let gap = ui_kit::components::top_app_bar::ACTIONS_GAP;
+    let mut crowded = Vec::new();
+    // One app, resized as a window is: the bar measures its row afresh
+    // every frame. It is the same bar over every panel, and the
+    // Feedback panel is the cheapest one to lay out beneath it.
+    let mut h = Harness::window(egui::vec2(320.0, 800.0));
+    h.app.gallery.tab = 3;
+    for width in [320.0, 600.0, 768.0, 834.0, 1024.0, 1200.0, 1440.0] {
+        h.window = egui::vec2(width, 800.0);
+        for theme in ThemeId::ALL {
+            h.app.gallery.theme = *theme;
+            crate::gallery::apply_theme(*theme, &h.ctx);
+            h.idle(2);
+            let trigger = h
+                .node(Role::Button, copy::THEME_MENU)
+                .expect("the bar's theme trigger");
+            let search = h
+                .node(Role::Button, copy::SEARCH_BUTTON_NAME)
+                .expect("the bar's search button");
+            if width >= 1440.0 {
+                // The widest window holds the fullest bar, so the check
+                // below covers it: the trigger naming the theme and the
+                // call to action beside it.
+                let named = format!("{} · {}", copy::THEME_MENU, theme.name());
+                let holds = |name: &str| {
+                    h.nodes
+                        .iter()
+                        .any(|(role, label, _)| *role == Role::Button && label == name)
+                };
+                assert!(
+                    holds(&named) && holds(copy::START_A_PROJECT),
+                    "at {width}pt in {} the bar holds everything",
+                    theme.name()
+                );
+            }
+            let mut neighbours = nav_links(&h);
+            neighbours.push(("the wordmark".to_owned(), wordmark(&h, trigger)));
+            for (control, rect) in [("theme trigger", trigger), ("search button", search)] {
+                let reach = rect.expand2(egui::vec2(gap, 0.0));
+                for (name, neighbour) in &neighbours {
+                    if reach.intersects(*neighbour) {
+                        crowded.push(format!(
+                            "at {width}pt in {} the {control} {rect:?} crowds {name} {neighbour:?}",
+                            theme.name()
+                        ));
+                    }
+                }
+            }
         }
     }
-    assert!(
-        worked,
-        "the Foundations tab must still respond once touches exist"
+    assert!(crowded.is_empty(), "{}", crowded.join("\n"));
+}
+
+/// The bar's nav links: the `Link` nodes named after the panels, each
+/// with its rect.
+fn nav_links(h: &Harness) -> Vec<(String, egui::Rect)> {
+    h.nodes
+        .iter()
+        .filter(|(role, name, _)| *role == Role::Link && copy::TABS.contains(&name.as_str()))
+        .map(|(_, name, rect)| (format!("the {name} link"), *rect))
+        .collect()
+}
+
+/// The wordmark: the one mesh painted level with the bar's `row` (the
+/// logo is drawn as a mesh, the bar's text and controls as shapes of
+/// their own). A second mesh there fails the lookup rather than
+/// widening the wordmark.
+fn wordmark(h: &Harness, row: egui::Rect) -> egui::Rect {
+    let level: Vec<egui::Rect> = h
+        .meshes
+        .iter()
+        .copied()
+        .filter(|mesh| mesh.top() < row.bottom() && row.top() < mesh.bottom())
+        .collect();
+    assert_eq!(
+        level.len(),
+        1,
+        "the bar paints one mesh, the wordmark: {level:?}"
     );
-    let _ = &mut h;
+    level[0]
+}
+
+/// On the narrowest phones the theme trigger is its icon alone, named
+/// for a screen reader by the menu's own label and nothing more, and a
+/// tap on it still opens the menu.
+#[test]
+fn the_theme_trigger_is_its_icon_alone_on_the_narrowest_phones() {
+    let mut h = Harness::window(egui::vec2(320.0, 640.0));
+    // The Feedback panel paints no theme names of its own, so every
+    // name on screen is the menu's.
+    h.app.gallery.tab = 3;
+    h.idle(3);
+    h.touch_screen();
+    assert!(
+        h.nodes
+            .iter()
+            .any(|(role, name, _)| *role == Role::Button && name == copy::THEME_MENU),
+        "the icon trigger is named {:?} and nothing more",
+        copy::THEME_MENU
+    );
+    assert!(
+        h.painted(copy::THEME_MENU).is_none(),
+        "the trigger paints no label at 320pt"
+    );
+    let trigger = h
+        .node(Role::Button, copy::THEME_MENU)
+        .expect("the bar's theme trigger");
+    h.tap(trigger.center());
+    h.idle(2);
+    assert!(
+        h.painted(ThemeId::Dark.name()).is_some(),
+        "a tap on the icon trigger opens the theme menu"
+    );
+}
+
+/// Where the bar has room, the theme trigger names the live theme
+/// after the menu's label; most phones' bars keep the bare label (the
+/// one the menu test above taps), and the narrowest the icon alone.
+#[test]
+fn the_theme_trigger_names_the_live_theme_on_a_wide_window() {
+    let h = Harness::window(egui::vec2(1200.0, 800.0));
+    let named = format!("{} · {}", copy::THEME_MENU, ThemeId::Light.name());
+    assert!(
+        h.painted(&named).is_some(),
+        "a wide bar's trigger reads {named:?}"
+    );
+    assert!(
+        h.painted(copy::THEME_MENU).is_none(),
+        "a wide bar's trigger is not the bare label"
+    );
 }
