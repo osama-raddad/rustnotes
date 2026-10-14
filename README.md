@@ -113,8 +113,9 @@ Every packaging recipe is app-parametric: the `app` argument defaults to
 the second consumer packages with `just android app=hello-mobile`,
 `just run-ios app=hello-mobile`, and so on. Each app brings its own
 resources (Android manifest, Info.plist) and debug keystore; device
-signing (`just ios-install`/`just ios-profile`) is rustnotes-only for now
-(the bundled profile helper mints profiles for one bundle id).
+signing (`just ios-install`/`just ios-profile`) is per-app — the helper
+project's baked bundle id is overridden per app from the identity table
+(free personal teams cap App IDs at 10 per 7 days, one per app).
 
 ### Android: the GameActivity opt-in
 
