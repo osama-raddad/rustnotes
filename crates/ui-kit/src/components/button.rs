@@ -487,13 +487,16 @@ impl<'a> Button<'a> {
 
         // The content: the icon at 20px and the label, a space-2 gap
         // between them, ordered by the slot, both centred in the body.
+        // The icon takes room only when one rides, as in `min_width`: a
+        // label-only button centres its label alone.
         let icon_px = IconSize::Md.px();
         let gap = if has_icon && !self.icon_only {
             spacing::SPACE_2
         } else {
             0.0
         };
-        let content_width = icon_px + gap + label_width;
+        let icon_width = if has_icon { icon_px } else { 0.0 };
+        let content_width = icon_width + gap + label_width;
         let start = body.center().x - content_width / 2.0;
         let icon = self.icon.filter(|_| has_icon);
         let (icon_x, label_x) = match (icon, galley.is_some()) {
@@ -973,46 +976,51 @@ mod tests {
         assert!(sizes.iter().all(|size| size.x == size.y), "square");
     }
 
-    /// The label stays inside the button, and a button with a leading
-    /// icon starts it after the 20px icon and its space-2 gap, one
-    /// padding in from the left edge. The paint once also subtracted
-    /// half the label's width from that left anchor, so "Start a
-    /// project" read "a project" with its text running out of the
-    /// button's left edge, and "Read the case study" read "e case
-    /// study" over the button before it. The label-only case pins
-    /// containment alone: its content width still counts the 20px icon
-    /// slot when no icon rides (a separate slip in `Button::ui` that
-    /// leaves the label 10px left of centre), so its exact edge is not
-    /// asserted here.
+    /// The label starts where the button's padding puts it: one padding
+    /// in from the left edge when it stands alone or leads a trailing
+    /// icon, and after the 20px icon and its space-2 gap when the icon
+    /// leads. The paint once also subtracted half the label's width from
+    /// that left anchor, so "Start a project" read "a project" with its
+    /// text running out of the button's left edge, and "Read the case
+    /// study" read "e case study" over the button before it. And a
+    /// label-only button once centred a block as wide as its label plus
+    /// the 20px icon slot with no icon in it, which left the label 10px
+    /// left of centre.
     #[test]
-    fn labels_start_inside_the_button() {
+    fn labels_start_a_padding_in_from_the_button_edge() {
         let ctx = egui::Context::default();
         let theme = ThemeId::Light;
         install_faces(&ctx, theme);
         let flags = UiKitFlags::default();
+        let padding = ButtonSize::Default.padding_x();
 
-        let (rect, shapes) = paint_pass(&ctx, |ui| {
-            Button::new("Start a project")
-                .ui(ui, theme, &flags)
-                .response
-                .rect
-        });
-        assert_painted_inside(&shapes, "Start a project", rect);
-
-        let (rect, shapes) = paint_pass(&ctx, |ui| {
-            Button::new("Read the case study")
-                .icon_leading(Icon::ArrowForward)
-                .ui(ui, theme, &flags)
-                .response
-                .rect
-        });
-        let pos = assert_painted_inside(&shapes, "Read the case study", rect);
-        let after_icon =
-            rect.left() + ButtonSize::Default.padding_x() + IconSize::Md.px() + spacing::SPACE_2;
-        assert!(
-            (pos.x - after_icon).abs() < 0.01,
-            "leading icon: starts at x {} but after the icon and its gap is {after_icon}",
-            pos.x
+        let check = |what: &str, label: &str, button: Button, offset: f32| {
+            let (rect, shapes) = paint_pass(&ctx, |ui| button.ui(ui, theme, &flags).response.rect);
+            let pos = assert_painted_inside(&shapes, label, rect);
+            let expected = rect.left() + offset;
+            assert!(
+                (pos.x - expected).abs() < 0.01,
+                "{what}: starts at x {} but the padding puts it at {expected}",
+                pos.x
+            );
+        };
+        check(
+            "label only",
+            "Start a project",
+            Button::new("Start a project"),
+            padding,
+        );
+        check(
+            "leading icon",
+            "Read the case study",
+            Button::new("Read the case study").icon_leading(Icon::ArrowForward),
+            padding + IconSize::Md.px() + spacing::SPACE_2,
+        );
+        check(
+            "trailing icon",
+            "Visit the studio",
+            Button::new("Visit the studio").icon_trailing(Icon::ArrowOutward),
+            padding,
         );
     }
 }
