@@ -782,11 +782,16 @@ mod tests {
     }
 
     fn touch(phase: TouchPhase, x: f32) -> Event {
+        touch_at(0, phase, egui::pos2(x, 300.0))
+    }
+
+    /// The one `Touch` builder the touch helpers share.
+    fn touch_at(id: u64, phase: TouchPhase, pos: egui::Pos2) -> Event {
         Event::Touch {
             device_id: egui::TouchDeviceId(0),
-            id: egui::TouchId(0),
+            id: egui::TouchId(id),
             phase,
-            pos: egui::pos2(x, 300.0),
+            pos,
             force: None,
         }
     }
@@ -858,13 +863,7 @@ mod tests {
     }
 
     fn finger(phase: TouchPhase, x: f32, id: u64) -> Event {
-        Event::Touch {
-            device_id: egui::TouchDeviceId(0),
-            id: egui::TouchId(id),
-            phase,
-            pos: egui::pos2(x, 300.0),
-            force: None,
-        }
+        touch_at(id, phase, egui::pos2(x, 300.0))
     }
 
     /// LOW-3: a second finger sweeping right during a claimed edge swipe
@@ -1102,7 +1101,7 @@ mod tests {
     }
 
     /// The pass itself, for input that is already built (and filtered).
-    fn pass(app: &mut App, ctx: &egui::Context, raw: RawInput) {
+    fn pass(app: &mut App, ctx: &egui::Context, raw: RawInput) -> egui::FullOutput {
         let screen = raw.screen_rect.unwrap();
         ctx.begin_pass(raw);
         let mut root = egui::Ui::new(
@@ -1113,18 +1112,29 @@ mod tests {
         app.ui(&mut root);
         // No renderer applies the glyph-atlas delta; clear it or epaint
         // panics on the drop.
-        ctx.end_pass().textures_delta.clear();
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        output
     }
 
     /// A tap at `pos`: move, press, release, all in one pass.
     fn click(pos: egui::Pos2) -> Vec<Event> {
-        let button = |pressed| Event::PointerButton {
+        vec![
+            Event::PointerMoved(pos),
+            button(pos, true),
+            button(pos, false),
+        ]
+    }
+
+    /// A primary press (or release) at `pos`, for `click` and the touch and
+    /// drag helpers alike.
+    fn button(pos: egui::Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
             pos,
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: egui::Modifiers::NONE,
-        };
-        vec![Event::PointerMoved(pos), button(true), button(false)]
+        }
     }
 
     /// The editor round trip: a new note saves on close, reopening loads
@@ -1228,23 +1238,11 @@ mod tests {
     /// What egui-winit's `on_touch` emits for the primary finger: the touch
     /// plus the pointer events it mirrors for the first finger down.
     fn winit_finger(phase: TouchPhase, pos: egui::Pos2) -> Vec<Event> {
-        let touch = Event::Touch {
-            device_id: egui::TouchDeviceId(0),
-            id: egui::TouchId(0),
-            phase,
-            pos,
-            force: None,
-        };
-        let button = |pressed| Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
+        let touch = touch_at(0, phase, pos);
         match phase {
-            TouchPhase::Start => vec![touch, Event::PointerMoved(pos), button(true)],
+            TouchPhase::Start => vec![touch, Event::PointerMoved(pos), button(pos, true)],
             TouchPhase::Move => vec![touch, Event::PointerMoved(pos)],
-            TouchPhase::End => vec![touch, button(false), Event::PointerGone],
+            TouchPhase::End => vec![touch, button(pos, false), Event::PointerGone],
             TouchPhase::Cancel => vec![touch, Event::PointerGone],
         }
     }
@@ -1422,6 +1420,38 @@ mod tests {
         assert!(!cursor.is_empty(), "the drag after the hold selected text");
     }
 
+    /// While a touch waits out the long-press window, the editor asks egui
+    /// for a frame when the window ends: a finger held still sends nothing
+    /// that would bring one.
+    #[test]
+    fn a_pending_touch_asks_for_a_frame_at_the_window_end() {
+        let (ctx, mut app) = long_note_in_editor("touch-wake");
+        let field = editor_field(&ctx);
+        let p = egui::pos2(field.left() + 40.0, field.top() + 10.0);
+        host_frame(&mut app, &ctx, winit_finger(TouchPhase::Start, p), 1.0);
+
+        // No input, and an unfocused window so the caret's blink asks for
+        // no repaint of its own.
+        let mut idle = |t| {
+            let mut raw = RawInput {
+                focused: false,
+                ..frame(vec![], t)
+            };
+            app.filter_input(&mut raw);
+            pass(&mut app, &ctx, raw).viewport_output[&egui::ViewportId::ROOT].repaint_delay
+        };
+        // egui answers a frame with input with two repaints, so the first
+        // frame after the touch reports zero whatever the editor asks.
+        assert_eq!(idle(1.05), Duration::ZERO);
+        let delay = idle(1.1);
+        assert_ne!(delay, Duration::MAX, "a held finger must still get a frame");
+        // egui trims the predicted frame time (1/60 s) off a requested delay.
+        assert!(
+            (delay.as_secs_f64() - (editor_touch::LONG_PRESS - 0.1)).abs() < 0.05,
+            "woken when the window ends, about 0.3 s on: {delay:?}"
+        );
+    }
+
     /// A touch that starts on the top bar, and any touch while the list is
     /// on top, reach egui exactly as egui-winit sent them.
     #[test]
@@ -1499,13 +1529,8 @@ mod tests {
         let (ctx, mut app) = long_note_in_editor("mouse-drag");
         let field = editor_field(&ctx);
         let p = egui::pos2(field.left() + 40.0, field.top() + 10.0);
-        let button = |pos, pressed| Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::NONE,
-        };
 
+        // `click` releases in the same pass; a drag holds the press.
         let down = vec![Event::PointerMoved(p), button(p, true)];
         assert_eq!(host_frame(&mut app, &ctx, down.clone(), 1.0), down);
         let mut t = 1.0;
