@@ -6,6 +6,9 @@ priority: medium
 blocked-by: [02, 05]
 blocks: [11]
 estimate: medium
+status: done
+completed: 2026-10-14T14:12:00+0200
+commit: 089c732a4113ec248258b8ab8f529b5dda53aefd
 modules:
   - crates/ui-kit/src/components/themes_showcase.rs
   - crates/ui-kit/src/components/brand_showcase.rs
@@ -59,7 +62,7 @@ and the photography direction as tinted placeholder tiles with captions.
 
 ## Definition of done
 
-- [ ] All acceptance tests pass (red → green observed).
-- [ ] `just check`, `just lint`, `just test` green.
-- [ ] One commit, one issue. Commit message references this file by id.
-- [ ] Issue file updated with `status: done` in frontmatter.
+- [x] All acceptance tests pass (red → green observed).
+- [x] `just check`, `just lint`, `just test` green.
+- [x] One commit, one issue. Commit message references this file by id.
+- [x] Issue file updated with `status: done` in frontmatter.
