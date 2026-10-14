@@ -649,17 +649,20 @@ impl Widget for TrackedLabel<'_> {
 
 // ---- placing laid-out text ------------------------------------------------
 
-/// The top-left corner at which to paint a galley of `size` so that its
-/// left edge sits at `left` and it is centred vertically on `center_y`:
-/// what `Align2::LEFT_CENTER` means for text that is already laid out.
+/// The top-left corner at which to paint a left-aligned galley of
+/// `size` so that its left edge sits at `left` and it is centred
+/// vertically on `center_y`: what `Align2::LEFT_CENTER` means for text
+/// that is already laid out.
 ///
-/// [`egui::Painter::galley`] takes the galley's top-left corner, not an
-/// anchor, so a label that starts at a padding edge and rides its row's
-/// midline subtracts only the vertical half of its own size. Subtracting
-/// the whole `size / 2.0` is the centre anchor instead: right for a word
-/// set in the middle of a pill (the count badge's figures), wrong for
-/// any label that starts at an edge, which it shifts left by half its
-/// own width, out of its box and over its neighbour.
+/// [`egui::Painter::galley`] takes a left-aligned galley's top-left
+/// corner (its origin: epaint keeps such a galley's rect at left 0 and
+/// top 0), not an anchor, so a label that starts at a padding edge and
+/// rides its row's midline subtracts only the vertical half of its own
+/// size. Subtracting the whole `size / 2.0` is the centre anchor
+/// instead: right for a word set in the middle of a pill (the count
+/// badge's figures), wrong for any label that starts at an edge, which
+/// it shifts left by half its own width, out of its box and over its
+/// neighbour.
 pub fn left_center(left: f32, center_y: f32, size: egui::Vec2) -> egui::Pos2 {
     egui::Pos2::new(left, center_y - size.y / 2.0)
 }
@@ -680,13 +683,12 @@ pub(crate) fn paint_pass<R>(
     (result.expect("the pass ran the widget"), shapes)
 }
 
-/// Every laid-out text a frame painted, as (top-left corner, galley)
-/// pairs in paint order: how the headless tests ask where a label
-/// really landed instead of trusting the arithmetic that put it there.
-/// Widgets may nest their shapes in a `Shape::Vec`, so the walk
-/// descends into those.
+/// Every laid-out text a frame painted, as (origin, galley) pairs in
+/// paint order: how the headless tests ask where a label really landed
+/// instead of trusting the arithmetic that put it there. Widgets may
+/// nest their shapes in a `Shape::Vec`, so the walk descends into those.
 #[cfg(test)]
-pub(crate) fn text_shapes(
+fn text_shapes(
     shapes: &[egui::epaint::ClippedShape],
 ) -> Vec<(egui::Pos2, std::sync::Arc<egui::Galley>)> {
     fn walk(shape: &egui::Shape, found: &mut Vec<(egui::Pos2, std::sync::Arc<egui::Galley>)>) {
@@ -703,37 +705,48 @@ pub(crate) fn text_shapes(
     found
 }
 
-/// The one text a frame painted as `text`: its top-left corner and its
-/// galley. Components paint icon glyphs and neighbouring labels through
-/// the same shape kind, so a label is picked out by what it reads; a
-/// miss, or a text painted twice, panics naming what the frame did
-/// paint.
+/// The one text a frame painted as `text`: its origin and its galley.
+/// Components paint icon glyphs and neighbouring labels through the same
+/// shape kind, so a label is picked out by what it reads. A miss panics
+/// naming what the frame did paint; a text painted twice panics naming
+/// where.
 #[cfg(test)]
-pub(crate) fn painted_text(
+fn painted_text(
     shapes: &[egui::epaint::ClippedShape],
     text: &str,
 ) -> (egui::Pos2, std::sync::Arc<egui::Galley>) {
     let all = text_shapes(shapes);
-    let mut hits = all.iter().filter(|(_, galley)| galley.text() == text);
-    match (hits.next(), hits.next()) {
-        (Some((pos, galley)), None) => (*pos, galley.clone()),
-        (None, _) => panic!(
+    let hits: Vec<_> = all
+        .iter()
+        .filter(|(_, galley)| galley.text() == text)
+        .collect();
+    match hits.as_slice() {
+        [(pos, galley)] => (*pos, galley.clone()),
+        [] => panic!(
             "no text reading {text:?} was painted; the frame painted {:?}",
             all.iter()
                 .map(|(_, galley)| galley.text())
                 .collect::<Vec<_>>()
         ),
-        (Some(_), Some(_)) => panic!("{text:?} was painted more than once"),
+        many => panic!(
+            "{text:?} was painted {} times, at {:?}",
+            many.len(),
+            many.iter().map(|(pos, _)| *pos).collect::<Vec<_>>()
+        ),
     }
 }
 
-/// Assert that the text painted as `text` sits inside `rect`: its left
-/// edge no further left and its right edge no further right than the
-/// box it belongs to (half a point of slack for the pixel grid), and
-/// its line box centred on the box's midline. Hands back the text's
-/// top-left corner so a test can pin the exact edge as well. The slip
-/// this guards against: a label placed with the centre anchor's
+/// Assert that the text painted as `text` sits inside `rect`: the box
+/// it covers on screen reaches no further left and no further right
+/// than the box it belongs to (half a point of slack for the pixel
+/// grid) and is centred on that box's midline. Hands back the painted
+/// box's top-left corner so a test can pin the exact edge as well. The
+/// slip this guards against: a label placed with the centre anchor's
 /// formula starts half its own width left of where it belongs.
+///
+/// The painted box is the galley's rect moved to where the galley was
+/// painted: that rect is relative to the galley's origin, and epaint
+/// promises it starts at the origin only for left alignment.
 #[cfg(test)]
 pub(crate) fn assert_painted_inside(
     shapes: &[egui::epaint::ClippedShape],
@@ -741,22 +754,22 @@ pub(crate) fn assert_painted_inside(
     rect: egui::Rect,
 ) -> egui::Pos2 {
     let (pos, galley) = painted_text(shapes, text);
-    let size = galley.size();
+    let painted = galley.rect.translate(pos.to_vec2());
     assert!(
-        pos.x >= rect.left() - 0.5 && pos.x + size.x <= rect.right() + 0.5,
+        painted.left() >= rect.left() - 0.5 && painted.right() <= rect.right() + 0.5,
         "{text:?} paints across x {:.1}..{:.1} but its box spans {:.1}..{:.1}",
-        pos.x,
-        pos.x + size.x,
+        painted.left(),
+        painted.right(),
         rect.left(),
         rect.right()
     );
-    let middle = pos.y + size.y / 2.0;
     assert!(
-        (middle - rect.center().y).abs() <= 0.5,
-        "{text:?} is centred on y {middle:.1} but its box's midline is {:.1}",
+        (painted.center().y - rect.center().y).abs() <= 0.5,
+        "{text:?} is centred on y {:.1} but its box's midline is {:.1}",
+        painted.center().y,
         rect.center().y
     );
-    pos
+    painted.min
 }
 
 #[cfg(test)]
@@ -1286,11 +1299,10 @@ mod tests {
         }
     }
 
-    /// `text_shapes` reports every painted text in paint order, finds
-    /// the ones nested inside `Shape::Vec`s at any depth, and skips the
-    /// shapes that are not text.
-    #[test]
-    fn text_shapes_find_galleys_at_any_depth() {
+    /// One galley per text, laid out in the Light theme's body face on a
+    /// live context (the faces bind at the pass boundary, hence the
+    /// install pass first), for the tests that build shapes by hand.
+    fn body_galleys(texts: &[&str]) -> Vec<std::sync::Arc<egui::Galley>> {
         let ctx = egui::Context::default();
         let install_pass = ctx.run_ui(egui::RawInput::default(), |ui| {
             install(ThemeId::Light, ui.ctx())
@@ -1299,15 +1311,24 @@ mod tests {
         let font = TypeStyle::Body.font_id(ThemeId::Light);
         let mut galleys = Vec::new();
         let layout_pass = ctx.run_ui(egui::RawInput::default(), |ui| {
-            galleys = ["direct", "nested", "deeper"]
+            galleys = texts
+                .iter()
                 .map(|text| {
                     ui.painter()
-                        .layout_no_wrap(text.into(), font.clone(), Color32::BLACK)
+                        .layout_no_wrap((*text).into(), font.clone(), Color32::BLACK)
                 })
-                .to_vec();
+                .collect();
         });
         layout_pass.drop_without_applying_deltas();
+        galleys
+    }
 
+    /// `text_shapes` reports every painted text in paint order, finds
+    /// the ones nested inside `Shape::Vec`s at any depth, and skips the
+    /// shapes that are not text.
+    #[test]
+    fn text_shapes_find_galleys_at_any_depth() {
+        let galleys = body_galleys(&["direct", "nested", "deeper"]);
         let at = |x: f32, y: f32| egui::Pos2::new(x, y);
         let text =
             |pos, index: usize| egui::Shape::galley(pos, galleys[index].clone(), Color32::BLACK);
@@ -1337,5 +1358,22 @@ mod tests {
                 ("deeper", at(5.0, 6.0)),
             ]
         );
+    }
+
+    /// `painted_text` insists on exactly one hit: a text the frame
+    /// painted twice panics naming where, so the failure says which two.
+    #[test]
+    #[should_panic(expected = "\"twice\" was painted 2 times, at [[1.0 2.0], [3.0 4.0]]")]
+    fn painted_text_names_where_a_text_was_painted_twice() {
+        let galleys = body_galleys(&["twice", "twice"]);
+        let shapes: Vec<_> = [(1.0, 2.0), (3.0, 4.0)]
+            .iter()
+            .zip(&galleys)
+            .map(|(&(x, y), galley)| egui::epaint::ClippedShape {
+                clip_rect: egui::Rect::EVERYTHING,
+                shape: egui::Shape::galley(egui::Pos2::new(x, y), galley.clone(), Color32::BLACK),
+            })
+            .collect();
+        super::painted_text(&shapes, "twice");
     }
 }

@@ -456,14 +456,15 @@ impl SnackbarHost {
                 ui.painter()
                     .galley(Pos2::new(cursor, text_y), line_galley, fade(look.text));
 
-                // The action: an inverse-primary text button.
+                // The action: an inverse-primary text button, ending a
+                // space-2 gap short of the dismiss circle.
                 if let Some(galley) = &action_galley {
                     let action_rect = Rect::from_min_size(
                         Pos2::new(
-                            rect.right() - DISMISS_SIZE - spacing::SPACE_2 - ACTION_MIN_HEIGHT
-                                + (ACTION_MIN_HEIGHT - galley.size().y) / 2.0
-                                - spacing::SPACE_3
-                                - galley.size().x,
+                            rect.right()
+                                - DISMISS_SIZE
+                                - spacing::SPACE_2
+                                - (galley.size().x + 2.0 * spacing::SPACE_3),
                             rect.center().y - ACTION_MIN_HEIGHT / 2.0,
                         ),
                         egui::Vec2::new(
@@ -489,9 +490,10 @@ impl SnackbarHost {
                         );
                     }
                     painter.galley(
-                        Pos2::new(
+                        crate::typography::left_center(
                             action_rect.left() + spacing::SPACE_3,
-                            action_rect.center().y - galley.size().y / 2.0,
+                            action_rect.center().y,
+                            galley.size(),
                         ),
                         galley.clone(),
                         fade(look.action),
@@ -640,6 +642,7 @@ mod tests {
     use crate::states::UiKitFlags;
     use crate::theme::ThemeId;
     use crate::tokens::{radii, spacing};
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         duration_ms, entrance_ms, snackbar_look, Snackbar, SnackbarEvent, SnackbarHost,
@@ -904,5 +907,57 @@ mod tests {
                 assert!(host.is_showing(), "{} {:?}", theme.name(), status);
             }
         }
+    }
+
+    /// The action sits where the layout puts it: its rect ends a space-2
+    /// gap short of the dismiss circle, and its label starts one space-3
+    /// padding inside the rect, centred on the snackbar's midline. The
+    /// rect's x once carried a height term (the action's minimum height
+    /// less the label's), which slid the button about 14px further from
+    /// the dismiss circle than the layout intends. The rects are read
+    /// back through the ids the host gives its surface and its action.
+    #[test]
+    fn the_action_ends_a_gap_short_of_the_dismiss_circle() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            crate::typography::install(theme, ui.ctx());
+        });
+        out.drop_without_applying_deltas();
+        let flags = UiKitFlags::default();
+        let mut host = SnackbarHost::new();
+        host.show(Snackbar::info("Timesheet submitted for week 41.").action("Undo"));
+
+        // The anchored area is invisible on its first frame, while egui
+        // learns its size: one pass settles it, the next is the one read.
+        paint_pass(&ctx, |ui| {
+            host.paint(ui.ctx(), theme, &flags);
+        });
+        let ((surface, action), shapes) = paint_pass(&ctx, |ui| {
+            host.paint(ui.ctx(), theme, &flags);
+            let id = egui::Id::new("vynatix-snackbar");
+            let rect_of = |name: &str| {
+                ui.ctx()
+                    .read_response(id.with(name))
+                    .unwrap_or_else(|| panic!("the host laid out its {name}"))
+                    .rect
+            };
+            (rect_of("surface"), rect_of("action"))
+        });
+
+        let pos = assert_painted_inside(&shapes, "Undo", action);
+        let label_edge = action.left() + spacing::SPACE_3;
+        assert!(
+            (pos.x - label_edge).abs() < 0.01,
+            "the label starts at x {} but one padding inside the action is {label_edge}",
+            pos.x
+        );
+        let action_edge = surface.right() - DISMISS_SIZE - spacing::SPACE_2;
+        assert!(
+            (action.right() - action_edge).abs() < 0.01,
+            "the action ends at x {} but a gap short of the dismiss circle is {action_edge}",
+            action.right()
+        );
     }
 }
