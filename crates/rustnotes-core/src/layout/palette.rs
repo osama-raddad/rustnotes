@@ -36,7 +36,7 @@ impl Palette {
         text: Color32::from_rgb(26, 28, 33),
         text_weak: Color32::from_rgb(102, 107, 123),
         text_faint: Color32::from_rgb(130, 136, 150),
-        accent: Color32::from_rgb(53, 116, 244),
+        accent: Color32::from_rgb(49, 107, 224),
         on_accent: Color32::WHITE,
         danger: Color32::from_rgb(204, 44, 44),
         danger_bg: Color32::from_rgb(251, 232, 232),
@@ -86,17 +86,18 @@ impl Palette {
         v.hyperlink_color = self.accent;
         // egui recolours selected text itself: the glyphs take
         // `selection.stroke.color` and sit on `selection.bg_fill`
-        // (`text_selection/visuals.rs`), so the two are one pair and move
-        // together: the accent has to read on the fill. A darkened accent
-        // behind accent glyphs fails that on the light theme, which takes the
-        // light `selected` surface instead; the dark theme's darkened accent
-        // is translucent (`gamma_multiply` scales alpha too), so whatever it
-        // is painted over lifts it.
+        // (`text_selection/visuals.rs`). Selected glyphs keep the text
+        // colour, as on iOS and Android, so the fill only has to sit well
+        // under the text: the light theme takes the light `selected`
+        // surface, the dark theme a darkened accent. That one is translucent
+        // (`gamma_multiply` scales alpha too), so whatever it is painted
+        // over lifts it. The editor has no frame (`Frame::NONE`), so no
+        // focus outline reads this stroke.
         v.selection.bg_fill = match theme {
             Theme::Light => self.selected,
             Theme::Dark => self.accent.gamma_multiply(0.35),
         };
-        v.selection.stroke.color = self.accent;
+        v.selection.stroke.color = self.text;
         v.text_cursor.stroke.color = self.accent;
         v.text_cursor.stroke.width = 2.0;
         v
@@ -164,7 +165,9 @@ mod tests {
     /// bar as the plain surfaces, and `text_faint` to its 3:1. `danger` also
     /// writes caption-size text (the storage-error strip, the armed-delete
     /// hint) and fills the swipe-to-delete reveal under an `on_accent` label,
-    /// so those pairs are held to AA too.
+    /// so those pairs are held to AA too. So is `accent`, which is text as
+    /// well as fill (the active bottom-nav label, links): AA on `bg`,
+    /// `surface` and `bar`, and AA for the `on_accent` labels that sit on it.
     #[test]
     fn text_tokens_read_on_their_backgrounds() {
         for pal in [Palette::LIGHT, Palette::DARK] {
@@ -177,7 +180,10 @@ mod tests {
             at_least(pal.text_faint, pal.bg, 3.0, "faint text on bg");
             at_least(pal.text_faint, pal.surface, 3.0, "faint text on surface");
             at_least(pal.text_faint, pal.selected, 3.0, "faint text on selected");
-            at_least(pal.on_accent, pal.accent, 3.0, "on_accent on accent");
+            at_least(pal.on_accent, pal.accent, 4.5, "on_accent on accent");
+            at_least(pal.accent, pal.bg, 4.5, "accent text on bg");
+            at_least(pal.accent, pal.surface, 4.5, "accent text on surface");
+            at_least(pal.accent, pal.bar, 4.5, "accent text on bar");
             at_least(pal.on_accent, pal.danger, 4.5, "on_accent on danger");
             at_least(pal.danger, pal.danger_bg, 3.0, "danger on danger_bg");
             at_least(pal.danger, pal.bg, 4.5, "danger text on bg");
@@ -188,27 +194,29 @@ mod tests {
 
     /// egui recolours selected text itself: the glyphs take
     /// `selection.stroke.color` and sit on `selection.bg_fill`
-    /// (`text_selection/visuals.rs`), so that pair has to read at the 3:1 UI
-    /// minimum in both themes. The fill is measured as the user sees it,
-    /// composited over each backdrop it can land on: the light theme's old
-    /// darkened-accent fill scored only about 2.5 to 2.7:1 that way. Text
-    /// that keeps the normal colour must stay readable on the same fill too.
+    /// (`text_selection/visuals.rs`). Selected glyphs keep the text colour, as
+    /// on iOS and Android, so that pair has to clear AA in both themes. The
+    /// fill is measured as the user sees it, composited over each backdrop it
+    /// can land on: the dark fill is translucent. (Accent glyphs on these
+    /// fills scored only 3.3 to 3.7:1.)
     #[test]
     fn selected_text_stays_readable_in_both_themes() {
         for (pal, theme) in [(Palette::LIGHT, Theme::Light), (Palette::DARK, Theme::Dark)] {
             let v = pal.visuals(theme);
-            let text = v.override_text_color.expect("palette sets the text colour");
             for (backdrop, name) in [(pal.bg, "bg"), (pal.surface, "surface")] {
                 let fill = over(v.selection.bg_fill, backdrop);
                 let what = format!("{theme:?} selection over {name}");
                 at_least(
                     v.selection.stroke.color,
                     fill,
-                    3.0,
-                    &format!("{what}: stroke"),
+                    4.5,
+                    &format!("{what}: glyphs"),
                 );
-                at_least(text, fill, 4.5, &format!("{what}: text"));
             }
+            assert_eq!(
+                v.selection.stroke.color, pal.text,
+                "{theme:?}: selected glyphs keep the text colour"
+            );
         }
     }
 
