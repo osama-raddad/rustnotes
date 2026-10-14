@@ -12,8 +12,9 @@ pub struct Palette {
     pub bar: Color32,
     pub text: Color32,
     pub text_weak: Color32,
-    /// Most de-emphasised text (hints, empty states). Kept at ≥3:1 on both
-    /// backgrounds; see the contrast tests below.
+    /// Most de-emphasised text (hints, empty states). Kept at ≥3:1 on every
+    /// background it lands on (bg, surface, selected); see the contrast tests
+    /// below.
     pub text_faint: Color32,
     pub accent: Color32,
     pub on_accent: Color32,
@@ -33,11 +34,11 @@ impl Palette {
         surface: Color32::WHITE,
         bar: Color32::WHITE,
         text: Color32::from_rgb(26, 28, 33),
-        text_weak: Color32::from_rgb(107, 112, 128),
+        text_weak: Color32::from_rgb(102, 107, 123),
         text_faint: Color32::from_rgb(130, 136, 150),
         accent: Color32::from_rgb(53, 116, 244),
         on_accent: Color32::WHITE,
-        danger: Color32::from_rgb(212, 48, 48),
+        danger: Color32::from_rgb(204, 44, 44),
         danger_bg: Color32::from_rgb(251, 232, 232),
         hairline: Color32::from_rgb(230, 230, 237),
         selected: Color32::from_rgb(232, 240, 254),
@@ -49,10 +50,10 @@ impl Palette {
         bar: Color32::from_rgb(22, 23, 27),
         text: Color32::from_rgb(232, 234, 240),
         text_weak: Color32::from_rgb(160, 165, 180),
-        text_faint: Color32::from_rgb(110, 115, 130),
+        text_faint: Color32::from_rgb(120, 125, 140),
         accent: Color32::from_rgb(110, 156, 255),
         on_accent: Color32::from_rgb(10, 20, 45),
-        danger: Color32::from_rgb(240, 98, 98),
+        danger: Color32::from_rgb(246, 112, 112),
         danger_bg: Color32::from_rgb(64, 32, 34),
         hairline: Color32::from_rgb(44, 47, 55),
         selected: Color32::from_rgb(34, 46, 74),
@@ -158,10 +159,12 @@ mod tests {
 
     /// Every text token must be readable on the backgrounds it lands on:
     /// body-level tokens at WCAG AA (4.5:1), de-emphasised and accent pairings
-    /// at the large-text/UI minimum (3:1). `danger` also writes caption-size
-    /// text (the storage-error strip, the armed-delete hint): AA on `bg` and
-    /// `surface`, and the 3:1 minimum on the `selected` row, where it falls a
-    /// little short of AA.
+    /// at the large-text/UI minimum (3:1). The `selected` row (the chosen note in
+    /// the two-pane list) holds `text`, `text_weak` and `danger` to the same AA
+    /// bar as the plain surfaces, and `text_faint` to its 3:1. `danger` also
+    /// writes caption-size text (the storage-error strip, the armed-delete
+    /// hint) and fills the swipe-to-delete reveal under an `on_accent` label,
+    /// so those pairs are held to AA too.
     #[test]
     fn text_tokens_read_on_their_backgrounds() {
         for pal in [Palette::LIGHT, Palette::DARK] {
@@ -170,13 +173,16 @@ mod tests {
             at_least(pal.text, pal.selected, 4.5, "text on selected");
             at_least(pal.text_weak, pal.bg, 4.5, "weak text on bg");
             at_least(pal.text_weak, pal.surface, 4.5, "weak text on surface");
+            at_least(pal.text_weak, pal.selected, 4.5, "weak text on selected");
             at_least(pal.text_faint, pal.bg, 3.0, "faint text on bg");
             at_least(pal.text_faint, pal.surface, 3.0, "faint text on surface");
+            at_least(pal.text_faint, pal.selected, 3.0, "faint text on selected");
             at_least(pal.on_accent, pal.accent, 3.0, "on_accent on accent");
+            at_least(pal.on_accent, pal.danger, 4.5, "on_accent on danger");
             at_least(pal.danger, pal.danger_bg, 3.0, "danger on danger_bg");
             at_least(pal.danger, pal.bg, 4.5, "danger text on bg");
             at_least(pal.danger, pal.surface, 4.5, "danger text on surface");
-            at_least(pal.danger, pal.selected, 3.0, "danger on selected");
+            at_least(pal.danger, pal.selected, 4.5, "danger text on selected");
         }
     }
 
