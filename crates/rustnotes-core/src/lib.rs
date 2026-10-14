@@ -740,6 +740,10 @@ mod tests {
 
     fn temp(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("rn-core-test-{}-{name}", std::process::id()));
+        // Process ids recycle, and nothing deletes these directories, so a
+        // run could inherit a note from a day-old process under the same
+        // name: start from an empty directory every time.
+        let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
     }
