@@ -13,8 +13,11 @@
 //! 20px icon.
 //!
 //! States follow the shared helpers ([`crate::states`]): hover is the
-//! 8% on-colour overlay, press 12% plus the 0.985 scale held while the
-//! pointer is down, keyboard focus the FocusRing at `radius-md`, and
+//! 8% on-colour overlay, press 12% plus the 0.985 scale held for as long
+//! as the primary button stays down on the button, however long the hold
+//! (a press is cancelled when the pointer leaves the button or the press
+//! turns into a drag; see [`crate::states::held_press`]), keyboard focus
+//! the FocusRing at `radius-md`, and
 //! disabled the 38% content over a 12% container where the emphasis has
 //! a container. The label is set in the theme's body face at weight 600
 //! ([`crate::typography::body_semibold_family`]), 13/14/16px by size,
@@ -457,6 +460,10 @@ impl<'a> Button<'a> {
             },
         );
         let mut state = WidgetState::of(&response);
+        // egui drops its press once the hold outlives the click window;
+        // the helper keeps the press while the primary button stays down.
+        let hold = states::held_press(ui, &response);
+        state.pressed |= hold.held;
         if !self.enabled {
             state.disabled = true;
         }
@@ -538,7 +545,7 @@ impl<'a> Button<'a> {
         FocusRing::new().paint(ui, &response, theme, flags);
 
         ButtonResponse {
-            clicked: response.clicked(),
+            clicked: response.clicked() || hold.clicked,
             response,
             state,
         }
@@ -555,9 +562,12 @@ fn scaled_around_center(rect: egui::Rect, scale: f32) -> egui::Rect {
 /// The button's response: the egui response plus the kit's typed reads.
 #[derive(Clone, Debug)]
 pub struct ButtonResponse {
-    /// Whether the button fired this frame.
+    /// Whether the button fired this frame: a click, or a release over the
+    /// button after a hold longer than egui's click window. Read this
+    /// rather than `response.clicked()`, which does not see a long hold.
     pub clicked: bool,
-    /// The wrapped egui response.
+    /// The wrapped egui response. Its `clicked()` misses the release after
+    /// a long hold, so read [`Self::clicked`] instead.
     pub response: Response,
     /// The four states as of this frame.
     pub state: WidgetState,
@@ -575,8 +585,8 @@ mod tests {
     use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
-        emphasis_look, label_job, min_width, Button, ButtonEmphasis, ButtonSize, LABEL_TRACKING_EM,
-        TOUCH_TARGET_MIN,
+        emphasis_look, label_job, min_width, Button, ButtonEmphasis, ButtonResponse, ButtonSize,
+        LABEL_TRACKING_EM, TOUCH_TARGET_MIN,
     };
 
     /// Install the faces the button paints with: the icon families and
@@ -955,6 +965,298 @@ mod tests {
             .drop_without_applying_deltas();
         }
         assert_eq!(fired, 0, "a disabled button never fires");
+    }
+
+    /// One frame of a press script: `events` at `time` seconds (the clock
+    /// egui's click window reads), the button shown, its response back.
+    fn press_button(
+        ctx: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+        button: Button<'_>,
+    ) -> ButtonResponse {
+        let flags = UiKitFlags::default();
+        let input = egui::RawInput {
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let mut shown = None;
+        ctx.run_ui(input, |ui| {
+            shown = Some(button.ui(ui, ThemeId::Light, &flags));
+        })
+        .drop_without_applying_deltas();
+        shown.expect("the button is shown every frame")
+    }
+
+    /// One frame of a press script on the default button.
+    fn press_frame(ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> ButtonResponse {
+        press_button(ctx, time, events, Button::new("Start a project"))
+    }
+
+    /// The pointer moved to `pos`.
+    fn moved(pos: egui::Pos2) -> egui::Event {
+        egui::Event::PointerMoved(pos)
+    }
+
+    /// The primary button pressed or released at `pos`.
+    fn primary(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    /// The button's rect at rest, from an idle frame at 10s. The press
+    /// scripts run from 11s.
+    fn rest_rect(ctx: &egui::Context) -> egui::Rect {
+        press_frame(ctx, 10.0, Vec::new()).response.rect
+    }
+
+    /// `quarters` idle frames a quarter second apart from `from`: the
+    /// press held in place. Hands back every frame's response.
+    fn hold(ctx: &egui::Context, from: f64, quarters: usize) -> Vec<ButtonResponse> {
+        (1..=quarters)
+            .map(|step| press_frame(ctx, from + 0.25 * step as f64, Vec::new()))
+            .collect()
+    }
+
+    /// A press held two seconds, well past egui's 0.8s click window: the
+    /// pressed look (and the scale that rides it) stays on through the
+    /// whole hold, though egui has by then let the press go.
+    #[test]
+    fn a_long_hold_stays_pressed() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let at = rest_rect(&ctx).center();
+
+        let press = press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        assert!(press.state.pressed, "the press lands");
+        assert!(!press.clicked, "a press is not a click");
+
+        let frames = hold(&ctx, 11.0, 8);
+        for frame in &frames {
+            assert!(frame.state.pressed, "still pressed through the hold");
+            assert!(!frame.clicked, "a hold is not a click before release");
+        }
+        let last = frames.last().expect("the hold has frames");
+        assert!(
+            !last.response.is_pointer_button_down_on(),
+            "egui let the press go past its click window; the helper holds it"
+        );
+    }
+
+    /// Releasing over the button after a long hold is a click on that
+    /// release frame, and the button reads unpressed from then on.
+    #[test]
+    fn releasing_over_the_button_after_a_hold_clicks() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let at = rest_rect(&ctx).center();
+        press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        hold(&ctx, 11.0, 8);
+
+        let release = press_frame(&ctx, 13.25, vec![primary(at, false)]);
+        assert!(
+            release.clicked,
+            "a release over the button after a hold clicks"
+        );
+        assert!(!release.state.pressed, "the release frame is unpressed");
+
+        let after = press_frame(&ctx, 13.5, Vec::new());
+        assert!(!after.clicked, "the click fires once");
+        assert!(!after.state.pressed);
+    }
+
+    /// A hold dragged off the button and released there does not click,
+    /// and the press reads unpressed from the moment the pointer leaves.
+    #[test]
+    fn a_hold_moved_off_the_button_and_released_does_not_click() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let at = rest_rect(&ctx).center();
+        let off = at + egui::Vec2::new(0.0, 60.0);
+        press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        hold(&ctx, 11.0, 8);
+
+        let away = press_frame(&ctx, 13.25, vec![moved(off)]);
+        assert!(
+            !away.state.pressed,
+            "the pointer left the button: cancelled"
+        );
+
+        let release = press_frame(&ctx, 13.5, vec![primary(off, false)]);
+        assert!(!release.clicked, "a release off the button does not click");
+        assert!(!release.state.pressed);
+    }
+
+    /// A hold released off the button with no move first does not click
+    /// either: the release position is what counts.
+    #[test]
+    fn a_hold_released_off_the_button_does_not_click() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let at = rest_rect(&ctx).center();
+        let off = at + egui::Vec2::new(0.0, 60.0);
+        press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        hold(&ctx, 11.0, 8);
+
+        let release = press_frame(&ctx, 13.25, vec![primary(off, false)]);
+        assert!(!release.clicked, "a release off the button does not click");
+        assert!(!release.state.pressed);
+    }
+
+    /// A press dragged past the click distance early on never comes back
+    /// as a hold, however long the button stays down.
+    #[test]
+    fn a_press_dragged_early_never_comes_back_as_a_hold() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let rect = rest_rect(&ctx);
+        let at = rect.center();
+        let max_click_dist = ctx.options(|options| options.input_options.max_click_dist);
+        let dragged = at + egui::Vec2::new(max_click_dist + 4.0, 0.0);
+        assert!(rect.contains(dragged), "the drag stays on the button");
+
+        press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        let drag = press_frame(&ctx, 11.25, vec![moved(dragged)]);
+        assert!(!drag.state.pressed, "egui drops the press on the drag");
+
+        for frame in hold(&ctx, 11.25, 7) {
+            assert!(!frame.state.pressed, "the dragged press never comes back");
+            assert!(!frame.clicked, "a dragged press does not click");
+        }
+        let release = press_frame(&ctx, 13.25, vec![primary(dragged, false)]);
+        assert!(
+            !release.clicked,
+            "a dragged press does not click on release"
+        );
+    }
+
+    /// A drag that starts only after a long hold cancels the held press:
+    /// the press clears on the drag, and the release does not click.
+    #[test]
+    fn a_drag_after_a_long_hold_cancels_the_press() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let rect = rest_rect(&ctx);
+        let at = rect.center();
+        let max_click_dist = ctx.options(|options| options.input_options.max_click_dist);
+        let dragged = at + egui::Vec2::new(max_click_dist + 4.0, 0.0);
+        press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        let held = hold(&ctx, 11.0, 8);
+        assert!(held.last().is_some_and(|frame| frame.state.pressed));
+
+        let drag = press_frame(&ctx, 13.25, vec![moved(dragged)]);
+        assert!(!drag.state.pressed, "the drag cancels the held press");
+
+        let release = press_frame(&ctx, 13.5, vec![primary(dragged, false)]);
+        assert!(!release.clicked, "a cancelled press does not click");
+    }
+
+    /// A drag whose last move and release share one frame does not click:
+    /// the move cancels the press before the release can count.
+    #[test]
+    fn a_drag_released_in_its_last_moves_frame_does_not_click() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let rect = rest_rect(&ctx);
+        let at = rect.center();
+        let max_click_dist = ctx.options(|options| options.input_options.max_click_dist);
+        let dragged = at + egui::Vec2::new(max_click_dist + 4.0, 0.0);
+        press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        hold(&ctx, 11.0, 8);
+
+        let release = press_frame(&ctx, 13.25, vec![moved(dragged), primary(dragged, false)]);
+        assert!(rect.contains(dragged), "the release lands on the button");
+        assert!(
+            !release.clicked,
+            "a drag released in one frame does not click"
+        );
+        assert!(!release.state.pressed);
+    }
+
+    /// A wobble well inside the click distance during a long hold keeps
+    /// the press, and the release over the button still clicks.
+    #[test]
+    fn a_wobble_inside_the_click_distance_still_clicks() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let at = rest_rect(&ctx).center();
+        let max_click_dist = ctx.options(|options| options.input_options.max_click_dist);
+        let wobble_at = at + egui::Vec2::new(max_click_dist / 3.0, 0.0);
+        press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        hold(&ctx, 11.0, 4);
+
+        let wobble = press_frame(&ctx, 12.25, vec![moved(wobble_at)]);
+        assert!(wobble.state.pressed, "a small wobble is not a drag");
+
+        let release = press_frame(&ctx, 12.5, vec![primary(wobble_at, false)]);
+        assert!(release.clicked, "the release over the button clicks");
+    }
+
+    /// Once a hold leaves the button the press stays cancelled, even when
+    /// the pointer comes back before the release: no revival, no click.
+    #[test]
+    fn leaving_and_returning_does_not_revive_a_cancelled_hold() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let at = rest_rect(&ctx).center();
+        let off = at + egui::Vec2::new(0.0, 60.0);
+        press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        hold(&ctx, 11.0, 8);
+
+        let away = press_frame(&ctx, 13.25, vec![moved(off)]);
+        assert!(!away.state.pressed);
+
+        let back = press_frame(&ctx, 13.5, vec![moved(at)]);
+        assert!(!back.state.pressed, "back over the button, still cancelled");
+
+        let release = press_frame(&ctx, 13.75, vec![primary(at, false)]);
+        assert!(!release.clicked, "a cancelled press does not click");
+    }
+
+    /// A quick tap clicks as before: pressed on the press frame, clicked
+    /// on the release, unpressed after.
+    #[test]
+    fn a_quick_tap_still_clicks() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let at = rest_rect(&ctx).center();
+
+        let press = press_frame(&ctx, 11.0, vec![moved(at), primary(at, true)]);
+        assert!(press.state.pressed && !press.clicked);
+
+        let release = press_frame(&ctx, 11.1, vec![primary(at, false)]);
+        assert!(release.clicked, "a quick tap clicks on release");
+        assert!(!release.state.pressed);
+    }
+
+    /// A disabled button takes no press: no pressed look, no click, however
+    /// long the primary button stays down on it.
+    #[test]
+    fn a_disabled_button_holds_no_press() {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let disabled = Button::new("Start a project").disabled();
+        // Lay the disabled button out first: egui's hit test reads the
+        // previous pass's senses, so an enabled warm-up would leak a click.
+        let at = press_button(&ctx, 10.0, Vec::new(), disabled)
+            .response
+            .rect
+            .center();
+
+        let press = press_button(&ctx, 11.0, vec![moved(at), primary(at, true)], disabled);
+        assert!(!press.state.pressed, "a disabled button takes no press");
+        for step in 1..=8 {
+            let frame = press_button(&ctx, 11.0 + 0.25 * step as f64, Vec::new(), disabled);
+            assert!(!frame.state.pressed && !frame.clicked);
+        }
+
+        let release = press_button(&ctx, 13.25, vec![primary(at, false)], disabled);
+        assert!(!release.clicked, "a disabled button never clicks");
     }
 
     /// An icon-only button is square, carries its required accessibility

@@ -298,8 +298,12 @@ impl<'a> Tabs<'a> {
         // 2px indicator over it (painted after so the accent mark
         // covers the hairline, the preview's `-1px` overlap).
         let row_rect = row.unwrap_or(scroll.inner_rect);
+        // The rule runs the strip's whole visible width, edge to edge,
+        // not just under the tabs' union: a rule that stops short of the
+        // content's edge reads as a stray margin.
+        let strip = Rect::from_x_y_ranges(scroll.inner_rect.x_range(), row_rect.y_range());
         ui.painter().rect_filled(
-            rule_rect(row_rect),
+            rule_rect(strip),
             CornerRadius::same(0),
             colors.outline_variant,
         );

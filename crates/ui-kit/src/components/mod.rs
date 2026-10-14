@@ -13,6 +13,7 @@ pub mod chip;
 pub mod cover;
 pub mod editorial_card;
 pub mod focus_ring;
+pub mod grid;
 pub mod liquid_glass;
 pub mod metric_card;
 pub mod radio;
@@ -34,6 +35,7 @@ pub use chip::{chip_look, Chip, ChipEvent, ChipLook, ChipResponse};
 pub use cover::{band_layout, BandRole, Cover};
 pub use editorial_card::{EditorialCard, ImagePlaceholder};
 pub use focus_ring::FocusRing;
+pub use grid::{Grid, GridResponse};
 pub use liquid_glass::{
     glass_recipe, paint_glass, GlassRecipe, GlassThickness, GlassTint, LiquidGlass,
 };
