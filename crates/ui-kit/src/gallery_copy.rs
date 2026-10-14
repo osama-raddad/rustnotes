@@ -35,21 +35,24 @@ pub const APP_TITLE: &str = "Vynatix UI kit";
 /// gallery, the cover its first screen.
 pub const TABS: &[&str] = &["Brand", "Foundations", "Components", "Feedback"];
 
-/// The caption under the tab strip: what each panel holds.
+/// The caption under the tab strip: what each panel holds, and the
+/// arrow keys. Wide windows only: on a phone it is noise above the
+/// content, and it names keys a phone does not have.
 pub const TABS_NOTE: &str = "The tabs switch peer panels: Brand holds the cover and the brand book's themes and voice pages; Foundations the type, states, foundations, icons, logo and colour roles; Components the actions, surfaces, text inputs and choice controls; Feedback the banners and snackbars. Arrow keys move the selection while a tab holds focus.";
 
 /// The bar's one call to action, and the Button preview's primary
 /// specimen: the same words, the same job.
 pub const START_A_PROJECT: &str = "Start a project";
 
-/// The bar's theme menu label.
+/// The bar's theme menu: its trigger's label (wide windows follow it
+/// with the live theme's name) and the legend of its theme group.
 pub const THEME_MENU: &str = "Theme";
 
-/// The theme menu's reduced-motion checkbox, and the Toggles preview's
+/// The theme menu's reduced-motion toggle, and the Toggles preview's
 /// own example use: one string, two surfaces.
 pub const REDUCED_MOTION: &str = "Reduced motion";
 
-/// The theme menu's reduced-transparency checkbox.
+/// The theme menu's reduced-transparency toggle.
 pub const REDUCED_TRANSPARENCY: &str = "Reduced transparency";
 
 /// The bar's search affordance, its accessible name.

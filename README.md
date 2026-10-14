@@ -209,11 +209,12 @@ panic hook (Console.app on a device); other log output is stderr via
 `crates/ui-kit/` is the Vynatix design system as pure egui: the
 generated tokens for six themes, the typography stack with self-hosted
 fonts, and the component set — button through snackbar, plus the focus
-ring and interaction states. It has no platform glue; a desktop gallery
-is its demo surface:
+ring and interaction states. It has no platform glue; the gallery app
+(`crates/ui-kit-gallery`, hosted by `crates/rustnotes`) is its demo
+surface, on the desktop and on phones:
 
 ```sh
-cargo run -p ui-kit --example gallery
+cargo run -p ui-kit-gallery
 ```
 
 See [crates/ui-kit/README.md](crates/ui-kit/README.md) for applying a
@@ -255,7 +256,8 @@ because xbuild reads it from the working directory.
 |---|---|
 | `crates/rustnotes-core/` | The app, pure egui: notes + SQLite, screens, `layout/` (metrics, size classes, palette, scaffold, nav, bottom nav), edge-swipe input filter, unit tests |
 | `crates/rustnotes/` | The eframe host: `src/lib.rs` (shared, `android_main` lives in `android.rs`), `src/main.rs` (iOS + desktop entry), `android.rs` (JNI), `ios.rs` (objc2/CoreText), `manifest.yaml` (xbuild) |
-| `crates/ui-kit/` | The Vynatix design system as pure egui: tokens, themes, typography, components; the gallery example is its demo (see its README) |
+| `crates/ui-kit/` | The Vynatix design system as pure egui: tokens, themes, typography, components (see its README) |
+| `crates/ui-kit-gallery/` | The kit's demo gallery as an app on the `rustnotes` host: desktop, iOS and Android |
 | `resources/AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs (+ `.game.xml` GameActivity variant for the opt-in) |
 | `resources/Info.plist` | App bundle manifest (hand-assembled .app) |
 | `tools/ios-profile-helper/` | Throwaway Xcode project that mints 7-day provisioning profiles |
