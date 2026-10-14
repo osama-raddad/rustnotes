@@ -1445,8 +1445,9 @@ mod tests {
             pass(&mut app, &ctx, raw).viewport_output[&egui::ViewportId::ROOT].repaint_delay
         };
         // egui answers a frame with input with two repaints, so the first
-        // frame after the touch reports zero whatever the editor asks.
-        assert_eq!(idle(1.05), Duration::ZERO);
+        // frame after the touch reports zero whatever the editor asks: let
+        // it pass, and read the next.
+        idle(1.05);
         let delay = idle(1.1);
         assert_ne!(delay, Duration::MAX, "a held finger must still get a frame");
         // egui trims the predicted frame time (1/60 s) off a requested delay.

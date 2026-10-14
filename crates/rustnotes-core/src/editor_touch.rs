@@ -205,12 +205,22 @@ impl EditorTouch {
             }
             // The id the gesture holds starts again without having ended:
             // Android reuses ids, and this one's End was lost. The stale
-            // touch is over and this is a fresh one. A stale swipe's wheel
-            // session closes now; an End owed to next frame would arrive
-            // after this touch's own wheel `Start` and close that instead.
+            // touch is over and this is a fresh one, so first settle what
+            // egui was told of the stale one:
             (TouchPhase::Start, gesture) if gesture.touch() == Some(id) => {
-                if matches!(gesture, Gesture::Scrolling { .. }) {
-                    out.push(wheel(TouchPhase::End, 0.0));
+                match gesture {
+                    // A stale swipe's wheel session closes right here. Owing
+                    // its End would work too, since a swipe of the fresh
+                    // touch takes an owed session over, but closing it now
+                    // leaves nothing hanging across frames.
+                    Gesture::Scrolling { .. } => out.push(wheel(TouchPhase::End, 0.0)),
+                    // egui saw the stale press, so it gets the release, as
+                    // the End arm would have passed it. Left down, a
+                    // selection drag stays live, the scroll area refuses the
+                    // wheel while anything drags, and the parked hover would
+                    // stretch that selection on every swipe.
+                    Gesture::PassThrough(_) => out.push(button(pos, false)),
+                    _ => {}
                 }
                 self.begin(id, pos, now, claimable);
                 false
@@ -607,6 +617,31 @@ mod tests {
             vec![(q, true), (q, false)],
             "a fresh pending touch: a tap"
         );
+    }
+
+    /// The same for a touch egui owns: egui saw its press and never its
+    /// release, so the restart releases it first. Left down, a selection
+    /// drag would stay live, and the scroll area refuses the wheel while
+    /// anything drags.
+    #[test]
+    fn a_reused_id_releases_a_stale_pass_through_press() {
+        let mut f = EditorTouch::default();
+        let p = pos2(100.0, 300.0);
+        run(&mut f, primary(Start, p), 1.0);
+        run(&mut f, vec![], 1.0 + LONG_PRESS); // the late press: egui's now
+        run(&mut f, primary(Move, p + vec2(0.0, 40.0)), 1.5); // never lifted
+
+        let q = pos2(200.0, 600.0);
+        let again = run(&mut f, primary(Start, q), 3.0);
+        assert_eq!(
+            buttons(&again),
+            vec![(q, false)],
+            "one release, nothing else"
+        );
+        // A fresh pending touch: its swipe scrolls.
+        let swipe = run(&mut f, primary(Move, q - vec2(0.0, 20.0)), 3.016);
+        assert_eq!(wheels(&swipe), vec![(Start, 0.0), (Move, -20.0)]);
+        assert!(buttons(&swipe).is_empty());
     }
 
     /// A frame that brings both the window's end and a move past the slop
