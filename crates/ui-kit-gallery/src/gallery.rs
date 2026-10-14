@@ -2021,94 +2021,102 @@ fn feedback_section(
 /// runs out the bar sheds, in this order, the theme's name (a nicety),
 /// the call to action (a specimen: in the gallery it does nothing) and
 /// the nav links (the Tabs strip beneath switches the same panels),
-/// until what is left fits. The theme menu and the search, the bar's
-/// working controls, always stay. The order only runs one way, so a
-/// narrower window never holds more than a wider one, and the bar with
-/// everything shed is the phone's.
+/// until what is left fits; on the narrowest phones the theme trigger
+/// last gives up its label and keeps its icon. The theme menu and the
+/// search, the bar's working controls, always stay. The order only
+/// runs one way, so a narrower window never holds more than a wider
+/// one, and the compact bars (the nav links shed) are the phone's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BarFit {
     /// The nav links follow the wordmark.
     nav: bool,
     /// The call to action leads the actions, flush right.
     cta: bool,
-    /// The theme trigger names the live theme.
-    named: bool,
+    /// How the theme trigger reads.
+    trigger: ThemeTrigger,
+}
+
+/// How the bar's theme trigger reads, fullest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThemeTrigger {
+    /// The menu's label followed by the live theme's name.
+    Named,
+    /// The menu's label alone.
+    Bare,
+    /// The tune icon alone, named for a screen reader by the menu's
+    /// label.
+    Icon,
 }
 
 impl BarFit {
-    /// Everything shed but the wordmark and the working controls.
-    const COMPACT: BarFit = BarFit {
-        nav: false,
-        cta: false,
-        named: false,
-    };
-
     /// The fullest bar that fits the row `ui` is about to lay out. The
     /// widths are measured before anything is placed, in the widgets'
     /// own faces and with the bar's own gaps: the row runs left to
     /// right, so by the time the actions are laid out the nav links
     /// are already down, and an action without room lands on top of
-    /// them. `narrow`, the phone layout, takes the compact bar
-    /// outright.
+    /// them. `narrow`, the phone layout, goes straight to the compact
+    /// bars.
     fn measure(ui: &egui::Ui, theme: ThemeId, narrow: bool) -> BarFit {
         use ui_kit::components::button::ButtonSize;
 
-        if narrow {
-            return BarFit::COMPACT;
-        }
         // egui spaces each widget from the next by its item spacing,
         // and the bar's own gaps come on top of that.
         let spacing = ui.spacing().item_spacing.x;
-        let wordmark = Logo::wordmark().height(LOGO_HEIGHT).size().x + spacing + GROUP_GAP;
-        let nav: f32 = copy::TABS
-            .iter()
-            .map(|label| nav_link_width(ui, theme, label) + spacing + LINK_GAP)
-            .sum();
         let action = |width: f32| width + spacing + ACTIONS_GAP;
-        let cta = action(button_width(
-            ui,
-            theme,
-            ButtonSize::Sm,
-            copy::START_A_PROJECT,
-            false,
-        ));
-        let trigger = |named: bool| {
-            let label = theme_trigger_label(theme, named);
+        let trigger_width = |trigger: ThemeTrigger| {
+            let label = theme_trigger_label(theme, trigger == ThemeTrigger::Named);
             action(button_width(ui, theme, ButtonSize::Default, &label, true))
         };
+        let row = ui.available_width();
+        let logo = Logo::wordmark().height(LOGO_HEIGHT).size().x;
         let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
-        // The room left once the wordmark and the search, which every
-        // bar holds, are in.
-        let room = ui.available_width() - wordmark - search;
-        [
-            (
-                BarFit {
+        if !narrow {
+            let nav: f32 = copy::TABS
+                .iter()
+                .map(|label| nav_link_width(ui, theme, label) + spacing + LINK_GAP)
+                .sum();
+            let cta = action(button_width(
+                ui,
+                theme,
+                ButtonSize::Sm,
+                copy::START_A_PROJECT,
+                false,
+            ));
+            let named = trigger_width(ThemeTrigger::Named);
+            let bare = trigger_width(ThemeTrigger::Bare);
+            // The room left once the wordmark, with the gap after it,
+            // and the search, which every bar holds, are in.
+            let room = row - (logo + spacing + GROUP_GAP) - search;
+            let fuller = [
+                (true, ThemeTrigger::Named, nav + cta + named),
+                (true, ThemeTrigger::Bare, nav + cta + bare),
+                (false, ThemeTrigger::Bare, nav + bare),
+            ];
+            if let Some((cta, trigger, _)) = fuller.into_iter().find(|&(_, _, width)| width <= room)
+            {
+                return BarFit {
                     nav: true,
-                    cta: true,
-                    named: true,
-                },
-                nav + cta + trigger(true),
-            ),
-            (
-                BarFit {
-                    nav: true,
-                    cta: true,
-                    named: false,
-                },
-                nav + cta + trigger(false),
-            ),
-            (
-                BarFit {
-                    nav: true,
-                    cta: false,
-                    named: false,
-                },
-                nav + trigger(false),
-            ),
-        ]
-        .into_iter()
-        .find(|&(_, width)| width <= room)
-        .map_or(BarFit::COMPACT, |(fit, _)| fit)
+                    cta,
+                    trigger,
+                };
+            }
+        }
+        // The compact bar keeps the bare label while the search stays
+        // clear of the wordmark by more than the bar's action gap: the
+        // actions may run into the gap after the wordmark (on a phone a
+        // label is worth the tighter gap) but not up to the wordmark
+        // itself. Short of that, the trigger keeps its icon alone.
+        let clearance = row - logo - trigger_width(ThemeTrigger::Bare) - search;
+        let trigger = if clearance > ACTIONS_GAP {
+            ThemeTrigger::Bare
+        } else {
+            ThemeTrigger::Icon
+        };
+        BarFit {
+            nav: false,
+            cta: false,
+            trigger,
+        }
     }
 }
 
@@ -2229,7 +2237,7 @@ impl Gallery {
                         ui.add_space(ACTIONS_GAP);
                     }
 
-                    self.theme_menu(ui, ctx, fit.named);
+                    self.theme_menu(ui, ctx, fit.trigger);
                     ui.add_space(ACTIONS_GAP);
 
                     // The search affordance: the 44px icon button
@@ -2265,18 +2273,31 @@ impl Gallery {
     /// themes in a radio group and the reduced-motion and
     /// reduced-transparency toggles beneath them. The trigger is a
     /// default-size ghost button (the 44px touch floor, as quiet as the
-    /// search icon beside it) naming the live theme when the bar has
-    /// room for the name (`named`, the bar's `BarFit`), the bare label
-    /// otherwise. The popover closes on a tap outside it, and opening it
-    /// closes the search popover.
-    fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, named: bool) {
+    /// search icon beside it) that reads as the bar's `BarFit` decides
+    /// (`kind`): naming the live theme where the bar has room for the
+    /// name, on the bare label where it has room for that, and as the
+    /// tune icon alone on the narrowest phones. The popover closes on a
+    /// tap outside it, and opening it closes the search popover.
+    fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, kind: ThemeTrigger) {
         let theme = self.theme;
         let flags = self.flags;
-        let label = theme_trigger_label(theme, named);
-        let trigger = Button::new(&label)
-            .emphasis(ButtonEmphasis::Ghost)
-            .icon_trailing(Icon::ExpandMore)
-            .ui(ui, theme, &flags);
+        let trigger = match kind {
+            // The same ghost button with its label shed, named for a
+            // screen reader by the menu's label alone (the kit's
+            // `IconButton` would add "new activity" to the name: it
+            // reports activity whenever it has no count).
+            ThemeTrigger::Icon => Button::new("")
+                .emphasis(ButtonEmphasis::Ghost)
+                .icon_only(Icon::Tune, copy::THEME_MENU)
+                .ui(ui, theme, &flags),
+            labelled => {
+                let label = theme_trigger_label(theme, labelled == ThemeTrigger::Named);
+                Button::new(&label)
+                    .emphasis(ButtonEmphasis::Ghost)
+                    .icon_trailing(Icon::ExpandMore)
+                    .ui(ui, theme, &flags)
+            }
+        };
         if trigger.clicked {
             self.theme_open = !self.theme_open;
             self.search_open = false;

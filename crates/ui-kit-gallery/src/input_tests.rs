@@ -531,14 +531,15 @@ fn the_search_popover_closes_on_a_tap_outside_and_gives_way_to_the_theme_menu() 
     );
 }
 
-/// The bar keeps its working controls clear of the rest of its row at
-/// the widths between a phone and a laptop (600, the compact
-/// breakpoint; 768 and 834, iPad mini and iPad Air portrait; 1024,
-/// iPad landscape) with the longest theme name live: the theme trigger
-/// and the search button keep at least the bar's action gap from every
-/// nav link and from the wordmark. Touching counts as crowding: laid
-/// out without measuring, the search button came within half a point
-/// of the last nav link at 1024.
+/// The bar keeps its working controls clear of the rest of its row
+/// from the narrowest phones to a laptop (320, the first iPhone SE and
+/// the small Androids; 600, the compact breakpoint; 768 and 834, iPad
+/// mini and iPad Air portrait; 1024, iPad landscape) with the longest
+/// theme name live: the theme trigger and the search button keep at
+/// least the bar's action gap from every nav link and from the
+/// wordmark. Touching counts as crowding: laid out without measuring,
+/// the search button came within half a point of the last nav link at
+/// 1024.
 #[test]
 fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
     let longest = *ThemeId::ALL
@@ -547,7 +548,7 @@ fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
         .expect("the gallery's themes");
     let gap = ui_kit::components::top_app_bar::ACTIONS_GAP;
     let mut crowded = Vec::new();
-    for width in [600.0, 768.0, 834.0, 1024.0] {
+    for width in [320.0, 600.0, 768.0, 834.0, 1024.0] {
         let mut h = Harness::window(egui::vec2(width, 800.0));
         h.app.gallery.theme = longest;
         crate::gallery::apply_theme(longest, &h.ctx);
@@ -603,9 +604,42 @@ fn wordmark(h: &Harness, row: egui::Rect) -> egui::Rect {
     level[0]
 }
 
+/// On the narrowest phones the theme trigger is its icon alone, named
+/// for a screen reader by the menu's own label and nothing more, and a
+/// tap on it still opens the menu.
+#[test]
+fn the_theme_trigger_is_its_icon_alone_on_the_narrowest_phones() {
+    let mut h = Harness::window(egui::vec2(320.0, 640.0));
+    // The Feedback panel paints no theme names of its own, so every
+    // name on screen is the menu's.
+    h.app.gallery.tab = 3;
+    h.idle(3);
+    h.touch_screen();
+    assert!(
+        h.nodes
+            .iter()
+            .any(|(role, name, _)| *role == Role::Button && name == copy::THEME_MENU),
+        "the icon trigger is named {:?} and nothing more",
+        copy::THEME_MENU
+    );
+    assert!(
+        h.painted(copy::THEME_MENU).is_none(),
+        "the trigger paints no label at 320pt"
+    );
+    let trigger = h
+        .node(Role::Button, copy::THEME_MENU)
+        .expect("the bar's theme trigger");
+    h.tap(trigger.center());
+    h.idle(2);
+    assert!(
+        h.painted(ThemeId::Dark.name()).is_some(),
+        "a tap on the icon trigger opens the theme menu"
+    );
+}
+
 /// Where the bar has room, the theme trigger names the live theme
-/// after the menu's label; a phone's bar keeps the bare label (the one
-/// the menu test above taps).
+/// after the menu's label; most phones' bars keep the bare label (the
+/// one the menu test above taps), and the narrowest the icon alone.
 #[test]
 fn the_theme_trigger_names_the_live_theme_on_a_wide_window() {
     let h = Harness::window(egui::vec2(1200.0, 800.0));
