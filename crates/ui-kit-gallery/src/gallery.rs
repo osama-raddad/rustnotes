@@ -48,7 +48,8 @@
 //!
 //! The phone pass: under the design system's 600pt compact
 //! breakpoint the bar keeps the wordmark, the theme menu (on its bare
-//! label) and the search affordance; the caption under the tab strip
+//! label, or its icon alone on the narrowest phones) and the search
+//! affordance; the caption under the tab strip
 //! steps aside; the button rows and the Foundations specimens wrap
 //! (the specimens through `wrapping_row`, since egui's
 //! `horizontal_wrapped` never wraps a plain group); the card grid and
@@ -273,9 +274,12 @@ pub struct Gallery {
     /// The active gallery panel, driven by the tab strip and the
     /// bar's nav links alike.
     pub(crate) tab: usize,
-    /// The page scroll area's id as of the last frame. egui keeps the
-    /// page's live offset in that area's `scroll_area::State`, which is
-    /// where the input tests read it back.
+    /// Test support, read only by the input tests: the page scroll
+    /// area's id as of the last frame, under which egui keeps the
+    /// page's live offset (the area's `scroll_area::State`). The app
+    /// never reads it. A test cannot rebuild the id itself: egui derives
+    /// it from the content panel's nested `Ui`s salted with
+    /// `PAGE_SCROLL`, so a rebuild would re-trace the chrome's nesting.
     pub(crate) page_scroll_id: Option<egui::Id>,
     /// Which of the dismissible banner demos still hold their
     /// banners; the warning and the error stay until resolved.
@@ -2041,6 +2045,167 @@ fn feedback_section(
     snackbars_group(ui, theme, flags, snackbar);
 }
 
+/// What the app bar holds in the room its row has. A wide window takes
+/// everything: the wordmark, the nav links, the call to action, the
+/// theme trigger naming the live theme, and the search. As the room
+/// runs out the bar sheds, in this order, the theme's name (a nicety),
+/// the call to action (a specimen: in the gallery it does nothing) and
+/// the nav links (the Tabs strip beneath switches the same panels),
+/// until what is left fits; on the narrowest phones the theme trigger
+/// last gives up its label and keeps its icon. The theme menu and the
+/// search, the bar's working controls, always stay. The order only
+/// runs one way, so a narrower window never holds more than a wider
+/// one, and the compact bars (the nav links shed) are the phone's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BarFit {
+    /// The nav links follow the wordmark.
+    nav: bool,
+    /// The call to action leads the actions, flush right.
+    cta: bool,
+    /// How the theme trigger reads.
+    trigger: ThemeTrigger,
+}
+
+/// How the bar's theme trigger reads, fullest first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThemeTrigger {
+    /// The menu's label followed by the live theme's name.
+    Named,
+    /// The menu's label alone.
+    Bare,
+    /// The kit's icon button with the tune icon, named for a screen
+    /// reader by the menu's label.
+    Icon,
+}
+
+impl BarFit {
+    /// The fullest bar that fits the row `ui` is about to lay out. The
+    /// widths are measured before anything is placed, in the widgets'
+    /// own faces and with the bar's own gaps: the row runs left to
+    /// right, so by the time the actions are laid out the nav links
+    /// are already down, and an action without room lands on top of
+    /// them. `narrow`, the phone layout, goes straight to the compact
+    /// bars.
+    fn measure(ui: &egui::Ui, theme: ThemeId, narrow: bool) -> BarFit {
+        use ui_kit::components::button::ButtonSize;
+
+        // egui spaces each widget from the next by its item spacing,
+        // and the bar's own gaps come on top of that.
+        let spacing = ui.spacing().item_spacing.x;
+        let action = |width: f32| width + spacing + ACTIONS_GAP;
+        let trigger_width = |trigger: ThemeTrigger| {
+            let label = theme_trigger_label(theme, trigger == ThemeTrigger::Named);
+            action(button_width(ui, theme, ButtonSize::Default, &label, true))
+        };
+        let row = ui.available_width();
+        let logo = Logo::wordmark().height(LOGO_HEIGHT).size().x;
+        let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
+        if !narrow {
+            let nav: f32 = copy::TABS
+                .iter()
+                .map(|label| nav_link_width(ui, theme, label) + spacing + LINK_GAP)
+                .sum();
+            let cta = action(button_width(
+                ui,
+                theme,
+                ButtonSize::Sm,
+                copy::START_A_PROJECT,
+                false,
+            ));
+            let named = trigger_width(ThemeTrigger::Named);
+            let bare = trigger_width(ThemeTrigger::Bare);
+            // The room left once the wordmark, with the gap after it,
+            // and the search, which every bar holds, are in.
+            let room = row - (logo + spacing + GROUP_GAP) - search;
+            let fuller = [
+                (true, ThemeTrigger::Named, nav + cta + named),
+                (true, ThemeTrigger::Bare, nav + cta + bare),
+                (false, ThemeTrigger::Bare, nav + bare),
+            ];
+            if let Some((cta, trigger, _)) = fuller.into_iter().find(|&(_, _, width)| width <= room)
+            {
+                return BarFit {
+                    nav: true,
+                    cta,
+                    trigger,
+                };
+            }
+        }
+        // The compact bar keeps the bare label while the search stays
+        // clear of the wordmark by more than the bar's action gap: the
+        // actions may run into the gap after the wordmark (on a phone a
+        // label is worth the tighter gap) but not up to the wordmark
+        // itself. Short of that, the trigger keeps its icon alone.
+        let clearance = row - logo - trigger_width(ThemeTrigger::Bare) - search;
+        let trigger = if clearance > ACTIONS_GAP {
+            ThemeTrigger::Bare
+        } else {
+            ThemeTrigger::Icon
+        };
+        BarFit {
+            nav: false,
+            cta: false,
+            trigger,
+        }
+    }
+}
+
+/// The theme trigger's label: the menu's own, followed by the live
+/// theme's name when the bar has room for it.
+fn theme_trigger_label(theme: ThemeId, named: bool) -> String {
+    if named {
+        format!("{} · {}", copy::THEME_MENU, theme.name())
+    } else {
+        copy::THEME_MENU.to_owned()
+    }
+}
+
+/// The width a kit `Button` takes for `label` at `size`, with or
+/// without an icon beside it: the kit's own `min_width` over the label
+/// as the button sets it (the semibold body face at the size's text
+/// size, tracked open by the label's tracking).
+fn button_width(
+    ui: &egui::Ui,
+    theme: ThemeId,
+    size: ui_kit::components::button::ButtonSize,
+    label: &str,
+    icon: bool,
+) -> f32 {
+    use ui_kit::components::button::{min_width, LABEL_TRACKING_EM};
+    use ui_kit::typography::{body_semibold_family, tracked_text};
+
+    let font_id = egui::FontId {
+        size: size.text_size(),
+        family: body_semibold_family(theme),
+    };
+    let job = tracked_text(
+        label,
+        font_id,
+        LABEL_TRACKING_EM,
+        None,
+        Color32::PLACEHOLDER,
+        None,
+    );
+    let label_width = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job)).size().x;
+    min_width(size, label_width, icon, false)
+}
+
+/// The width a kit `NavLink` takes for `label`: its label's line in the
+/// link face, which is the whole of the link.
+fn nav_link_width(ui: &egui::Ui, theme: ThemeId, label: &str) -> f32 {
+    use ui_kit::components::top_app_bar::LINK_TEXT_SIZE;
+    use ui_kit::typography::body_medium_family;
+
+    let font_id = egui::FontId {
+        size: LINK_TEXT_SIZE,
+        family: body_medium_family(theme),
+    };
+    ui.ctx()
+        .fonts_mut(|fonts| fonts.layout_delayed_color(label.to_owned(), font_id, f32::INFINITY))
+        .size()
+        .x
+}
+
 impl Gallery {
     /// The Brand panel (issue 10): the cover composition as the
     /// gallery's opening screen, then the Themes showcase and the
@@ -2059,22 +2224,26 @@ impl Gallery {
     /// web bar's sticky behaviour; the stylesheet's 96px
     /// scroll-padding-top reserve is the bar-and-clearance the panel
     /// provides here). The wordmark, the nav links, the search
-    /// affordance, the theme menu and the one call to action.
+    /// affordance, the theme menu and the one call to action, as much
+    /// of it as the row has room for (`BarFit`).
     fn app_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, narrow: bool) {
         let theme = self.theme;
         let flags = self.flags;
         TopAppBar::new().ui(ui, theme, &flags, |ui| {
             ui.horizontal(|ui| {
+                let fit = BarFit::measure(ui, theme, narrow);
+
                 // The brand: the wordmark at its 24px chrome height,
                 // in primary.
                 ui.add(Logo::wordmark().height(LOGO_HEIGHT));
                 ui.add_space(GROUP_GAP);
 
                 // The primary nav: the panel links, the current one
-                // carrying the indicator underline. Phone-width windows
-                // skip them (the Tabs strip switches panels); the links
-                // return the moment the window widens.
-                if !narrow {
+                // carrying the indicator underline, where the row has
+                // room for them (without them, the Tabs strip beneath
+                // switches the same panels); the links return the
+                // moment the window widens.
+                if fit.nav {
                     for (index, label) in copy::TABS.iter().enumerate() {
                         if NavLink::new(label, self.tab == index)
                             .ui(ui, theme, &flags)
@@ -2086,10 +2255,11 @@ impl Gallery {
                     }
                 }
 
-                // The actions, flush right: the one CTA (wide windows
-                // only), the theme menu, the search affordance.
+                // The actions, flush right: the one CTA where the row
+                // has room for it, the theme menu, the search
+                // affordance.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if !narrow {
+                    if fit.cta {
                         Button::new(copy::START_A_PROJECT)
                             .small()
                             .emphasis(ButtonEmphasis::Tertiary)
@@ -2097,36 +2267,33 @@ impl Gallery {
                         ui.add_space(ACTIONS_GAP);
                     }
 
-                    self.theme_menu(ui, ctx, narrow);
+                    self.theme_menu(ui, ctx, fit.trigger);
                     ui.add_space(ACTIONS_GAP);
 
                     // The search affordance: the 44px icon button
-                    // opening the reused TextField in its popover (one
-                    // of the bar's popovers open at a time).
+                    // opening the reused TextField in its popover. The
+                    // open state is the Gallery's own, as the theme
+                    // menu's is: the popover clears it when a tap lands
+                    // outside it (or on Escape), and opening either of
+                    // the bar's popovers closes the other.
                     let search = IconButton::new(copy::SEARCH_BUTTON_NAME, Icon::Search)
                         .ui(ui, theme, &flags);
                     if search.clicked() {
                         self.search_open = !self.search_open;
                         self.theme_open = false;
                     }
-                    let popup_id = search.id.with("search");
-                    if self.search_open {
-                        egui::Popup::open_id(ctx, popup_id);
-                        egui::Popup::from_response(&search)
-                            .id(popup_id)
-                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                            .frame(popup_frame(theme))
-                            .width(280.0)
-                            .show(|ui| {
-                                TextField::new(copy::SEARCH_FIELD_LABEL, &mut self.search)
-                                    .placeholder(copy::SEARCH_PLACEHOLDER)
-                                    .leading_icon(Icon::Search)
-                                    .hint(copy::SEARCH_FIELD_HINT)
-                                    .ui(ui, theme, &flags);
-                            });
-                    } else {
-                        egui::Popup::close_id(ctx, popup_id);
-                    }
+                    egui::Popup::from_response(&search)
+                        .open_bool(&mut self.search_open)
+                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                        .frame(popup_frame(theme))
+                        .width(280.0)
+                        .show(|ui| {
+                            TextField::new(copy::SEARCH_FIELD_LABEL, &mut self.search)
+                                .placeholder(copy::SEARCH_PLACEHOLDER)
+                                .leading_icon(Icon::Search)
+                                .hint(copy::SEARCH_FIELD_HINT)
+                                .ui(ui, theme, &flags);
+                        });
                 });
             });
         });
@@ -2134,31 +2301,40 @@ impl Gallery {
 
     /// The theme menu: a kit button opening a kit popover, all six
     /// themes in a radio group and the reduced-motion and
-    /// reduced-transparency toggles beneath them. The trigger is a
-    /// default-size ghost button (the 44px touch floor, as quiet as the
-    /// search icon beside it) naming the live theme where the bar has
-    /// room; a phone's bar keeps the bare label. The popover closes on
-    /// a tap outside it, and opening it closes the search popover.
-    fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, narrow: bool) {
+    /// reduced-transparency toggles beneath them. The trigger reads as
+    /// the bar's `BarFit` decides (`kind`): a default-size ghost button
+    /// (the 44px touch floor, as quiet as the search icon beside it)
+    /// naming the live theme where the bar has room for the name, or on
+    /// the bare label where it has room for that, and on the narrowest
+    /// phones the kit's 44px icon button with the tune icon, the search
+    /// button's twin. The popover closes on a tap outside it, and
+    /// opening it closes the search popover.
+    fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, kind: ThemeTrigger) {
         let theme = self.theme;
         let flags = self.flags;
-        let label = if narrow {
-            copy::THEME_MENU.to_owned()
-        } else {
-            format!("{} · {}", copy::THEME_MENU, theme.name())
+        let trigger = match kind {
+            // The kit's icon button, the search button's twin, named for
+            // a screen reader by the menu's label alone.
+            ThemeTrigger::Icon => {
+                IconButton::new(copy::THEME_MENU, Icon::Tune).ui(ui, theme, &flags)
+            }
+            labelled => {
+                let label = theme_trigger_label(theme, labelled == ThemeTrigger::Named);
+                Button::new(&label)
+                    .emphasis(ButtonEmphasis::Ghost)
+                    .icon_trailing(Icon::ExpandMore)
+                    .ui(ui, theme, &flags)
+                    .response
+            }
         };
-        let trigger = Button::new(&label)
-            .emphasis(ButtonEmphasis::Ghost)
-            .icon_trailing(Icon::ExpandMore)
-            .ui(ui, theme, &flags);
-        if trigger.clicked {
+        if trigger.clicked() {
             self.theme_open = !self.theme_open;
             self.search_open = false;
         }
         // The open state is the Gallery's own: the popover clears it
         // when a tap lands outside it (or on Escape).
         let mut open = self.theme_open;
-        egui::Popup::from_response(&trigger.response)
+        egui::Popup::from_response(&trigger)
             .open_bool(&mut open)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .frame(popup_frame(theme).inner_margin(spacing::SPACE_4))
