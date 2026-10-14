@@ -268,6 +268,26 @@ pub fn body_semibold_family(theme: ThemeId) -> FontFamily {
     FontFamily::Name(body_semibold_family_name(theme).into())
 }
 
+/// The body face at its medium stand-in, as a family name: the
+/// components' weight-500 voice — the Tabs' rest labels and the
+/// TopAppBar's links, both `--font-body` at weight 500 in their specs.
+/// Only Monochrome ships a medium instance of the body face (Geist
+/// Medium), so Forest and Teal rest at the regular 400 and the
+/// deviation lives in the components' docs; this resolver picks the
+/// nearest installed instance per theme.
+pub fn body_medium_family_name(theme: ThemeId) -> &'static str {
+    match theme.face_group() {
+        FaceGroup::Mono => GEIST_MEDIUM.family,
+        FaceGroup::Forest => APTOS.family,
+        FaceGroup::Teal => GEIST.family,
+    }
+}
+
+/// [`body_medium_family_name`] as a [`FontFamily::Name`].
+pub fn body_medium_family(theme: ThemeId) -> FontFamily {
+    FontFamily::Name(body_medium_family_name(theme).into())
+}
+
 // ---- the type styles ------------------------------------------------------
 
 /// One of the design system's eleven specimen styles, from

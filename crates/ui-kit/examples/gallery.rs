@@ -1,19 +1,39 @@
-//! The Vynatix gallery: a theme switcher, the type specimen, a palette
-//! swatch grid, the interaction states, the foundation specimens
-//! (spacing, radii, elevation), the icons, the logo, the action
-//! components (buttons, chips, badges), the surface components (cards,
-//! metrics, editorial, glass) and the text input components (fields,
-//! select). Run with `cargo run -p ui-kit --example gallery`. Each
-//! issue grows a section here.
+//! The Vynatix gallery in its final shape (issue 09): a Liquid Glass
+//! TopAppBar carrying the wordmark, the primary nav, the search
+//! affordance, the theme menu and the one call to action; a Tabs
+//! strip switching the gallery's panels — the Tabs widget's own real
+//! demo — over a scrolling page; and, on the Feedback tab, the Banner
+//! demos at the panel top and the Snackbar host's trigger buttons,
+//! the snackbar itself floating in near the window's bottom. Run with
+//! `cargo run -p ui-kit --example gallery`.
+//!
+//! The panel grouping (the judgment this issue documents): the
+//! Foundations tab holds the type specimen, the interaction states,
+//! the foundation specimens (spacing, radii, elevation), the icons,
+//! the logo and the colour-role swatches; the Components tab holds
+//! the actions (buttons, chips, badges), the surfaces (cards,
+//! metrics, editorial, glass) and the text inputs; the Feedback tab
+//! holds the banners and the snackbars. The bar's nav links and the
+//! tab strip drive the same panel state — the link's
+//! `aria-current`-style underline and the tab's indicator are the two
+//! accents the specs give them. Themes and the reduced-motion and
+//! reduced-transparency flags live in the bar's theme menu, all six
+//! reachable.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
 use ui_kit::components::badge::{count_text, Badge, BadgeTone, IconButton};
+use ui_kit::components::banner::{Banner, BannerEvent, BannerTone};
 use ui_kit::components::button::{Button, ButtonEmphasis};
 use ui_kit::components::chip::{Chip, ChipEvent};
 use ui_kit::components::liquid_glass::{glass_recipe, paint_glass, GlassThickness, GlassTint};
-use ui_kit::components::select::Select;
+use ui_kit::components::select::{popup_frame, Select};
+use ui_kit::components::snackbar::{Snackbar, SnackbarEvent, SnackbarHost};
+use ui_kit::components::tabs::Tabs;
 use ui_kit::components::text_field::TextField;
+use ui_kit::components::top_app_bar::{
+    NavLink, TopAppBar, ACTIONS_GAP, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
+};
 use ui_kit::components::{Card, EditorialCard, FocusRing, LiquidGlass, MetricCard};
 use ui_kit::icon::{icon, icon_active, install as install_icons, IconSize};
 use ui_kit::icons::{Icon, CATEGORY_GROUPS};
@@ -44,10 +64,18 @@ fn main() -> eframe::Result {
                 filters: [false; 4],
                 saved_chip: true,
                 form: ProjectForm::populated(),
+                tab: 0,
+                banners: BannerDemos::default(),
+                snackbar: SnackbarHost::new(),
+                search: String::new(),
+                search_open: false,
             }))
         }),
     )
 }
+
+/// The gallery's three panels, in tab order.
+const GALLERY_TABS: &[&str] = &["Foundations", "Components", "Feedback"];
 
 struct Gallery {
     theme: ThemeId,
@@ -61,6 +89,27 @@ struct Gallery {
     saved_chip: bool,
     /// The project-details form the text inputs section edits.
     form: ProjectForm,
+    /// The active gallery panel, driven by the tab strip and the
+    /// bar's nav links alike.
+    tab: usize,
+    /// Which of the dismissible banner demos still hold their
+    /// banners; the warning and the error stay until resolved.
+    banners: BannerDemos,
+    /// The snackbar host: one brief operational message at a time.
+    snackbar: SnackbarHost,
+    /// The bar's search field buffer.
+    search: String,
+    /// Whether the bar's search popover is open.
+    search_open: bool,
+}
+
+/// The dismissible banner demos' state: the info and success banners
+/// come back on demand; the warning and the error never leave on
+/// their own.
+#[derive(Default)]
+struct BannerDemos {
+    info: bool,
+    success: bool,
 }
 
 /// A role name for display: strip the `md-sys-color-` prefix and set the
@@ -1417,84 +1466,361 @@ fn text_inputs_section(
     selects_group(ui, theme, flags, form);
 }
 
+// ---- the feedback components (issue 09) ------------------------------------
+
+/// The banner demos: the four tones in the Banner preview's own copy,
+/// the error's message carrying the four-part voice (what is wrong,
+/// why it matters, what to do next, where to get help). Anchored at
+/// the panel top, as the spec places them.
+fn banners_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, demos: &mut BannerDemos) {
+    let colors = theme.colors();
+    ui.label("Banners · info, success, warning, error · radius-md");
+    ui.add_space(spacing::SPACE_2);
+
+    if demos.info {
+        let response = Banner::new(
+            BannerTone::Info,
+            "Saved automatically.",
+            "We kept your last six edits: refresh to see them.",
+        )
+        .ui(ui, theme, flags);
+        if response.event == Some(BannerEvent::Dismissed) {
+            demos.info = false;
+        }
+    }
+    if demos.success {
+        let response = Banner::new(
+            BannerTone::Success,
+            "Timesheet approved.",
+            "Week 41 is locked and ready for invoicing.",
+        )
+        .ui(ui, theme, flags);
+        if response.event == Some(BannerEvent::Dismissed) {
+            demos.success = false;
+        }
+    }
+    Banner::new(
+        BannerTone::Warning,
+        "Your assignment ends in 14 days.",
+        "Talk to your account lead about an extension.",
+    )
+    .ui(ui, theme, flags);
+    Banner::new(
+        BannerTone::Error,
+        "We couldn't save your changes.",
+        "The connection dropped mid-save, so your edits exist only on this machine. Try again from the toolbar; if it keeps failing, ask your account lead to check the sync log.",
+    )
+    .ui(ui, theme, flags);
+
+    if !demos.info || !demos.success {
+        ui.add_space(spacing::SPACE_2);
+        if Button::new("Restore the banners")
+            .emphasis(ButtonEmphasis::Ghost)
+            .ui(ui, theme, flags)
+            .clicked
+        {
+            *demos = BannerDemos {
+                info: true,
+                success: true,
+            };
+        }
+    }
+
+    ui.add_space(spacing::SPACE_2);
+    ui.add(egui::Label::new(specimen_job(
+        "A banner carries important information at the top of a page or section: the icon and the words hold the state, never the colour alone. Info and success dismiss; warnings and errors stay until the state resolves, which is why theirs carry no close button. Error copy leads with what is wrong, then why it matters, what to do next and where to get help.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The snackbar triggers: buttons whose actions enqueue the host's
+/// brief operational messages, one at a time, near the bottom of the
+/// window.
+fn snackbars_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, host: &mut SnackbarHost) {
+    let colors = theme.colors();
+    ui.label("Snackbars · inverse surface · one at a time · 6s, 10s with an action");
+    ui.add_space(spacing::SPACE_2);
+    ui.horizontal_wrapped(|ui| {
+        if Button::new("Save the brief").ui(ui, theme, flags).clicked {
+            host.show(Snackbar::success("Saved."));
+        }
+        if Button::new("Copy the link").ui(ui, theme, flags).clicked {
+            host.show(Snackbar::info("Link copied."));
+        }
+        if Button::new("Submit the timesheet")
+            .ui(ui, theme, flags)
+            .clicked
+        {
+            host.show(Snackbar::info("Timesheet submitted for week 41.").action("View"));
+        }
+        if Button::new("Archive the workspace")
+            .ui(ui, theme, flags)
+            .clicked
+        {
+            host.show(
+                Snackbar::success("Workspace archived")
+                    .title("Workspace archived")
+                    .line("Read-only access for 30 days, then permanent removal.")
+                    .action("Undo"),
+            );
+        }
+        if Button::new("Sync now").ui(ui, theme, flags).clicked {
+            host.show(
+                Snackbar::error("Sync failed")
+                    .title("Sync failed")
+                    .line("Upstream returned 503. Retrying automatically.")
+                    .action("Retry now"),
+            );
+        }
+    });
+    ui.add(egui::Label::new(specimen_job(
+        "One short sentence, outcome first, on the inverse surface at the bottom of the window. Info and success leave after about six seconds, ten with an action; the timer pauses while the pointer or the focus is inside; errors stay until dismissed or resolved. A second message replaces the first — one at a time. Reduced motion shortens the entrance and never the timing.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
+/// The feedback section: the banners at the panel top, the snackbar
+/// triggers below, the snackbar itself floating near the window's
+/// bottom edge (painted by the host in `Gallery::ui`).
+fn feedback_section(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &UiKitFlags,
+    banners: &mut BannerDemos,
+    snackbar: &mut SnackbarHost,
+) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "Components · Feedback",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    banners_group(ui, theme, flags, banners);
+    ui.add_space(spacing::SPACE_4);
+    snackbars_group(ui, theme, flags, snackbar);
+}
+
+impl Gallery {
+    /// The window's chrome: the TopAppBar on Liquid Glass in a top
+    /// panel, so it stays put while the page scrolls beneath (the
+    /// web bar's sticky behaviour; the stylesheet's 96px
+    /// scroll-padding-top reserve is the bar-and-clearance the panel
+    /// provides here). The wordmark, the nav links, the search
+    /// affordance, the theme menu and the one call to action.
+    fn app_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let theme = self.theme;
+        let flags = self.flags;
+        TopAppBar::new().ui(ui, theme, &flags, |ui| {
+            ui.horizontal(|ui| {
+                // The brand: the wordmark at its 24px chrome height,
+                // in primary.
+                ui.add(Logo::wordmark().height(LOGO_HEIGHT));
+                ui.add_space(GROUP_GAP);
+
+                // The primary nav: the panel links, the current one
+                // carrying the indicator underline.
+                for (index, label) in GALLERY_TABS.iter().enumerate() {
+                    if NavLink::new(label, self.tab == index)
+                        .ui(ui, theme, &flags)
+                        .clicked()
+                    {
+                        self.tab = index;
+                    }
+                    ui.add_space(LINK_GAP);
+                }
+
+                // The actions, flush right: the one CTA, the theme
+                // menu, the search affordance.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    Button::new("Start a project")
+                        .small()
+                        .emphasis(ButtonEmphasis::Tertiary)
+                        .ui(ui, theme, &flags);
+                    ui.add_space(ACTIONS_GAP);
+
+                    ui.menu_button("Theme", |ui| {
+                        let mut picked = theme;
+                        for id in ThemeId::ALL {
+                            ui.selectable_value(&mut picked, *id, id.name());
+                        }
+                        if picked != theme {
+                            self.theme = picked;
+                            install(picked, ctx);
+                            picked.apply(ctx);
+                        }
+                        ui.separator();
+                        ui.checkbox(&mut self.flags.reduced_motion, "Reduced motion");
+                        ui.checkbox(&mut self.flags.reduced_transparency, "Reduced transparency");
+                    });
+                    ui.add_space(ACTIONS_GAP);
+
+                    // The search affordance: the 44px icon button
+                    // opening the reused TextField in its popover.
+                    let search =
+                        IconButton::new("Search the gallery", Icon::Search).ui(ui, theme, &flags);
+                    if search.clicked() {
+                        self.search_open = !self.search_open;
+                    }
+                    let popup_id = search.id.with("search");
+                    if self.search_open {
+                        egui::Popup::open_id(ctx, popup_id);
+                        egui::Popup::from_response(&search)
+                            .id(popup_id)
+                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                            .frame(popup_frame(theme))
+                            .width(280.0)
+                            .show(|ui| {
+                                TextField::new("Search", &mut self.search)
+                                    .placeholder("Case, essay or note")
+                                    .leading_icon(Icon::Search)
+                                    .hint("Everything in the gallery.")
+                                    .ui(ui, theme, &flags);
+                            });
+                    } else {
+                        egui::Popup::close_id(ctx, popup_id);
+                    }
+                });
+            });
+        });
+    }
+
+    /// The Foundations panel: the type specimen, the interaction
+    /// states, the foundation specimens, the icons, the logo and the
+    /// colour-role swatches.
+    fn foundations_panel(&mut self, ui: &mut egui::Ui) {
+        ui.add(egui::Label::new(specimen_job(
+            "Vynatix UI kit",
+            TypeStyle::Headline2,
+            self.theme,
+            self.theme.colors().text_display(),
+        )));
+        ui.add_space(spacing::SPACE_4);
+
+        type_section(ui, self.theme);
+        ui.add_space(spacing::SPACE_6);
+        states_section(ui, self.theme, &self.flags);
+        ui.add_space(spacing::SPACE_6);
+        foundations_section(ui, self.theme);
+        ui.add_space(spacing::SPACE_6);
+        icons_section(ui, self.theme);
+        ui.add_space(spacing::SPACE_6);
+        logo_section(ui, self.theme);
+
+        ui.add_space(spacing::SPACE_6);
+        ui.label(format!("Colour roles · {}", self.theme.name()));
+        ui.add_space(spacing::SPACE_2);
+        let colors = self.theme.colors();
+        egui::Grid::new("colour-roles")
+            .num_columns(2)
+            .spacing([spacing::SPACE_4, spacing::SPACE_2])
+            .show(ui, |ui| {
+                for role in ThemeColors::ROLES {
+                    let color = colors
+                        .role(role)
+                        .expect("ROLES names all resolve to fields");
+                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
+                    ui.painter().rect_filled(
+                        rect,
+                        CornerRadius::same(radii::RADIUS_XS as u8),
+                        color,
+                    );
+                    ui.label(sentence_case(role));
+                    ui.end_row();
+                }
+            });
+    }
+
+    /// The Components panel: the actions, the surfaces and the text
+    /// inputs.
+    fn components_panel(&mut self, ui: &mut egui::Ui) {
+        actions_section(
+            ui,
+            self.theme,
+            &self.flags,
+            &mut self.filters,
+            &mut self.saved_chip,
+        );
+        ui.add_space(spacing::SPACE_6);
+        components_section(ui, self.theme, &self.flags);
+        ui.add_space(spacing::SPACE_6);
+        text_inputs_section(ui, self.theme, &self.flags, &mut self.form);
+    }
+
+    /// The Feedback panel: the banner demos at the panel top, the
+    /// snackbar triggers below.
+    fn feedback_panel(&mut self, ui: &mut egui::Ui) {
+        feedback_section(
+            ui,
+            self.theme,
+            &self.flags,
+            &mut self.banners,
+            &mut self.snackbar,
+        );
+    }
+}
+
 impl eframe::App for Gallery {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
+        // The sticky bar, floating on the canvas with its clearance.
+        egui::Panel::top("vynatix-app-bar")
+            .frame(egui::Frame::default().outer_margin(spacing::SPACE_3))
+            .show(root, |ui| self.app_bar(ui, &ctx));
+
         egui::CentralPanel::default().show(root, |ui| {
-            ui.add(egui::Label::new(specimen_job(
-                "Vynatix UI kit",
-                TypeStyle::Headline2,
-                self.theme,
-                self.theme.colors().text_display(),
-            )));
-            ui.add_space(spacing::SPACE_4);
-
-            ui.label("Themes");
-            ui.add_space(spacing::SPACE_2);
-            ui.horizontal(|ui| {
-                for id in ThemeId::ALL {
-                    let mut picked = self.theme;
-                    ui.selectable_value(&mut picked, *id, id.name());
-                    if picked != self.theme {
-                        self.theme = picked;
-                        install(picked, &ctx);
-                        picked.apply(&ctx);
+            egui::Frame::default()
+                .inner_margin(spacing::SPACE_6)
+                .show(ui, |ui| {
+                    // The Tabs strip: the widget's own real demo, the
+                    // gallery's panel switcher. It stays above the
+                    // scroll, as navigation does.
+                    let tabs =
+                        Tabs::new(GALLERY_TABS).selected(self.tab).ui(ui, self.theme, &self.flags);
+                    if let Some(moved_to) = tabs.changed {
+                        self.tab = moved_to;
                     }
-                }
-            });
-            ui.add_space(spacing::SPACE_1);
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.flags.reduced_motion, "Reduced motion");
-                ui.checkbox(&mut self.flags.reduced_transparency, "Reduced transparency");
-            });
+                    ui.add(egui::Label::new(specimen_job(
+                        "The tabs switch peer panels: Foundations holds the type, states, foundations, icons, logo and colour roles; Components the actions, surfaces and text inputs; Feedback the banners and snackbars. Arrow keys move the selection while a tab holds focus.",
+                        TypeStyle::Caption,
+                        self.theme,
+                        self.theme.colors().text_muted(),
+                    )));
 
-            ui.add_space(spacing::SPACE_6);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                type_section(ui, self.theme);
-                states_section(ui, self.theme, &self.flags);
-                foundations_section(ui, self.theme);
-                icons_section(ui, self.theme);
-                ui.add_space(spacing::SPACE_6);
-                logo_section(ui, self.theme);
-                ui.add_space(spacing::SPACE_6);
-                actions_section(
-                    ui,
-                    self.theme,
-                    &self.flags,
-                    &mut self.filters,
-                    &mut self.saved_chip,
-                );
-                ui.add_space(spacing::SPACE_6);
-                components_section(ui, self.theme, &self.flags);
-                ui.add_space(spacing::SPACE_6);
-                text_inputs_section(ui, self.theme, &self.flags, &mut self.form);
-                ui.add_space(spacing::SPACE_6);
-
-                ui.add_space(spacing::SPACE_4);
-                ui.label(format!("Colour roles · {}", self.theme.name()));
-                ui.add_space(spacing::SPACE_2);
-
-                let colors = self.theme.colors();
-                egui::Grid::new("colour-roles")
-                    .num_columns(2)
-                    .spacing([spacing::SPACE_4, spacing::SPACE_2])
-                    .show(ui, |ui| {
-                        for role in ThemeColors::ROLES {
-                            let color = colors
-                                .role(role)
-                                .expect("ROLES names all resolve to fields");
-                            let (rect, _) =
-                                ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
-                            ui.painter().rect_filled(
-                                rect,
-                                CornerRadius::same(radii::RADIUS_XS as u8),
-                                color,
-                            );
-                            ui.label(sentence_case(role));
-                            ui.end_row();
+                    ui.add_space(spacing::SPACE_4);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        match self.tab {
+                            0 => self.foundations_panel(ui),
+                            1 => self.components_panel(ui),
+                            _ => self.feedback_panel(ui),
                         }
+                        ui.add_space(spacing::SPACE_6);
                     });
-            });
+                });
         });
+
+        // The snackbar host: the one visible message floats near the
+        // window's bottom, centred, 24px above the edge. Its action
+        // runs here, where the host knows what it enqueued.
+        let action = self
+            .snackbar
+            .current()
+            .and_then(|snackbar| snackbar.action.clone());
+        if let Some(event) = self.snackbar.paint(&ctx, self.theme, &self.flags) {
+            if event == SnackbarEvent::Action {
+                match action.as_deref() {
+                    Some("Undo") => self.snackbar.show(Snackbar::success("Workspace restored.")),
+                    Some("Retry now") => self.snackbar.show(Snackbar::success("Sync running.")),
+                    Some("View") => self.snackbar.show(Snackbar::info("Opening week 41.")),
+                    _ => {}
+                }
+            }
+        }
     }
 }

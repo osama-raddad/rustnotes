@@ -190,8 +190,10 @@ pub fn popup_list_height(option_count: usize) -> f32 {
 }
 
 /// The popover's frame: the box's tokens elevated, `radius-md`, a 1px
-/// `outline-variant` hairline and shadow-l2.
-fn popup_frame(theme: ThemeId) -> Frame {
+/// `outline-variant` hairline and shadow-l2. The kit's token-correct
+/// popover chrome, shared by the select's option list (issue 07) and
+/// the top app bar's search field (issue 09).
+pub fn popup_frame(theme: ThemeId) -> Frame {
     let colors = theme.colors();
     Frame {
         inner_margin: Margin::same(4),
