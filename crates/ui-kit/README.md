@@ -212,6 +212,11 @@ the reader-facing list.
 - Reduced motion and reduced transparency are host-held flags, not
   media queries: the host reads the OS and sets `UiKitFlags`
   (`states`).
+- The focus ring follows the browsers' `:focus-visible` rule: egui says
+  a widget holds focus but not how it got there, so the ring tracks the
+  last input itself. Key presses and typed text show it, a mouse press
+  or touch hides it, and Ctrl/Alt/Cmd chords do not count; a text
+  input's ring ignores the tracking (`focus_ring`).
 - Chrome (hover) state lands one frame late where the focus ring does
   not; popup arrow-key focus lands the frame after the gain; Tab walks
   the radio rows rather than the group as one (`select`, `radio`).
