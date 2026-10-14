@@ -45,7 +45,8 @@ pub const TABS_NOTE: &str = "The tabs switch peer panels: Brand holds the cover 
 pub const START_A_PROJECT: &str = "Start a project";
 
 /// The bar's theme menu: its trigger's label (wide windows follow it
-/// with the live theme's name) and the legend of its theme group.
+/// with the live theme's name), the icon trigger's accessible name on
+/// the narrowest phones, and the legend of its theme group.
 pub const THEME_MENU: &str = "Theme";
 
 /// The theme menu's reduced-motion toggle, and the Toggles preview's

@@ -47,11 +47,11 @@
 //! their tails, the way the web previews scroll the same rows.
 //!
 //! The phone pass: under the design system's 600pt compact
-//! breakpoint the bar keeps the wordmark, the theme menu (on its bare
-//! label, or its icon alone on the narrowest phones) and the search
-//! affordance; the caption under the tab strip
-//! steps aside; the button rows and the Foundations specimens wrap
-//! (the specimens through `wrapping_row`, since egui's
+//! breakpoint the bar keeps the wordmark, the theme menu (on
+//! its bare label, or its icon alone on the narrowest phones)
+//! and the search affordance; the caption under the tab strip
+//! steps aside; the button rows and the Foundations specimens
+//! wrap (the specimens through `wrapping_row`, since egui's
 //! `horizontal_wrapped` never wraps a plain group); the card grid and
 //! the form grids stack. The page and the sideways rows scroll under
 //! the finger through egui's own drag-to-scroll (lib.rs tells the
@@ -162,10 +162,15 @@ fn scrolling_row(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
 /// row's item spacing, never `add_space`: a space added after a line's
 /// last tile pushes the row's extent past the window's edge, and every
 /// later row then wraps that much wider.
-fn wrapping_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+///
+/// `add` gets the item spacing the row's `Ui` had before the row set
+/// its own, for each tile to restore inside itself: the row's spacing
+/// is for between tiles, and a tile's art and caption keep the page's.
+fn wrapping_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui, Vec2)) {
+    let inherited = ui.spacing().item_spacing;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(spacing::SPACE_4, spacing::SPACE_3);
-        add(ui);
+        add(ui, inherited);
     });
 }
 
@@ -175,9 +180,11 @@ fn wrapping_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
 /// the next line only when it knows its size before it is laid out,
 /// which a plain `ui.vertical` group never does (the row then runs on
 /// past the window's edge); the tile allocates its width up front, so
-/// the row wraps on a phone.
+/// the row wraps on a phone. `inherited` is the spacing the row hands
+/// its tiles, which the tile lays its art and caption out with.
 fn wrapping_specimen(
     ui: &mut egui::Ui,
+    inherited: Vec2,
     theme: ThemeId,
     art_width: f32,
     caption: &str,
@@ -196,6 +203,7 @@ fn wrapping_specimen(
         Vec2::new(width, 0.0),
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
+            ui.spacing_mut().item_spacing = inherited;
             art(ui);
             ui.add(egui::Label::new(caption));
         },
@@ -561,13 +569,13 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
 
     ui.label(copy::SPACING_LABEL);
     ui.add_space(spacing::SPACE_2);
-    wrapping_row(ui, |ui| {
+    wrapping_row(ui, |ui, inherited| {
         for (name, value) in spacing::ALL {
             // The bar runs the step's own length; the widest steps
             // widen their tile to hold it.
             let width = spacing::SPACE_24.max(*value);
             let caption = format!("{name} · {}", trim_float(*value));
-            wrapping_specimen(ui, theme, width, &caption, |ui| {
+            wrapping_specimen(ui, inherited, theme, width, &caption, |ui| {
                 let (rect, _) =
                     ui.allocate_exact_size(Vec2::new(width, spacing::SPACE_2), Sense::hover());
                 if *value > 0.0 {
@@ -621,7 +629,7 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
         ("L5", shadows.l5),
     ];
     // Five 96px tiles run past a phone's width; they wrap.
-    wrapping_row(ui, |ui| {
+    wrapping_row(ui, |ui, inherited| {
         for (level, layers) in levels {
             let caption = layers
                 .first()
@@ -636,7 +644,7 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
                     )
                 })
                 .unwrap_or_else(|| level.to_owned());
-            wrapping_specimen(ui, theme, spacing::SPACE_24, &caption, |ui| {
+            wrapping_specimen(ui, inherited, theme, spacing::SPACE_24, &caption, |ui| {
                 let (rect, _) = ui.allocate_exact_size(
                     Vec2::new(spacing::SPACE_24, spacing::SPACE_24),
                     Sense::hover(),
@@ -668,14 +676,14 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
     ));
     ui.add_space(spacing::SPACE_4);
 
-    wrapping_row(ui, |ui| {
+    wrapping_row(ui, |ui, inherited| {
         for size in IconSize::ALL {
             let caption = format!(
                 "{} · {}",
                 trim_float(size.px()),
                 size.name().trim_start_matches("icon-size-")
             );
-            wrapping_specimen(ui, theme, size.px(), &caption, |ui| {
+            wrapping_specimen(ui, inherited, theme, size.px(), &caption, |ui| {
                 icon(ui, Icon::Search, *size, colors.primary);
             });
         }
@@ -692,14 +700,14 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
         ui.add_space(spacing::SPACE_4);
         ui.label(format!("{category} · {}", icons.len()));
         ui.add_space(spacing::SPACE_1);
-        wrapping_row(ui, |ui| {
+        wrapping_row(ui, |ui, inherited| {
             for one in *icons {
                 let caption = if one.has_fill() {
                     format!("{} · fills", one.name())
                 } else {
                     one.name().to_owned()
                 };
-                wrapping_specimen(ui, theme, IconSize::Lg.px(), &caption, |ui| {
+                wrapping_specimen(ui, inherited, theme, IconSize::Lg.px(), &caption, |ui| {
                     if one.has_fill() {
                         icon_active(ui, *one, IconSize::Lg, colors.primary);
                     } else {
@@ -2027,7 +2035,6 @@ fn feedback_section(
 /// search, the bar's working controls, always stay. The order only
 /// runs one way, so a narrower window never holds more than a wider
 /// one, and the compact bars (the nav links shed) are the phone's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BarFit {
     /// The nav links follow the wordmark.
     nav: bool,
@@ -2038,7 +2045,6 @@ struct BarFit {
 }
 
 /// How the bar's theme trigger reads, fullest first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ThemeTrigger {
     /// The menu's label followed by the live theme's name.
     Named,
@@ -2064,13 +2070,19 @@ impl BarFit {
         // and the bar's own gaps come on top of that.
         let spacing = ui.spacing().item_spacing.x;
         let action = |width: f32| width + spacing + ACTIONS_GAP;
-        let trigger_width = |trigger: ThemeTrigger| {
-            let label = theme_trigger_label(theme, trigger == ThemeTrigger::Named);
+        let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
+        let labelled = |named: bool| {
+            let label = theme_trigger_label(theme, named);
             action(button_width(ui, theme, ButtonSize::Default, &label, true))
+        };
+        let trigger_width = |trigger: ThemeTrigger| match trigger {
+            ThemeTrigger::Named => labelled(true),
+            ThemeTrigger::Bare => labelled(false),
+            // The icon button, square at the search button's size.
+            ThemeTrigger::Icon => action(search),
         };
         let row = ui.available_width();
         let logo = Logo::wordmark().height(LOGO_HEIGHT).size().x;
-        let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
         if !narrow {
             let nav: f32 = copy::TABS
                 .iter()
@@ -2089,17 +2101,33 @@ impl BarFit {
             // and the search, which every bar holds, are in.
             let room = row - (logo + spacing + GROUP_GAP) - search;
             let fuller = [
-                (true, ThemeTrigger::Named, nav + cta + named),
-                (true, ThemeTrigger::Bare, nav + cta + bare),
-                (false, ThemeTrigger::Bare, nav + bare),
+                (
+                    BarFit {
+                        nav: true,
+                        cta: true,
+                        trigger: ThemeTrigger::Named,
+                    },
+                    nav + cta + named,
+                ),
+                (
+                    BarFit {
+                        nav: true,
+                        cta: true,
+                        trigger: ThemeTrigger::Bare,
+                    },
+                    nav + cta + bare,
+                ),
+                (
+                    BarFit {
+                        nav: true,
+                        cta: false,
+                        trigger: ThemeTrigger::Bare,
+                    },
+                    nav + bare,
+                ),
             ];
-            if let Some((cta, trigger, _)) = fuller.into_iter().find(|&(_, _, width)| width <= room)
-            {
-                return BarFit {
-                    nav: true,
-                    cta,
-                    trigger,
-                };
+            if let Some((fit, _)) = fuller.into_iter().find(|&(_, width)| width <= room) {
+                return fit;
             }
         }
         // The compact bar keeps the bare label while the search stays
@@ -2283,19 +2311,20 @@ impl Gallery {
     fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, kind: ThemeTrigger) {
         let theme = self.theme;
         let flags = self.flags;
+        let labelled = |ui: &mut egui::Ui, named: bool| {
+            Button::new(&theme_trigger_label(theme, named))
+                .emphasis(ButtonEmphasis::Ghost)
+                .icon_trailing(Icon::ExpandMore)
+                .ui(ui, theme, &flags)
+                .response
+        };
         let trigger = match kind {
+            ThemeTrigger::Named => labelled(ui, true),
+            ThemeTrigger::Bare => labelled(ui, false),
             // The kit's icon button, the search button's twin, named for
             // a screen reader by the menu's label alone.
             ThemeTrigger::Icon => {
                 IconButton::new(copy::THEME_MENU, Icon::Tune).ui(ui, theme, &flags)
-            }
-            labelled => {
-                let label = theme_trigger_label(theme, labelled == ThemeTrigger::Named);
-                Button::new(&label)
-                    .emphasis(ButtonEmphasis::Ghost)
-                    .icon_trailing(Icon::ExpandMore)
-                    .ui(ui, theme, &flags)
-                    .response
             }
         };
         if trigger.clicked() {
@@ -2656,5 +2685,56 @@ mod tests {
                 "{name} runs {overflow}pt past a {DESKTOP_WIDTH}pt window"
             );
         }
+    }
+
+    /// Inside a wrapping row's tile the art and its caption keep the
+    /// page's own item spacing: the row's wider spacing is for the gaps
+    /// between tiles and between lines of tiles, not for the inside of
+    /// one.
+    #[test]
+    fn a_tile_keeps_the_pages_spacing_between_its_art_and_caption() {
+        let ctx = egui::Context::default();
+        install(ThemeId::Light, &ctx);
+        apply_theme(ThemeId::Light, &ctx);
+        // The first pass binds the installed faces.
+        ctx.run_ui(egui::RawInput::default(), |_| {})
+            .drop_without_applying_deltas();
+        let caption = "space-4 · 16";
+        let mut page = Vec2::ZERO;
+        let mut art = Rect::NOTHING;
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            page = ui.spacing().item_spacing;
+            wrapping_row(ui, |ui, inherited| {
+                wrapping_specimen(
+                    ui,
+                    inherited,
+                    ThemeId::Light,
+                    spacing::SPACE_24,
+                    caption,
+                    |ui| {
+                        art = ui
+                            .allocate_exact_size(
+                                Vec2::new(spacing::SPACE_24, spacing::SPACE_2),
+                                Sense::hover(),
+                            )
+                            .0;
+                    },
+                );
+            });
+        });
+        let caption_top = out
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == caption => Some(text.pos.y),
+                _ => None,
+            })
+            .expect("the tile paints its caption");
+        out.drop_without_applying_deltas();
+        assert_eq!(
+            caption_top - art.bottom(),
+            page.y,
+            "the caption sits the page's item spacing below the art"
+        );
     }
 }

@@ -2,6 +2,10 @@
 # emu-touch — automated touch testing of the gallery on the Android
 # emulator, verified by screenshot pixel-diffs.
 #
+# Prerequisites: zsh (the script's shell); adb on the PATH, with the
+# emulator (or a device) attached and the gallery installed; Python 3
+# with Pillow (`pip install pillow`) for the screenshot diffs.
+#
 # Two hard-won facts baked in:
 # 1. `adb shell input tap/swipe` DOES reach NativeActivity apps. Earlier
 #    "input is dead" sessions were a coordinate-scale error: the
@@ -25,27 +29,30 @@
 #   sideways a sideways swipe over a specimen row scrolls it    (>3%)
 #   unswipe  the reverse swipe restores the row                 (<2%)
 #
-# The tap comes first on purpose: egui arms its drag-to-scroll once it
-# has seen a touch, so on a fresh launch the very first swipe lands on
-# nothing; the tab tap is that first touch.
+# The tap comes first because the checks after it start from the
+# Foundations panel; it arms nothing. On a phone the gallery's scroll
+# areas drag from the very first touch (`DragScroll::Always`), so a
+# first swipe after launch would scroll too.
 #
-# The sideways row: the Brand tab has none (its theme cards sit in a
-# row the page clips rather than scrolls, below the fold at launch),
-# so the check scrolls the Foundations
-# tab until the state tiles (the first row that scrolls sideways) sit
-# mid-screen, with slow swipes so egui's fling adds little, then
-# swipes sideways at a few heights around where the row should be: a
-# swipe that misses the row changes nothing, the first one that hits
-# it is the check. Retarget with the SIDEWAYS_* values below.
+# The sideways row: the Brand tab has none (on a phone its theme cards
+# stack one to a row), so the check scrolls the Foundations tab until
+# the state tiles (the first row that scrolls sideways) sit mid-screen,
+# with slow swipes so egui's fling adds little, then swipes sideways at
+# a few heights around where the row should be: a swipe that misses the
+# row changes nothing, the first one that hits it is the check.
+# Retarget with the SIDEWAYS_* values below.
 #
 # Usage: tools/emu-touch.sh [serial]     # defaults to the first device
+# Exits 0 when every check passes, 1 when one fails, 2 with no device.
 
 set -euo pipefail
 
 PKG=com.osamaraddad.vynatixgallery
-SERIAL="${1:-$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')}
-"
-SERIAL=$(echo $SERIAL | tr -d '[:space:]')
+SERIAL="${1:-$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')}"
+if [[ -z $SERIAL ]]; then
+  echo "emu-touch: no device attached; start the emulator or pass a serial" >&2
+  exit 2
+fi
 OUT="$(mktemp -d)"
 
 # The sideways row, in device px (egui pt * 3). Measured headlessly at

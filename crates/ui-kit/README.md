@@ -22,6 +22,8 @@ chrome, four panels (Brand, Foundations, Components, Feedback), every
 component live in the active theme. The bar's Theme menu (a kit button
 opening a kit popover) switches all six themes and the reduced-motion
 and reduced-transparency flags; the choice holds for the session.
+Between 600 and 1024pt the bar drops what its row has no room for:
+the theme's name first, then the call to action, then the nav links.
 
 ## The gallery app and mobile input
 
@@ -59,10 +61,10 @@ behaviour to know: the drag-to-scroll arms on the first touch, so on a
 fresh launch the very first swipe lands on nothing and every later one
 scrolls.
 
-On a phone-width window the bar drops its nav links and call to action
-(the Tabs strip switches panels) and its theme menu keeps the bare
-label, or its icon alone on the narrowest phones; the caption under the
-tab strip steps aside; the button rows and
+On a phone-width window the bar drops its nav links and call to
+action (the Tabs strip switches panels) and its theme menu keeps
+the bare label, or its icon alone on the narrowest phones; the
+caption under the tab strip steps aside; the button rows and
 the Foundations specimens wrap, the card grid and the form grids stack,
 and the specimen rows scroll sideways as the web previews do. Layout
 tests hold the Foundations, Components and Feedback panels to a 360pt
