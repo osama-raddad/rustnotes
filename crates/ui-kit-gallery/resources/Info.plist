@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Vynatix Gallery</string>
 	<key>CFBundleExecutable</key>
-	<string>gallery</string>
+	<string>ui-kit-gallery</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.osamaraddad.vynatixgallery.ios</string>
 	<key>CFBundleInfoDictionaryVersion</key>

@@ -125,6 +125,7 @@ pub fn context_job(context: &str, theme: ThemeId, color: Color32) -> LayoutJob {
         0.0,
         Some(type_scale::TEXT_LABEL * leading::LEADING_NORMAL),
         color,
+        None,
     )
 }
 

@@ -274,6 +274,7 @@ impl ThemesShowcase {
             TypeStyle::Lede,
             theme,
             colors.text_muted(),
+            Some(CARD_WIDTH - spacing::SPACE_8),
         )));
         ui.add_space(spacing::SPACE_6);
 
@@ -281,7 +282,9 @@ impl ThemesShowcase {
         for (row, group) in [(LIGHT_ROW, &CARDS[..3]), (DARK_ROW, &CARDS[3..])] {
             ui.label(row);
             ui.add_space(spacing::SPACE_2);
-            ui.horizontal(|ui| {
+            // Wrapped, not one long row: on a phone the cards stack
+            // instead of overflowing the screen.
+            ui.horizontal_wrapped(|ui| {
                 for copy in group {
                     theme_card(ui, flags, copy);
                     ui.add_space(spacing::SPACE_3);
@@ -295,6 +298,7 @@ impl ThemesShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
+            Some(CARD_WIDTH - spacing::SPACE_8),
         )))
     }
 }
@@ -331,6 +335,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                             0.0,
                             None,
                             colors.text_muted(),
+                            Some(CARD_WIDTH - spacing::SPACE_8),
                         )));
                     });
             });
@@ -347,6 +352,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             Some(type_scale::TEXT_BODY_LG * 1.25),
             colors.text_body(),
+            Some(CARD_WIDTH - spacing::SPACE_8),
         )));
         ui.add(egui::Label::new(tracked_text(
             copy.character,
@@ -357,11 +363,13 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             Some(20.0),
             colors.text_muted(),
+            Some(CARD_WIDTH - spacing::SPACE_8),
         )));
 
-        // The anchor swatches, two a row, mono labels beside.
+        // The anchor swatches, one a row with its mono label beside:
+        // the full token names need the row's width on a phone card.
         ui.add_space(spacing::SPACE_2);
-        for pair in ShowcaseRole::SWATCHES.chunks(2) {
+        for pair in ShowcaseRole::SWATCHES.chunks(1) {
             ui.horizontal(|ui| {
                 for role in pair {
                     let swatch_radius = CornerRadius::same(radii::RADIUS_SM as u8);
@@ -384,6 +392,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                         0.0,
                         None,
                         colors.text_muted(),
+                        Some(CARD_WIDTH - spacing::SPACE_8),
                     )));
                     ui.add_space(spacing::SPACE_3);
                 }
@@ -420,6 +429,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             None,
             colors.text_muted(),
+            Some(CARD_WIDTH - spacing::SPACE_8),
         )));
 
         // The display specimen in this theme's own faces, on a small
@@ -439,6 +449,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                     -0.01,
                     Some(26.0),
                     colors.text_display(),
+                    Some(CARD_WIDTH - spacing::SPACE_8),
                 )));
                 ui.add(egui::Label::new(tracked_text(
                     copy.faces,
@@ -449,6 +460,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                     0.0,
                     None,
                     colors.text_muted(),
+                    Some(CARD_WIDTH - spacing::SPACE_8),
                 )));
             });
 

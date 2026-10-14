@@ -236,7 +236,13 @@ impl Card {
         if let Some(border) = look.border {
             frame = frame.stroke(border);
         }
-        let inner = frame.show(ui, |ui| add(ui));
+        // The card's interior is always a vertical stack: a card placed
+        // in a horizontal or wrapped row inherits left-to-right from the
+        // row, which would lay the card's own sections out sideways.
+        let inner = frame.show(ui, |ui| {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), add)
+                .inner
+        });
         if self.variant == CardVariant::Interactive {
             let response = ui.interact(inner.response.rect, id, Sense::click());
             FocusRing::new()

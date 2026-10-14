@@ -71,12 +71,6 @@ default:
 #                swap the backend without dragging the default back in):
 #                everything default provides besides the backend must be
 #                re-added by name, and this is that name.
-#   example      non-empty when the app's executable is a cargo EXAMPLE of
-#                `crate` (not a --bin): the gallery. ios-build then builds
-#                and stages `--example $example` instead of `--bin $bin`;
-#                the example target is iOS-packagable but has no Android
-#                cdylib, so the Android recipes error out for such apps
-#                (loudly, at the staged-lib copy — no manifest exists).
 # The activity backend (NativeActivity vs GameActivity) is deliberately NOT
 # a table row: it is a build flavor of the host, not a fact about the app —
 # the same app packages under either. Recipes take it as an `activity`
@@ -101,7 +95,6 @@ app-identity app:
         echo "crate='rustnotes'"
         echo "cdylib='rustnotes'"
         echo "bin='rustnotes'"
-        echo "example=''"
         echo "android_pkg='com.osamaraddad.rustnotes'"
         echo "label='Rust Notes'"
         echo "ios_bundle='com.osamaraddad.rustnotes.ios'"
@@ -116,7 +109,6 @@ app-identity app:
         echo "crate='hello-mobile'"
         echo "cdylib='hello_mobile'"
         echo "bin='hello-mobile'"
-        echo "example=''"
         echo "android_pkg='com.example.hellomobile'"
         echo "label='Hello Mobile'"
         echo "ios_bundle='com.example.hellomobile.ios'"
@@ -128,14 +120,13 @@ app-identity app:
         ;;
     ui-kit-gallery)
         echo "key='ui-kit-gallery'"
-        echo "crate='ui-kit'"
-        echo "cdylib=''"
-        echo "bin='gallery'"
-        echo "example='gallery'"
+        echo "crate='ui-kit-gallery'"
+        echo "cdylib='ui_kit_gallery'"
+        echo "bin='ui-kit-gallery'"
         echo "android_pkg='com.osamaraddad.vynatixgallery'"
         echo "label='Vynatix Gallery'"
         echo "ios_bundle='com.osamaraddad.vynatixgallery.ios'"
-        echo "res='crates/ui-kit/resources'"
+        echo "res='crates/ui-kit-gallery/resources'"
         echo "ks='ui-kit-gallery.debug.keystore'"
         echo "ks_alias='vynatixgallery'"
         echo "ks_dname='CN=Vynatix Gallery Debug,O=Rust,C=US'"
@@ -417,26 +408,16 @@ ios-one-booted-sim:
 # effective iOS floor floats on cc-rs/objc2 defaults at build time. build/ios
 # stays one shared dir, wiped per build as before: one app bundles at a time,
 # and the .app of the other app must not survive the wipe.
-# Example-hosted apps (identity `example` non-empty) build `--example` and
-# stage from release/examples/; the rest as before, `--bin` from release/.
 [private]
 ios-build app target:
     #!/bin/zsh
     set -euo pipefail
     cfg=$(just app-identity "{{app}}")
     eval "$cfg"
-    if [ -n "$example" ]; then
-        IPHONEOS_DEPLOYMENT_TARGET=13.0 cargo build -p "$crate" --example "$example" --target {{target}} --release
-    else
-        IPHONEOS_DEPLOYMENT_TARGET=13.0 cargo build -p "$crate" --bin "$bin" --target {{target}} --release
-    fi
+    IPHONEOS_DEPLOYMENT_TARGET=13.0 cargo build -p "$crate" --bin "$bin" --target {{target}} --release
     rm -rf build/ios
     mkdir -p "build/ios/$label.app"
-    if [ -n "$example" ]; then
-        cp "build/target/{{target}}/release/examples/$example" "build/ios/$label.app/$example"
-    else
-        cp "build/target/{{target}}/release/$bin" "build/ios/$label.app/$bin"
-    fi
+    cp "build/target/{{target}}/release/$bin" "build/ios/$label.app/$bin"
     cp "$res/Info.plist" "build/ios/$label.app/Info.plist"
 
 # Simulator .app bundle (ad-hoc signed)
@@ -639,15 +620,18 @@ screenshot-ios app='rustnotes':
 
 # ---- misc -------------------------------------------------------------------
 
-# Type-check every crate for its real targets (rustnotes and hello-mobile
-# are each checked three ways: Android lib, iOS-sim bin, host desktop bin)
+# Type-check every crate for its real targets (rustnotes, hello-mobile
+# and ui-kit-gallery are each checked three ways: Android lib, iOS-sim
+# bin, host desktop bin)
 # (the workspace can't be checked as a whole: ndk-sys only compiles for Android)
-# (ui-kit is pure egui with no platform glue, so the host check covers it —
-# its gallery example carries its own iOS glue, checked for the sim target)
+# (ui-kit is pure egui with no platform glue, so the host check covers it;
+# its gallery app carries the platform legs through the rustnotes host)
 check:
     cargo check -p rustnotes-core
     cargo check -p ui-kit
-    cargo check -p ui-kit --example gallery --target aarch64-apple-ios-sim
+    cargo check -p ui-kit-gallery --lib --target aarch64-linux-android
+    cargo check -p ui-kit-gallery --bin ui-kit-gallery --target aarch64-apple-ios-sim
+    cargo check -p ui-kit-gallery --bin ui-kit-gallery
     cargo check -p rustnotes --lib --target aarch64-linux-android
     cargo check -p rustnotes --bin rustnotes --target aarch64-apple-ios-sim
     cargo check -p rustnotes --bin rustnotes
@@ -678,16 +662,18 @@ check-links:
 fmt:
     cargo fmt --all
 
-# Unit tests for the core and ui-kit crates (the host crate is platform glue — no tests)
+# Unit tests for the core and ui-kit crates, plus the gallery's headless
+# input tests (the host crates are platform glue — no tests)
 test:
     cargo test -p rustnotes-core
     cargo test -p ui-kit
+    cargo test -p ui-kit-gallery
 
 # Format check, then clippy over all four crates on the host feature set
 # (the Android/iOS glue is additionally type-checked by `just check`)
 lint:
     cargo fmt --all -- --check
-    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile -p ui-kit --all-targets -- -D warnings
+    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile -p ui-kit -p ui-kit-gallery --all-targets -- -D warnings
 
 clean:
     rm -rf build

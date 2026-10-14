@@ -223,6 +223,7 @@ impl<'a> EditorialCard<'a> {
                         HEADLINE_TRACKING_EM,
                         Some(type_scale::TEXT_H5 * HEADLINE_LEADING),
                         colors.text_display(),
+                        Some(ui.available_width()),
                     )));
                     ui.add_space(spacing::SPACE_3);
                     ui.add(egui::Label::new(tracked_text(
@@ -231,6 +232,7 @@ impl<'a> EditorialCard<'a> {
                         0.0,
                         Some(type_scale::TEXT_BODY_SM * SUMMARY_LEADING),
                         colors.text_muted(),
+                        Some(ui.available_width()),
                     )));
                 });
         });

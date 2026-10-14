@@ -190,6 +190,7 @@ impl Cover {
             TypeStyle::Headline1,
             theme,
             colors.primary,
+            Some(ui.available_width()),
         )));
         ui.add_space(spacing::SPACE_2);
         ui.add(egui::Label::new(tracked_text(
@@ -201,6 +202,7 @@ impl Cover {
             0.0,
             Some(20.0),
             colors.text_muted(),
+            Some(ui.available_width()),
         )));
         ui.add_space(spacing::SPACE_4);
         let ratio = HEADLINE_SIZE / STANDFIRST_SIZE;
@@ -212,6 +214,7 @@ impl Cover {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
+            Some(ui.available_width()),
         )))
     }
 }

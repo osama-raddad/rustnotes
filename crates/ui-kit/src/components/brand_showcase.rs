@@ -254,7 +254,12 @@ impl BrandShowcase {
         // The governing principle: the numeral in indicator beside the
         // eyebrow, headline and body, the preview's one panel.
         Card::new().large().ui(ui, theme, flags, |ui| {
+            // Captured while the Ui is still the card's bounded
+            // interior: inside the horizontal below, available width is
+            // unbounded.
+            let panel_width = ui.available_width();
             ui.horizontal(|ui| {
+                let _ = panel_width;
                 ui.add(egui::Label::new(tracked_text(
                     PRINCIPLE_NUMERAL,
                     FontId {
@@ -264,9 +269,11 @@ impl BrandShowcase {
                     -0.05,
                     Some(type_scale::TEXT_DISPLAY_LG * 0.9),
                     colors.indicator,
+                    None,
                 )));
                 ui.add_space(spacing::SPACE_8);
                 ui.vertical(|ui| {
+                    let column_width = panel_width - type_scale::TEXT_DISPLAY_LG - spacing::SPACE_8;
                     ui.add(TrackedLabel::new(
                         PRINCIPLE_EYEBROW,
                         TypeStyle::Eyebrow.font_id(theme),
@@ -283,6 +290,7 @@ impl BrandShowcase {
                         -0.02,
                         Some(type_scale::TEXT_H4 * 1.15),
                         colors.text_display(),
+                        Some(column_width),
                     )));
                     ui.add_space(spacing::SPACE_2);
                     ui.add(egui::Label::new(specimen_job(
@@ -290,6 +298,7 @@ impl BrandShowcase {
                         TypeStyle::Body,
                         theme,
                         colors.text_body(),
+                        Some(column_width),
                     )));
                 });
             });
@@ -306,9 +315,11 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
+            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
         )));
         ui.add_space(spacing::SPACE_2);
-        ui.horizontal(|ui| {
+        // Wrapped, not one long row: the cards stack on a phone.
+        ui.horizontal_wrapped(|ui| {
             for (label, register, example) in VOICE_POSITIONS {
                 Card::new().filled().compact().ui(ui, theme, flags, |ui| {
                     ui.set_min_width(VOICE_CARD_WIDTH);
@@ -335,6 +346,7 @@ impl BrandShowcase {
                         -0.01,
                         Some(26.0),
                         colors.text_display(),
+                        Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
                     )));
                     ui.add_space(spacing::SPACE_1);
                     ui.add(egui::Label::new(specimen_job(
@@ -342,6 +354,7 @@ impl BrandShowcase {
                         TypeStyle::Caption,
                         theme,
                         colors.text_body(),
+                        Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
                     )));
                 });
                 ui.add_space(spacing::SPACE_3);
@@ -399,6 +412,7 @@ impl BrandShowcase {
                                 -0.01,
                                 Some(24.0),
                                 ink,
+                                Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
                             )));
                         });
                     if index % 2 == 1 {
@@ -417,6 +431,7 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
+            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
         )));
         ui.add_space(spacing::SPACE_2);
         ui.horizontal(|ui| {
@@ -441,6 +456,7 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
+            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
         )))
     }
 }

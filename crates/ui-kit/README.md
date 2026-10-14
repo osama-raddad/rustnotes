@@ -6,15 +6,15 @@ shadows, type scale), the typography stack with self-hosted fonts, the
 interaction states and focus ring, the Material Symbols icon catalogue,
 the logo mesh, and the 22 components built on them. Like
 `rustnotes-core`, the crate is pure egui — no window, GL or platform
-glue; the gallery hosts itself on eframe (desktop and iOS simulator)
-for demo purposes only.
+glue; the gallery app (`crates/ui-kit-gallery`) hosts it for the demo.
 
 ## Run the gallery
 
 ```sh
-cargo run -p ui-kit --example gallery        # desktop window
-just run-ios app=ui-kit-gallery              # iOS simulator (boots one if needed)
-just ios app=ui-kit-gallery                  # or: build the .app bundle only
+cargo run -p ui-kit-gallery               # desktop window
+just run-ios app=ui-kit-gallery           # iOS simulator (boots one if needed)
+just ios-install app=ui-kit-gallery       # connected iPhone (sign + install + launch)
+just run-android app=ui-kit-gallery       # Android device or emulator
 ```
 
 The gallery is the kit's demo surface and its QA: the bar-plus-tabs
@@ -23,15 +23,32 @@ component live in the active theme. The bar's Theme menu switches all
 six themes and the reduced-motion and reduced-transparency flags; the
 choice holds for the session.
 
-On iOS the example hosts itself the way `crates/rustnotes` does —
-wgpu/Metal (eframe's glow path needs glutin, which has no iOS backend)
-plus the UIKit glue an example demo needs, vendored in
-`examples/gallery/ios.rs`: safe-area insets that include the keyboard,
-wgpu limits the iOS Metal devices meet, and an NSLog panic hook. The
-kit itself stays pure egui with no host; the eframe and objc2
-dependencies are dev-dependencies, target-gated per renderer. The
-gallery has no Android packaging (an example has no cdylib
-`android_main`); the Android recipes error out for it by design.
+## The gallery app and mobile input
+
+`crates/ui-kit-gallery` is a real app crate (bin + cdylib) hosted by
+`crates/rustnotes` the way `hello-mobile` is: the host supplies the
+platform glue (iOS safe-area and keyboard observers, wgpu limits;
+Android window insets, night mode, font scale) and the app implements
+the host's `App` seam. The kit stays pure egui.
+
+Two mobile-input facts live in the app crate:
+
+- The chrome honours the safe-area insets itself (egui hands the app a
+  root that covers the whole viewport); the margins behind the insets
+  are painted with the live theme's canvas.
+- Touch scrolling runs through a small shim in `GalleryApp`'s
+  `filter_input`: on iOS the finger's drag drives the page's scroll
+  offset directly (egui's own touch-to-scroll fights itself to a
+  standstill there, and its wheel path is pointer-hover-gated during a
+  drag); on Android the touches pass through to egui untouched. The
+  shim is covered by headless input tests (`src/input_tests.rs`) that
+  also pin the tap and wheel paths.
+
+On a phone-width window the bar drops its nav links and call to action
+(the Tabs strip switches panels) and the form grids stack; the
+specimen rows scroll sideways as the web previews do. The Brand tab's
+showcase pages still lay their cards out in wide rows — phone-tight
+rows are a follow-up.
 
 ## Using the kit in an egui app
 

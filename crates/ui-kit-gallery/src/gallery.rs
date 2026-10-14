@@ -46,18 +46,16 @@
 //! trio, the glass panes) scroll horizontally instead of clipping
 //! their tails, the way the web previews scroll the same rows.
 //!
-//! The host split, following `crates/rustnotes`: desktop runs the glow
-//! renderer with accesskit, iOS runs wgpu/Metal (eframe's glow path
-//! needs glutin, which has no iOS backend) with the UIKit glue the
-//! demo needs vendored in `ios.rs` — safe-area insets that include the
-//! keyboard, and wgpu limits the iOS Metal devices meet. Package the
-//! iOS build with `just ios app=ui-kit-gallery`, or end to end with
-//! `just run-ios app=ui-kit-gallery`.
+//! This module is the app's whole UI, hosted by the `rustnotes` host
+//! through `GalleryApp` (lib.rs): the host supplies the platform glue
+//! (safe areas, keyboard, appearance, wgpu limits, insets) and calls
+//! [`Gallery::chrome`] as the root UI each frame. Run it on desktop with
+//! `cargo run -p ui-kit-gallery`, on the iOS simulator with
+//! `just run-ios app=ui-kit-gallery`, on a connected iPhone with
+//! `just ios-install app=ui-kit-gallery`, and on Android with
+//! `just run-android app=ui-kit-gallery`.
 
-#[cfg(target_os = "ios")]
-mod ios;
-
-use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
+use egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
 use ui_kit::components::badge::{Badge, IconButton};
 use ui_kit::components::banner::{Banner, BannerEvent, BannerTone};
@@ -78,7 +76,7 @@ use ui_kit::components::{
     BrandShowcase, Card, Cover, EditorialCard, FocusRing, LiquidGlass, MetricCard, ThemesShowcase,
 };
 use ui_kit::gallery_copy as copy;
-use ui_kit::icon::{icon, icon_active, install as install_icons, IconSize};
+use ui_kit::icon::{icon, icon_active, IconSize};
 use ui_kit::icons::{Icon, CATEGORY_GROUPS};
 use ui_kit::logo::Logo;
 use ui_kit::states::{self, UiKitFlags};
@@ -86,53 +84,33 @@ use ui_kit::theme::{egui_shadow, ThemeId};
 use ui_kit::tokens::{radii, spacing, ThemeColors};
 use ui_kit::typography::{install, specimen_job, TrackedLabel, TypeStyle};
 
-fn main() -> eframe::Result {
-    // Panics go through NSLog on iOS: stderr is unreadable there.
-    #[cfg(target_os = "ios")]
-    ios::install_panic_hook();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(copy::APP_TITLE)
-            .with_inner_size([1000.0, 780.0]),
-        // Glow on desktop; wgpu/Metal on iOS (eframe's glow path needs
-        // glutin, which has no iOS backend) — the same split as the
-        // rustnotes host, with the iOS Metal limits from the glue.
-        #[cfg(target_os = "ios")]
-        renderer: eframe::Renderer::Wgpu,
-        #[cfg(not(target_os = "ios"))]
-        renderer: eframe::Renderer::Glow,
-        #[cfg(target_os = "ios")]
-        wgpu_options: ios::wgpu_options(),
-        ..Default::default()
-    };
-    eframe::run_native(
-        copy::APP_TITLE,
-        options,
-        Box::new(|cc| {
-            let theme = ThemeId::Light;
-            // Every theme's faces, not just the live one: the Brand
-            // tab's theme cards set their own themes' display faces,
-            // and the installs are additive by design.
-            for id in ThemeId::ALL {
-                install(*id, &cc.egui_ctx);
-            }
-            install_icons(&cc.egui_ctx);
-            theme.apply(&cc.egui_ctx);
-            Ok(Box::new(Gallery {
-                theme,
-                flags: UiKitFlags::default(),
-                filters: [false; 4],
-                saved_chip: true,
-                form: ProjectForm::populated(),
-                choices: ChoiceDemos::populated(),
-                tab: 0,
-                banners: BannerDemos::default(),
-                snackbar: SnackbarHost::new(),
-                search: String::new(),
-                search_open: false,
-            }))
-        }),
-    )
+/// The width under which the gallery switches to its phone layout: the
+/// bar drops its nav links (the Tabs strip below already switches
+/// panels) and its call to action, and two-column grids stack. 600 is
+/// the design system's own compact breakpoint (`breakpoint-compact`).
+const NARROW_WIDTH: f32 = 600.0;
+
+impl Gallery {
+    /// The gallery's starting state: the Brand tab, every demo
+    /// populated.
+    pub(crate) fn new() -> Self {
+        Self {
+            theme: ThemeId::Light,
+            flags: UiKitFlags::default(),
+            filters: [false; 4],
+            saved_chip: true,
+            form: ProjectForm::populated(),
+            choices: ChoiceDemos::populated(),
+            tab: 0,
+            scroll_offset: 0.0,
+            touch_scrolling: false,
+            last_scroll_offset: egui::Vec2::ZERO,
+            banners: BannerDemos::default(),
+            snackbar: SnackbarHost::new(),
+            search: String::new(),
+            search_open: false,
+        }
+    }
 }
 
 /// A specimen row that can outgrow the page: laid out horizontally
@@ -164,11 +142,16 @@ fn radio_options<T: Copy>(values: &[T], labels: &[&'static str]) -> Vec<RadioOpt
         .collect()
 }
 
-struct Gallery {
-    theme: ThemeId,
+/// The gallery's whole UI state and every panel. Constructed with
+/// [`Gallery::new`], driven each frame by [`Gallery::chrome`].
+pub struct Gallery {
+    /// The live theme; read by the app crate to paint the viewport
+    /// margins behind the safe areas.
+    pub(crate) theme: ThemeId,
     /// The kit flags this host passes down, standing in for the web
-    /// system's reduced-motion and reduced-transparency media queries.
-    flags: UiKitFlags,
+    /// system's reduced-motion and reduced-transparency media queries;
+    /// the host maps the OS reduce-motion preference onto them.
+    pub(crate) flags: UiKitFlags,
     /// The practice-area filter chips' selected states, so the chips
     /// demo section toggles live.
     filters: [bool; 4],
@@ -182,7 +165,14 @@ struct Gallery {
     choices: ChoiceDemos,
     /// The active gallery panel, driven by the tab strip and the
     /// bar's nav links alike.
-    tab: usize,
+    pub(crate) tab: usize,
+    /// The page's scroll offset: driven by the touch-scroll shim while
+    /// a finger drags (`touch_scrolling`), and fed back from the
+    /// ScrollArea every frame so the wheel path and clamping hold.
+    pub(crate) scroll_offset: f32,
+    pub(crate) touch_scrolling: bool,
+    /// The main scroll area's offset after the last frame (tests).
+    pub(crate) last_scroll_offset: egui::Vec2,
     /// Which of the dismissible banner demos still hold their
     /// banners; the warning and the error stay until resolved.
     banners: BannerDemos,
@@ -306,7 +296,13 @@ fn type_section(ui: &mut egui::Ui, theme: ThemeId) {
                 color,
             ));
         } else {
-            ui.add(egui::Label::new(specimen_job(sample, *style, theme, color)));
+            ui.add(egui::Label::new(specimen_job(
+                sample,
+                *style,
+                theme,
+                color,
+                Some(ui.available_width()),
+            )));
         }
         ui.add_space(spacing::SPACE_1);
         let meta = format!(
@@ -322,6 +318,7 @@ fn type_section(ui: &mut egui::Ui, theme: ThemeId) {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
+            Some(ui.available_width()),
         )));
         ui.add_space(spacing::SPACE_4);
     }
@@ -370,6 +367,7 @@ fn state_tile(
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
+            Some(ui.available_width()),
         )));
     });
 }
@@ -454,6 +452,7 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -488,6 +487,7 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
                     TypeStyle::Caption,
                     theme,
                     colors.text_muted(),
+                    Some(ui.available_width()),
                 )));
             });
             ui.add_space(spacing::SPACE_2);
@@ -517,6 +517,7 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
                     TypeStyle::Caption,
                     theme,
                     colors.text_muted(),
+                    Some(ui.available_width()),
                 )));
             });
             ui.add_space(spacing::SPACE_2);
@@ -567,6 +568,7 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
                     TypeStyle::Caption,
                     theme,
                     colors.text_muted(),
+                    Some(ui.available_width()),
                 )));
             });
             ui.add_space(spacing::SPACE_2);
@@ -601,6 +603,7 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
                     TypeStyle::Caption,
                     theme,
                     colors.text_muted(),
+                    Some(ui.available_width()),
                 )));
             });
             ui.add_space(spacing::SPACE_2);
@@ -611,6 +614,7 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 
     for (category, icons) in CATEGORY_GROUPS {
@@ -635,6 +639,7 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
                         TypeStyle::Caption,
                         theme,
                         colors.text_muted(),
+                        Some(ui.available_width()),
                     )));
                 });
                 ui.add_space(spacing::SPACE_2);
@@ -665,6 +670,7 @@ fn logo_band(
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -728,6 +734,7 @@ fn logo_section(ui: &mut egui::Ui, theme: ThemeId) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -751,6 +758,7 @@ fn card_specimen(
             TypeStyle::Mono,
             theme,
             colors.text_body(),
+            Some(ui.available_width()),
         )));
         ui.add_space(spacing::SPACE_1);
         ui.add(egui::Label::new(specimen_job(
@@ -758,6 +766,7 @@ fn card_specimen(
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
+            Some(ui.available_width()),
         )));
     });
 }
@@ -1077,6 +1086,7 @@ fn glass_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -1113,6 +1123,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 
     ui.add_space(spacing::SPACE_3);
@@ -1132,6 +1143,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 
     ui.add_space(spacing::SPACE_3);
@@ -1160,6 +1172,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 
     ui.add_space(spacing::SPACE_3);
@@ -1168,6 +1181,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -1209,6 +1223,7 @@ fn chips_group(
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 
     ui.add_space(spacing::SPACE_3);
@@ -1238,6 +1253,7 @@ fn chips_group(
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -1269,6 +1285,7 @@ fn badges_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -1422,45 +1439,62 @@ fn email_is_valid(email: &str) -> bool {
     }
 }
 
+/// The form's left column: the project name and the email with its
+/// validate-on-leave rule.
+fn fields_left(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
+    TextField::new(copy::FIELD_NAME_LABEL, &mut form.name)
+        .placeholder(copy::FIELD_NAME_PLACEHOLDER)
+        .hint(copy::FIELD_NAME_HINT)
+        .ui(ui, theme, flags);
+
+    // The email validates when the person leaves the field, not
+    // while they type: the first leave arms it, and the error
+    // clears as soon as the address is fixed.
+    let invalid = form.email_touched && !email_is_valid(&form.email);
+    let mut email = TextField::new(copy::FIELD_EMAIL_LABEL, &mut form.email)
+        .placeholder(copy::FIELD_EMAIL_PLACEHOLDER)
+        .hint(copy::FIELD_EMAIL_HINT);
+    if invalid {
+        email = email.error(copy::EMAIL_ERROR);
+    }
+    let email_field = email.ui(ui, theme, flags);
+    if email_field.lost_focus {
+        form.email_touched = true;
+    }
+}
+
+/// The form's right column: the search field and the locked reference.
+fn fields_right(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
+    TextField::new(copy::FIELD_SEARCH_LABEL, &mut form.search)
+        .placeholder(copy::SEARCH_PLACEHOLDER)
+        .leading_icon(Icon::Search)
+        .ui(ui, theme, flags);
+
+    TextField::new(copy::FIELD_REFERENCE_LABEL, &mut form.reference)
+        .disabled()
+        .hint(copy::SET_BY_CONTRACT)
+        .ui(ui, theme, flags);
+}
+
 /// The fields group: the project-details form's text fields, the
-/// preview's own grid of variants as live controls.
+/// preview's own grid of variants as live controls. Wide windows set
+/// the two columns side by side as the preview does; phone widths
+/// stack them.
 fn fields_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
     let colors = theme.colors();
     ui.label(copy::FIELDS_LABEL);
     ui.add_space(spacing::SPACE_2);
-    ui.columns(2, |columns| {
-        let (left, right) = columns.split_at_mut(1);
-
-        TextField::new(copy::FIELD_NAME_LABEL, &mut form.name)
-            .placeholder(copy::FIELD_NAME_PLACEHOLDER)
-            .hint(copy::FIELD_NAME_HINT)
-            .ui(&mut left[0], theme, flags);
-
-        // The email validates when the person leaves the field, not
-        // while they type: the first leave arms it, and the error
-        // clears as soon as the address is fixed.
-        let invalid = form.email_touched && !email_is_valid(&form.email);
-        let mut email = TextField::new(copy::FIELD_EMAIL_LABEL, &mut form.email)
-            .placeholder(copy::FIELD_EMAIL_PLACEHOLDER)
-            .hint(copy::FIELD_EMAIL_HINT);
-        if invalid {
-            email = email.error(copy::EMAIL_ERROR);
-        }
-        let email_field = email.ui(&mut left[0], theme, flags);
-        if email_field.lost_focus {
-            form.email_touched = true;
-        }
-
-        TextField::new(copy::FIELD_SEARCH_LABEL, &mut form.search)
-            .placeholder(copy::SEARCH_PLACEHOLDER)
-            .leading_icon(Icon::Search)
-            .ui(&mut right[0], theme, flags);
-
-        TextField::new(copy::FIELD_REFERENCE_LABEL, &mut form.reference)
-            .disabled()
-            .hint(copy::SET_BY_CONTRACT)
-            .ui(&mut right[0], theme, flags);
-    });
+    if ui.available_width() < NARROW_WIDTH {
+        fields_left(ui, theme, flags, form);
+        ui.add_space(spacing::SPACE_4);
+        fields_right(ui, theme, flags, form);
+    } else {
+        ui.columns(2, |columns| {
+            let (left, right) = columns.split_at_mut(1);
+            fields_left(&mut left[0], theme, flags, form);
+            fields_right(&mut right[0], theme, flags, form);
+        });
+    }
 
     // The textarea, spanning both columns.
     TextField::new(copy::FIELD_BRIEF_LABEL, &mut form.brief)
@@ -1473,64 +1507,81 @@ fn fields_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mu
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
+}
+
+/// The selects' left column: the region and the delivery office.
+fn selects_left(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
+    let regions = pairs(REGION_VALUES, copy::REGIONS);
+    let offices = pairs(OFFICE_VALUES, copy::OFFICES);
+    let region = Select::new(copy::SELECT_REGION_LABEL)
+        .options(&regions)
+        .selected(form.region)
+        .hint(copy::SELECT_REGION_HINT)
+        .ui(ui, theme, flags);
+    if let Some(picked) = region.committed {
+        form.region = Some(picked);
+    }
+
+    let office = Select::new(copy::SELECT_OFFICE_LABEL)
+        .options(&offices)
+        .selected(form.office)
+        .hint(copy::SELECT_OFFICE_HINT)
+        .ui(ui, theme, flags);
+    if let Some(picked) = office.committed {
+        form.office = Some(picked);
+    }
+}
+
+/// The selects' right column: the team size and the locked currency.
+fn selects_right(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
+    let teams = pairs(TEAM_SIZE_VALUES, copy::TEAM_SIZES);
+    let currencies = pairs(&[Currency::Sek], copy::CURRENCIES);
+    let team = Select::new(copy::SELECT_TEAM_LABEL)
+        .options(&teams)
+        .selected(form.team_size)
+        .placeholder(copy::SELECT_TEAM_PLACEHOLDER)
+        .hint(copy::SELECT_TEAM_HINT)
+        .ui(ui, theme, flags);
+    if let Some(picked) = team.committed {
+        form.team_size = Some(picked);
+    }
+
+    Select::new(copy::SELECT_CURRENCY_LABEL)
+        .options(&currencies)
+        .selected(Some(Currency::Sek))
+        .disabled()
+        .hint(copy::SET_BY_CONTRACT)
+        .ui(ui, theme, flags);
 }
 
 /// The selects group: the region with a choice made, the team size on
 /// its placeholder, a nine-office list that scrolls, and the locked
-/// currency.
+/// currency. Wide windows pair the columns as the preview does; phone
+/// widths stack them.
 fn selects_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
     let colors = theme.colors();
     ui.label(copy::SELECTS_LABEL);
     ui.add_space(spacing::SPACE_2);
-    let regions = pairs(REGION_VALUES, copy::REGIONS);
-    let offices = pairs(OFFICE_VALUES, copy::OFFICES);
-    let teams = pairs(TEAM_SIZE_VALUES, copy::TEAM_SIZES);
-    let currencies = pairs(&[Currency::Sek], copy::CURRENCIES);
-    ui.columns(2, |columns| {
-        let (left, right) = columns.split_at_mut(1);
-
-        let region = Select::new(copy::SELECT_REGION_LABEL)
-            .options(&regions)
-            .selected(form.region)
-            .hint(copy::SELECT_REGION_HINT)
-            .ui(&mut left[0], theme, flags);
-        if let Some(picked) = region.committed {
-            form.region = Some(picked);
-        }
-
-        let office = Select::new(copy::SELECT_OFFICE_LABEL)
-            .options(&offices)
-            .selected(form.office)
-            .hint(copy::SELECT_OFFICE_HINT)
-            .ui(&mut left[0], theme, flags);
-        if let Some(picked) = office.committed {
-            form.office = Some(picked);
-        }
-
-        let team = Select::new(copy::SELECT_TEAM_LABEL)
-            .options(&teams)
-            .selected(form.team_size)
-            .placeholder(copy::SELECT_TEAM_PLACEHOLDER)
-            .hint(copy::SELECT_TEAM_HINT)
-            .ui(&mut right[0], theme, flags);
-        if let Some(picked) = team.committed {
-            form.team_size = Some(picked);
-        }
-
-        Select::new(copy::SELECT_CURRENCY_LABEL)
-            .options(&currencies)
-            .selected(Some(Currency::Sek))
-            .disabled()
-            .hint(copy::SET_BY_CONTRACT)
-            .ui(&mut right[0], theme, flags);
-    });
+    if ui.available_width() < NARROW_WIDTH {
+        selects_left(ui, theme, flags, form);
+        ui.add_space(spacing::SPACE_4);
+        selects_right(ui, theme, flags, form);
+    } else {
+        ui.columns(2, |columns| {
+            let (left, right) = columns.split_at_mut(1);
+            selects_left(&mut left[0], theme, flags, form);
+            selects_right(&mut right[0], theme, flags, form);
+        });
+    }
 
     ui.add(egui::Label::new(specimen_job(
         copy::SELECTS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -1746,6 +1797,7 @@ fn choice_controls_section(
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -1815,6 +1867,7 @@ fn banners_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, demos: &
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -1872,6 +1925,7 @@ fn snackbars_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, host: 
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
+        Some(ui.available_width()),
     )));
 }
 
@@ -1918,7 +1972,7 @@ impl Gallery {
     /// scroll-padding-top reserve is the bar-and-clearance the panel
     /// provides here). The wordmark, the nav links, the search
     /// affordance, the theme menu and the one call to action.
-    fn app_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn app_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, narrow: bool) {
         let theme = self.theme;
         let flags = self.flags;
         TopAppBar::new().ui(ui, theme, &flags, |ui| {
@@ -1929,25 +1983,31 @@ impl Gallery {
                 ui.add_space(GROUP_GAP);
 
                 // The primary nav: the panel links, the current one
-                // carrying the indicator underline.
-                for (index, label) in copy::TABS.iter().enumerate() {
-                    if NavLink::new(label, self.tab == index)
-                        .ui(ui, theme, &flags)
-                        .clicked()
-                    {
-                        self.tab = index;
+                // carrying the indicator underline. Phone-width windows
+                // skip them (the Tabs strip switches panels); the links
+                // return the moment the window widens.
+                if !narrow {
+                    for (index, label) in copy::TABS.iter().enumerate() {
+                        if NavLink::new(label, self.tab == index)
+                            .ui(ui, theme, &flags)
+                            .clicked()
+                        {
+                            self.tab = index;
+                        }
+                        ui.add_space(LINK_GAP);
                     }
-                    ui.add_space(LINK_GAP);
                 }
 
-                // The actions, flush right: the one CTA, the theme
-                // menu, the search affordance.
+                // The actions, flush right: the one CTA (wide windows
+                // only), the theme menu, the search affordance.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    Button::new(copy::START_A_PROJECT)
-                        .small()
-                        .emphasis(ButtonEmphasis::Tertiary)
-                        .ui(ui, theme, &flags);
-                    ui.add_space(ACTIONS_GAP);
+                    if !narrow {
+                        Button::new(copy::START_A_PROJECT)
+                            .small()
+                            .emphasis(ButtonEmphasis::Tertiary)
+                            .ui(ui, theme, &flags);
+                        ui.add_space(ACTIONS_GAP);
+                    }
 
                     // The theme menu: all six themes reachable from
                     // the bar, the reduced flags beside them. The
@@ -2012,6 +2072,7 @@ impl Gallery {
             TypeStyle::Headline2,
             self.theme,
             self.theme.colors().text_display(),
+            Some(ui.available_width()),
         )));
         ui.add_space(spacing::SPACE_4);
 
@@ -2090,55 +2151,99 @@ impl Gallery {
     }
 }
 
-impl eframe::App for Gallery {
-    /// iOS only: feed egui the safe-area insets (keyboard included)
-    /// winit does not report there. See `ios.rs`.
-    #[cfg(target_os = "ios")]
-    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        ios::apply_safe_area(ctx, raw);
-    }
-
-    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+impl Gallery {
+    /// The window's chrome for one frame: the TopAppBar on Liquid Glass
+    /// in a top panel, so it stays put while the page scrolls beneath
+    /// (the web bar's sticky behaviour; the stylesheet's 96px
+    /// scroll-padding-top reserve is the bar-and-clearance the panel
+    /// provides here), the tabbed content panel, and the snackbar
+    /// floating near the bottom.
+    ///
+    /// The root `Ui` eframe hands the app covers the whole viewport,
+    /// safe areas included (egui's panels do not inset themselves —
+    /// `rustnotes-core`'s scaffold does this for Rust Notes): the
+    /// insets are read here and folded into the panels' outer margins,
+    /// so the bar clears the status bar and Dynamic Island, the content
+    /// clears the home indicator, and the snackbar rides above it. The
+    /// viewport margins behind the insets are painted with the theme's
+    /// canvas by `GalleryApp::ui`, so the fold is seamless.
+    pub(crate) fn chrome(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
+        let insets = ctx.input(|i| i.safe_area_insets()).0;
+        let chrome_margin = |top: f32, bottom: f32| egui::Margin {
+            left: (spacing::SPACE_3 + insets.left) as i8,
+            right: (spacing::SPACE_3 + insets.right) as i8,
+            top: (spacing::SPACE_3 + top) as i8,
+            bottom: (spacing::SPACE_3 + bottom) as i8,
+        };
+        // On a phone-width window the bar carries the brand, the theme
+        // menu and the search affordance only: the nav links and the
+        // call to action would not fit beside the wordmark, and the
+        // Tabs strip below the bar already switches every panel.
+        let narrow = root.available_width() < NARROW_WIDTH;
         // The sticky bar, floating on the canvas with its clearance.
         egui::Panel::top("vynatix-app-bar")
-            .frame(egui::Frame::default().outer_margin(spacing::SPACE_3))
-            .show(root, |ui| self.app_bar(ui, &ctx));
+            .frame(egui::Frame::default().outer_margin(chrome_margin(insets.top, 0.0)))
+            .show(root, |ui| self.app_bar(ui, &ctx, narrow));
 
-        egui::CentralPanel::default().show(root, |ui| {
-            egui::Frame::default()
-                .inner_margin(spacing::SPACE_6)
-                .show(ui, |ui| {
-                    // The Tabs strip: the widget's own real demo, the
-                    // gallery's panel switcher. It stays above the
-                    // scroll, as navigation does.
-                    let tabs =
-                        Tabs::new(copy::TABS)
-                            .selected(self.tab)
-                            .ui(ui, self.theme, &self.flags);
-                    if let Some(moved_to) = tabs.changed {
-                        self.tab = moved_to;
-                    }
-                    ui.add(egui::Label::new(specimen_job(
-                        copy::TABS_NOTE,
-                        TypeStyle::Caption,
-                        self.theme,
-                        self.theme.colors().text_muted(),
-                    )));
-
-                    ui.add_space(spacing::SPACE_4);
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        match self.tab {
-                            0 => self.brand_panel(ui),
-                            1 => self.foundations_panel(ui),
-                            2 => self.components_panel(ui),
-                            _ => self.feedback_panel(ui),
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default().outer_margin(egui::Margin {
+                left: insets.left as i8,
+                right: insets.right as i8,
+                top: 0,
+                bottom: insets.bottom as i8,
+            }))
+            .show(root, |ui| {
+                egui::Frame::default()
+                    .inner_margin(spacing::SPACE_6)
+                    .show(ui, |ui| {
+                        // The Tabs strip: the widget's own real demo, the
+                        // gallery's panel switcher. It stays above the
+                        // scroll, as navigation does.
+                        let tabs = Tabs::new(copy::TABS).selected(self.tab).ui(
+                            ui,
+                            self.theme,
+                            &self.flags,
+                        );
+                        if let Some(moved_to) = tabs.changed {
+                            self.tab = moved_to;
                         }
-                        ui.add_space(spacing::SPACE_6);
-                    });
-                });
-        });
+                        ui.add(egui::Label::new(specimen_job(
+                            copy::TABS_NOTE,
+                            TypeStyle::Caption,
+                            self.theme,
+                            self.theme.colors().text_muted(),
+                            Some(ui.available_width()),
+                        )));
 
+                        ui.add_space(spacing::SPACE_4);
+                        // The default scroll source: touch drags arrive as
+                        // Event::Scroll through the app's scroll shim
+                        // (GalleryApp::filter_input), so the ScrollArea
+                        // needs neither egui's drag-to-scroll (unreliable
+                        // on the mobile backends) nor DragScroll::Always
+                        // (which eats clicks in egui 0.36).
+                        let scroll = if self.touch_scrolling {
+                            egui::ScrollArea::vertical().vertical_scroll_offset(self.scroll_offset)
+                        } else {
+                            egui::ScrollArea::vertical()
+                        };
+                        let out = scroll.show(ui, |ui| {
+                            match self.tab {
+                                0 => self.brand_panel(ui),
+                                1 => self.foundations_panel(ui),
+                                2 => self.components_panel(ui),
+                                _ => self.feedback_panel(ui),
+                            }
+                            ui.add_space(spacing::SPACE_6);
+                        });
+                        self.scroll_offset = out.state.offset.y;
+                        self.touch_scrolling = false;
+                        self.last_scroll_offset = out.state.offset;
+                    });
+            });
+
+        // The snackbar host
         // The snackbar host: the one visible message floats near the
         // window's bottom, centred, 24px above the edge. Its action
         // runs here, where the host knows what it enqueued.

@@ -3273,13 +3273,20 @@ dependencies = [
 name = "ui-kit"
 version = "0.1.0"
 dependencies = [
+ "egui",
+]
+
+[[package]]
+name = "ui-kit-gallery"
+version = "0.1.0"
+dependencies = [
+ "android-activity",
  "eframe",
  "egui",
+ "env_logger",
  "log",
- "objc2 0.6.5",
- "objc2-core-foundation",
- "objc2-foundation 0.3.2",
- "objc2-ui-kit 0.3.2",
+ "rustnotes",
+ "ui-kit",
 ]
 
 [[package]]

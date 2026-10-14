@@ -525,8 +525,10 @@ fn tracked_job(
     tracking_em: f32,
     line_height: Option<f32>,
     color: Color32,
+    wrap_width: Option<f32>,
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_width.unwrap_or(f32::INFINITY);
     let spacing = tracking_em * font_id.size;
     job.append(
         text,
@@ -543,14 +545,17 @@ fn tracked_job(
 }
 
 /// `text` set as the style in the theme: the specimen's own font, size,
-/// tracking and line height, in `color`. The eyebrow usually goes
-/// through [`TrackedLabel`] instead, which uppercases; this job is for
-/// every other style and for multi-line copy.
+/// tracking and line height, in `color`, wrapping at `wrap_width` (the
+/// containing `Ui`'s available width) so long copy flows instead of
+/// overflowing. The eyebrow usually goes through [`TrackedLabel`]
+/// instead, which uppercases; this job is for every other style and
+/// for multi-line copy.
 pub fn specimen_job(
     text: &str,
     style: TypeStyle,
     theme: ThemeId,
     color: Color32,
+    wrap_width: Option<f32>,
 ) -> egui::text::LayoutJob {
     tracked_job(
         text,
@@ -558,6 +563,7 @@ pub fn specimen_job(
         style.tracking(),
         Some(style.line_height()),
         color,
+        wrap_width,
     )
 }
 
@@ -567,15 +573,17 @@ pub fn specimen_job(
 /// one of the specimen's (the metric figure's −4% at 56px, the
 /// editorial headline's −2% at 24px). Unlike [`TrackedLabel`] this
 /// never uppercases: figures and headlines keep their case. The job
-/// wraps at the containing `Ui`'s wrap width, as any label does.
+/// wraps at `wrap_width` — pass the containing `Ui`'s available width;
+/// `None` keeps the line unbroken (single-line labels only).
 pub fn tracked_text(
     text: &str,
     font_id: FontId,
     tracking_em: f32,
     line_height: Option<f32>,
     color: Color32,
+    wrap_width: Option<f32>,
 ) -> egui::text::LayoutJob {
-    tracked_job(text, font_id, tracking_em, line_height, color)
+    tracked_job(text, font_id, tracking_em, line_height, color, wrap_width)
 }
 
 /// The eyebrow widget: a single-line label tracked open at the style's
@@ -624,6 +632,7 @@ impl<'a> TrackedLabel<'a> {
             self.tracking_em,
             None,
             self.color,
+            None,
         )
     }
 }
@@ -838,6 +847,7 @@ mod tests {
             -0.04,
             Some(56.0),
             Color32::BLACK,
+            None,
         );
         assert_eq!(job.text, "714k", "figures keep their case");
         assert_eq!(job.sections.len(), 1);
@@ -946,8 +956,13 @@ mod tests {
     fn specimen_jobs_carry_their_tracking_and_line_height() {
         for theme in ThemeId::ALL {
             for style in TypeStyle::ALL {
-                let job =
-                    super::specimen_job("Quiet is the new loud.", *style, *theme, Color32::BLACK);
+                let job = super::specimen_job(
+                    "Quiet is the new loud.",
+                    *style,
+                    *theme,
+                    Color32::BLACK,
+                    None,
+                );
                 let name = style.name();
                 assert_eq!(job.text, "Quiet is the new loud.", "{name}: text intact");
                 assert_eq!(job.sections.len(), 1, "{name}: one section");
@@ -1021,6 +1036,7 @@ mod tests {
                 TypeStyle::Eyebrow,
                 ThemeId::Light,
                 Color32::BLACK,
+                Some(ui.available_width()),
             );
             let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
             let advances: Vec<f32> = galley.rows[0]

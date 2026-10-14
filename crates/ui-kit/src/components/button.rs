@@ -299,6 +299,7 @@ fn label_job(label: &str, font_id: egui::FontId) -> egui::text::LayoutJob {
         LABEL_TRACKING_EM,
         None,
         Color32::PLACEHOLDER,
+        None,
     )
 }
 
