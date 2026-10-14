@@ -92,7 +92,10 @@ pub(crate) fn card_columns(available: f32, width: f32, gap: f32, max: usize) -> 
 /// past the window's edge. The up-front width is what lets the rows
 /// break, and it bounds a card whose own rows reach for all the width
 /// they are given (a right-aligned pill, a full-width rule). Rows hang
-/// from their tops, the cards' heights their own.
+/// from their tops, the cards' heights their own. The gap is between
+/// the cards only: a child `Ui` clones its parent's style, so each cell
+/// hands its card the spacing the caller laid out with, and the card's
+/// own rows keep egui's gaps rather than the row's.
 pub(crate) fn card_rows<T>(
     ui: &mut Ui,
     width: f32,
@@ -101,6 +104,7 @@ pub(crate) fn card_rows<T>(
     items: &[T],
     mut card: impl FnMut(&mut Ui, &T),
 ) {
+    let inner = ui.spacing().item_spacing;
     let per_row = card_columns(ui.available_width(), width, gap, max);
     for (index, row) in items.chunks(per_row).enumerate() {
         if index > 0 {
@@ -113,7 +117,10 @@ pub(crate) fn card_rows<T>(
                 ui.allocate_ui_with_layout(
                     Vec2::new(width, 0.0),
                     egui::Layout::top_down(egui::Align::Min),
-                    |ui| card(ui, item),
+                    |ui| {
+                        ui.spacing_mut().item_spacing = inner;
+                        card(ui, item);
+                    },
                 );
             }
         });
@@ -122,17 +129,21 @@ pub(crate) fn card_rows<T>(
 
 /// Lay a showcase out headless in a column `width` wide, every theme's
 /// faces installed in a warm-up pass, and hand back its laid-out size
-/// beside every text it painted with that text's top edge: the
+/// beside every text it painted with that text's painted rect: the
 /// showcases' layout tests read their rows off where the card titles
-/// land. The column runs tall so nothing is culled.
+/// land, and the gaps inside a card off where its texts sit. The
+/// column runs tall so nothing is culled.
 #[cfg(test)]
-pub(crate) fn lay_out(width: f32, mut paint: impl FnMut(&mut Ui)) -> (Vec2, Vec<(String, f32)>) {
-    fn walk(shape: &egui::Shape, found: &mut Vec<(String, f32)>) {
+pub(crate) fn lay_out(
+    width: f32,
+    mut paint: impl FnMut(&mut Ui),
+) -> (Vec2, Vec<(String, egui::Rect)>) {
+    fn walk(shape: &egui::Shape, found: &mut Vec<(String, egui::Rect)>) {
         match shape {
             egui::Shape::Text(text) => {
                 found.push((
                     text.galley.text().to_owned(),
-                    text.pos.y + text.galley.rect.top(),
+                    text.galley.rect.translate(text.pos.to_vec2()),
                 ));
             }
             egui::Shape::Vec(nested) => nested.iter().for_each(|shape| walk(shape, found)),
@@ -175,14 +186,14 @@ pub(crate) fn lay_out(width: f32, mut paint: impl FnMut(&mut Ui)) -> (Vec2, Vec<
 /// among them from the top (half a point of slack): how the layout
 /// tests read a grid of cards. A text the layout never painted panics.
 #[cfg(test)]
-pub(crate) fn rows_of(painted: &[(String, f32)], wanted: &[&str]) -> Vec<usize> {
+pub(crate) fn rows_of(painted: &[(String, egui::Rect)], wanted: &[&str]) -> Vec<usize> {
     let tops: Vec<f32> = wanted
         .iter()
         .map(|text| {
             painted
                 .iter()
                 .find(|(seen, _)| seen == text)
-                .map(|(_, top)| *top)
+                .map(|(_, rect)| rect.top())
                 .unwrap_or_else(|| panic!("{text:?} was never painted"))
         })
         .collect();
@@ -515,7 +526,9 @@ impl BrandShowcase {
             2,
             HEADLINE_MODES,
             |ui, (label, example)| {
-                let is_do = label.starts_with("Do");
+                // The verdict word and its separator: a bare "Do" also
+                // opens every "Don't".
+                let is_do = label.starts_with("Do ·");
                 let (fill, ink, glyph) = if is_do {
                     (
                         colors.success_container,
@@ -669,7 +682,32 @@ mod tests {
         PRINCIPLE_HEADLINE, PRINCIPLE_NUMERAL, SECTION_EYEBROW, VOICE_HEADING, VOICE_INTRO,
         VOICE_POSITIONS,
     };
+    use crate::icon::IconSize;
+    use crate::icons::Icon;
     use crate::theme::ThemeId;
+    use crate::tokens::spacing;
+
+    /// The gap between `label` and the `glyph` icon painted on its line,
+    /// read off the painted texts: the label's left edge less the right
+    /// edge of the icon's cell, a small icon's square centred on the
+    /// glyph. The icon is the one whose centre falls inside the label's
+    /// own height, so the pairing holds wherever else the glyph shows. A
+    /// label with no such icon beside it panics.
+    fn icon_to_label(painted: &[(String, egui::Rect)], glyph: Icon, label: &str) -> f32 {
+        let text = painted
+            .iter()
+            .find(|(seen, _)| seen == label)
+            .map(|(_, rect)| *rect)
+            .unwrap_or_else(|| panic!("{label:?} was never painted"));
+        let glyph_text = glyph.as_char().to_string();
+        let cell = painted
+            .iter()
+            .filter(|(seen, _)| *seen == glyph_text)
+            .map(|(_, rect)| *rect)
+            .find(|rect| text.y_range().contains(rect.center().y))
+            .unwrap_or_else(|| panic!("no {glyph:?} icon beside {label:?}"));
+        text.left() - (cell.center().x + IconSize::Sm.px() / 2.0)
+    }
 
     /// The tone spectrum is the four positions the README names, each
     /// with its register word and exactly one example sentence.
@@ -801,7 +839,11 @@ mod tests {
     /// another. (The cards once ran 1044pt past the phone's column: a
     /// wrapped row never breaks before a card, each voice card's top
     /// rule claimed the rest of its line, and the do and don't grid
-    /// kept two 412pt tiles side by side.)
+    /// kept two 412pt tiles side by side.) Inside the cards the spacing
+    /// stays the caller's at every width, the rows' 12pt gap kept to
+    /// the gaps between the cards: each tile's icon sits egui's default
+    /// item spacing and its `space-2` from its label, the do tile's a
+    /// check and the don't tile's a block.
     #[test]
     fn cards_fit_the_column_and_share_rows_where_they_fit() {
         let flags = crate::states::UiKitFlags::default();
@@ -838,6 +880,14 @@ mod tests {
                 pair_rows,
                 "the first do and don't pair's rows at {width}pt"
             );
+            let inner = egui::Spacing::default().item_spacing.x + spacing::SPACE_2;
+            for (label, glyph) in [(pair[0], Icon::CheckCircle), (pair[1], Icon::Block)] {
+                let gap = icon_to_label(&painted, glyph, label);
+                assert!(
+                    (gap - inner).abs() < 0.5,
+                    "at {width}pt the {glyph:?} icon sits {gap}pt from {label:?}, not {inner}pt"
+                );
+            }
         }
     }
 

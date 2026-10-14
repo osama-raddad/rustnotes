@@ -42,11 +42,12 @@ The mobile-input facts live in the app crate:
   On phones the page, the sideways rows and the kit's Tabs strip drag
   from the very first touch (`DragScroll::Always`, which the strip
   takes through `Tabs::drag_to_scroll`); desktop keeps egui's default,
-  which arms the drag only once it has seen a touch, so a mouse drag
-  never scrolls there. The page's scroll area and the Tabs strip each
-  carry their own id salt: an unsalted scroll area takes its id from
-  its `Ui` alone, and while the strip had none it shared the page's
-  state and clamped the page's offset back to zero every frame.
+  which arms the drag only once it has seen a touch: on a mouse-only
+  desktop a drag never scrolls; once the screen has been touched, egui
+  arms it for every pointer. The page's scroll area and the Tabs strip
+  each carry their own id salt: an unsalted scroll area takes its id
+  from its `Ui` alone, and while the strip had none it shared the
+  page's state and clamped the page's offset back to zero every frame.
 - The gallery's labels are not selectable (a gallery is not a
   document), so a drag that starts on text scrolls the page instead of
   selecting it.

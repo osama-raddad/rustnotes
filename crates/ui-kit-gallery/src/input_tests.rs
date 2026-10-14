@@ -403,14 +403,14 @@ fn taps_still_land_after_touches_have_been_seen() {
 }
 
 /// The first touch after launch can be a sideways swipe on the tab
-/// strip, which outgrows a phone: the strip follows that very swipe,
-/// bringing its clipped last tab in, and the swipe is no tap on the tab
-/// under the finger. The taps after it still land: one on the tab the
-/// swipe brought in switches panels, one inside the page dismisses a
-/// banner.
+/// strip, which outgrows a phone, the narrowest common one (360pt) the
+/// most: the strip follows that very swipe, bringing its clipped last
+/// tab in, and the swipe, pressed on Components, is no tap on it. The
+/// taps after it still land: one on the tab the swipe brought in
+/// switches panels, one inside the page dismisses a banner.
 #[test]
 fn a_first_swipe_on_the_tab_strip_scrolls_it_and_taps_still_land() {
-    let mut h = Harness::phone();
+    let mut h = Harness::window(egui::vec2(360.0, PHONE.y));
     // The strip ends at the content panel's inset; Feedback, its last
     // tab, runs past that edge until the strip scrolls.
     let edge = h.window.x - ui_kit::tokens::spacing::SPACE_6;
@@ -420,8 +420,12 @@ fn a_first_swipe_on_the_tab_strip_scrolls_it_and_taps_still_land() {
         "the four tabs must outgrow a phone's strip: Feedback ends at {}, the strip at {edge}",
         before.right()
     );
-    let y = before.center().y;
-    h.swipe(egui::pos2(300.0, y), egui::pos2(40.0, y), 10);
+    // The finger lands on a tab, Components, at its painted centre.
+    let press = h
+        .painted(copy::TABS[2])
+        .expect("the tab strip is painted")
+        .center();
+    h.swipe(press, press - egui::vec2(200.0, 0.0), 10);
     h.idle(30);
     let after = h.painted(copy::TABS[3]).expect("the tab strip is painted");
     assert!(
@@ -430,7 +434,10 @@ fn a_first_swipe_on_the_tab_strip_scrolls_it_and_taps_still_land() {
         before.right(),
         after.right()
     );
-    assert_eq!(h.app.gallery.tab, 0, "a swipe is not a tap on a tab");
+    assert_eq!(
+        h.app.gallery.tab, 0,
+        "a swipe is not a tap on the tab under the finger"
+    );
 
     h.tap(after.center());
     assert_eq!(h.app.gallery.tab, 3, "a tap on Feedback switches panels");

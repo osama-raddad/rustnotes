@@ -148,14 +148,16 @@ impl<'a> Tabs<'a> {
     }
 
     /// Set when a drag scrolls the strip once it outgrows the width,
-    /// the row's [`egui::Window::drag_to_scroll`]. The default is egui's
-    /// own, [`DragScroll::OnTouch`]: a drag scrolls only once egui has
-    /// seen a touch, so a mouse drag on desktop never does. A
-    /// touch-first host passes [`DragScroll::Always`], as for its own
-    /// scroll areas: egui binds a press to its drag target against the
-    /// previous frame, so under `OnTouch` the first swipe after launch
-    /// finds nothing to drag and lands on nothing. The kit carries no
-    /// platform switch of its own; the host knows its screen.
+    /// the strip's counterpart of [`egui::Window::drag_to_scroll`]. The
+    /// default is egui's own, [`DragScroll::OnTouch`]: a drag scrolls
+    /// only once egui has seen a touch, so on a mouse-only desktop a
+    /// drag never scrolls; once the screen has been touched, egui arms
+    /// it for every pointer. A touch-first host passes
+    /// [`DragScroll::Always`], as for its own scroll areas: egui binds a
+    /// press to its drag target against the previous frame, so under
+    /// `OnTouch` the first swipe after launch finds nothing to drag and
+    /// lands on nothing. The kit carries no platform switch of its own;
+    /// the host knows its screen.
     pub const fn drag_to_scroll(mut self, drag_to_scroll: DragScroll) -> Self {
         self.drag_to_scroll = drag_to_scroll;
         self

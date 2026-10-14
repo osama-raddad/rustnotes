@@ -93,14 +93,15 @@ use ui_kit::icons::{Icon, CATEGORY_GROUPS};
 use ui_kit::logo::Logo;
 use ui_kit::states::{self, UiKitFlags};
 use ui_kit::theme::{egui_shadow, ThemeId};
-use ui_kit::tokens::{radii, spacing, ThemeColors};
+use ui_kit::tokens::{breakpoints, radii, spacing, ThemeColors};
 use ui_kit::typography::{install, specimen_job, TrackedLabel, TypeStyle};
 
 /// The width under which the gallery switches to its phone layout: the
 /// bar drops its nav links (the Tabs strip below already switches
-/// panels) and its call to action, and two-column grids stack. 600 is
-/// the design system's own compact breakpoint (`breakpoint-compact`).
-const NARROW_WIDTH: f32 = 600.0;
+/// panels) and its call to action, and two-column grids stack. It is
+/// the design system's own compact breakpoint, the 600 of the
+/// `breakpoint-tablet` token, where its mobile layout ends.
+const NARROW_WIDTH: f32 = breakpoints::BREAKPOINT_TABLET;
 
 /// The page scroll area's id salt. An unsalted `ScrollArea` takes its
 /// id from its `Ui` alone, so two unsalted areas in one `Ui` share one
@@ -152,17 +153,18 @@ impl Gallery {
 
 /// When a drag scrolls the gallery's scroll areas (the page, the
 /// sideways specimen rows and the kit's Tabs strip): from the very
-/// first touch on a phone, never with a desktop mouse. egui's default,
-/// [`DragScroll::OnTouch`], turns drag-to-scroll on only once egui has
-/// seen a touch, and egui binds a press to its drag target against the
-/// previous frame's widgets: on a fresh launch the first finger meets
-/// areas that registered no drag target the frame before, so the first
-/// swipe moves nothing and only the later ones scroll. A phone's
-/// pointer is a finger, so there the areas drag [`DragScroll::Always`].
-/// Desktop keeps the default: a mouse drag never scrolls a page there
-/// (the wheel and the scroll bars do), and a touch screen still arms
-/// the drag once it is touched. The headless tests take the phone
-/// path, so they pin the first swipe.
+/// first touch on a phone, and on desktop only once a touch has been
+/// seen. egui's default, [`DragScroll::OnTouch`], turns drag-to-scroll
+/// on only once egui has seen a touch, and egui binds a press to its
+/// drag target against the previous frame's widgets: on a fresh launch
+/// the first finger meets areas that registered no drag target the
+/// frame before, so the first swipe moves nothing and only the later
+/// ones scroll. A phone's pointer is a finger, so there the areas drag
+/// [`DragScroll::Always`]. Desktop keeps the default: on a mouse-only
+/// desktop a drag never scrolls (the wheel and the scroll bars do);
+/// once the screen has been touched, egui arms it for every pointer.
+/// The headless tests take the phone path, so they pin the first
+/// swipe.
 fn drag_scroll() -> DragScroll {
     if cfg!(any(target_os = "android", target_os = "ios", test)) {
         DragScroll::Always

@@ -17,8 +17,9 @@
 //! the finger, with the kinetic fling on release. On phones the drag is
 //! armed from the first frame, so the very first swipe after launch
 //! scrolls; desktop keeps egui's default, which arms it only once the
-//! touches have told egui the screen is a touch screen, so a mouse drag
-//! never scrolls there (`gallery::drag_scroll` has the why). The
+//! touches have told egui the screen is a touch screen: on a mouse-only
+//! desktop a drag never scrolls; once the screen has been touched, egui
+//! arms it for every pointer (`gallery::drag_scroll` has the why). The
 //! gallery's labels are not selectable (a gallery is not a document),
 //! so a drag that starts on text scrolls instead of selecting it.
 
