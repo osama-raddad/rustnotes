@@ -236,7 +236,10 @@ the reader-facing list.
   a widget holds focus but not how it got there, so the ring tracks the
   last input itself. Key presses and typed text show it, a mouse press
   or touch hides it, and Ctrl/Alt/Cmd chords do not count; a text
-  input's ring ignores the tracking (`focus_ring`).
+  input's ring ignores the tracking (the kit's text field sets that,
+  and a host wrapping egui's own `TextEdit` should too). Keys a widget
+  consumes before the first ring paints, and AccessKit focus requests,
+  go unseen (`focus_ring`).
 - Chrome (hover) state lands one frame late where the focus ring does
   not; popup arrow-key focus lands the frame after the gain; Tab walks
   the radio rows rather than the group as one (`select`, `radio`).

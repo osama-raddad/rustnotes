@@ -12,19 +12,31 @@
 //! Which focus earns the ring is the browsers' `:focus-visible` rule:
 //! focus the keyboard is driving, not focus a pointer or a finger gave.
 //! egui reports that a widget holds focus, never how it got there, and
-//! the kit's widgets take focus on a click so that Tab and the arrow
-//! keys carry on from the one tapped: ringing that focus would leave
-//! every tapped chip or tab circled. So the ring keeps its own account
-//! of the last input. A key press or typed text reads as keyboard; a
-//! mouse press or a touch reads as pointer, and under pointer no ring
-//! is drawn until the next key press. A key chord with Ctrl, Alt or Cmd
-//! is a shortcut and does not count. Before any input the account
-//! reads keyboard, so focus a host requests from code shows the ring.
-//! A [`text_input`](FocusRing::text_input) ring ignores the account,
-//! as browsers ring a focused text field however it got focus. The
-//! first ring to paint in a pass reads that pass's input; every kit
-//! widget paints its ring on every frame, so a screen of kit widgets
-//! misses none of it (a pass in which no ring paints goes unread).
+//! the kit's choice widgets (tabs, checkboxes, radios, toggles,
+//! selects) take focus on a click so that Tab and the arrow keys carry
+//! on from the one tapped: ringing that focus would leave every tapped
+//! tab, checkbox or radio circled. So the ring keeps its own account of
+//! the last input. A key press or typed text reads as keyboard; a mouse
+//! press or a touch reads as pointer, and under pointer no ring is
+//! drawn until the next key press. A key chord with Ctrl, Alt or Cmd is
+//! a shortcut and does not count. Before any input the account reads
+//! keyboard, so focus a host requests from code shows the ring. A
+//! [`text_input`](FocusRing::text_input) ring ignores the account, as
+//! browsers ring a focused text field however it got focus: the kit's
+//! text field does, and a host that wraps egui's own `TextEdit` adds it
+//! too.
+//!
+//! The account is a heuristic with edges. The first ring to paint in a
+//! pass reads that pass's input events, so a pass in which no ring
+//! paints goes unread (every kit widget paints its ring on every frame,
+//! so a screen of kit widgets misses none). A key press that a widget
+//! removes from the event list with `consume_key` or `consume_shortcut`
+//! before that first ring paints is never seen (the kit's own widgets
+//! read keys with `key_pressed`, which leaves the list alone). And
+//! AccessKit focus requests (a screen reader moving focus) and
+//! [`egui::Event::Ime`] leave the account as it was, so focus they move
+//! is ringed or not by whatever input came last. AccessKit is live in
+//! the desktop gallery build.
 //!
 //! Documented deviation: egui 0.36 draws no focus indicator on its own
 //! widgets and exposes no focus styling in `Visuals` (its
@@ -95,7 +107,8 @@ impl FocusRing {
     /// matches a focused element that takes typed text, even after a
     /// mouse press, since the next thing the person does there is type;
     /// the ring then ignores the account of the last input (module
-    /// docs).
+    /// docs). The kit's text field sets it; so should a host that wraps
+    /// egui's own `TextEdit`.
     pub const fn text_input(mut self) -> Self {
         self.text_input = true;
         self
@@ -116,18 +129,18 @@ impl FocusRing {
         response
     }
 
-    /// Paint the treatment around `response` while it holds focus the
-    /// keyboard is driving (the module docs say which focus that is).
-    /// Returns true when the ring went down this frame.
+    /// Paint the treatment around `response` while its focus earns the
+    /// ring (module docs). Returns true when the ring went down this
+    /// frame.
     pub fn paint(self, ui: &Ui, response: &Response, theme: ThemeId, flags: &UiKitFlags) -> bool {
         self.paint_at(ui, response, response.rect, theme, flags)
     }
 
-    /// [`paint`] around an explicit `rect`, reading the focus (and the
-    /// fade stamp) off `response`: for the widgets whose ring belongs
-    /// to one part of a larger hit area — the choice controls' 18px
-    /// box and circle, the toggle's track, each inside a row whose
-    /// label is part of the click target.
+    /// [`paint`](Self::paint) around an explicit `rect`, reading the
+    /// focus (and the fade stamp) off `response`: for the widgets whose
+    /// ring belongs to one part of a larger hit area — the choice
+    /// controls' 18px box and circle, the toggle's track, each inside a
+    /// row whose label is part of the click target.
     pub fn paint_at(
         self,
         ui: &Ui,
@@ -140,7 +153,7 @@ impl FocusRing {
         // press that hides the ring lands frames before the focus it
         // hides (a click completes on release), so a read gated on
         // focus would only ever see the key presses.
-        let keyboard = input_modality(ui.ctx()) == Modality::Keyboard;
+        let keyboard = modality_now(ui.ctx()) == Modality::Keyboard;
         let shown = response.has_focus() && (keyboard || self.text_input);
         let Some(started) = shown_since(ui, response, shown) else {
             return false;
@@ -210,22 +223,32 @@ impl Default for LastInput {
     }
 }
 
-/// What the person last used, read once per pass off the input events
-/// and remembered per viewport in egui's data. A pass that carries no
-/// deciding event (an idle frame, or the later pass of a multi-pass
-/// frame: egui hands a frame's events to its first pass only) leaves
-/// the account as it was.
+/// What the person last used, brought up to date with this pass's
+/// input events and remembered in egui's data.
+///
+/// The first ring to paint in a pass reads the pass's events; the
+/// verdict is cached with the pass number, so every other ring in the
+/// pass takes the same answer without reading again, whatever a widget
+/// does to the event list in between. A pass that carries no deciding
+/// event (an idle frame, or the later pass of a multi-pass frame: egui
+/// hands a frame's events to its first pass only) leaves the account as
+/// it was.
+///
+/// The account is kept per viewport because pass numbers are counted
+/// per viewport: one shared cache would take another viewport's pass
+/// number for a pass it had already read, and skip that pass's input.
 ///
 /// Each context call below is its own statement, never inside another
 /// one's closure: they all take the context lock.
-fn input_modality(ctx: &Context) -> Modality {
-    let id = Id::new("ui_kit::focus_ring::last_input").with(ctx.viewport_id());
-    let pass = ctx.cumulative_pass_nr();
+fn modality_now(ctx: &Context) -> Modality {
+    let viewport = ctx.viewport_id();
+    let id = Id::new("ui_kit::focus_ring::last_input").with(viewport);
+    let pass = ctx.cumulative_pass_nr_for(viewport);
     let mut last = ctx
         .data(|data| data.get_temp::<LastInput>(id))
         .unwrap_or_default();
     if last.read_pass != Some(pass) {
-        let seen = ctx.input(|input| last_modality(&input.events));
+        let seen = ctx.input(|input| deciding_modality(&input.events));
         last.modality = seen.unwrap_or(last.modality);
         last.read_pass = Some(pass);
         ctx.data_mut(|data| data.insert_temp(id, last));
@@ -237,7 +260,7 @@ fn input_modality(ctx: &Context) -> Modality {
 /// pass has one: a press (mouse or touch) is pointer; a key press that
 /// is not a shortcut, or typed text, is keyboard. Releases, moves,
 /// scrolls and the like decide nothing.
-fn last_modality(events: &[Event]) -> Option<Modality> {
+fn deciding_modality(events: &[Event]) -> Option<Modality> {
     events.iter().rev().find_map(|event| match event {
         Event::PointerButton { pressed: true, .. }
         | Event::Touch {
@@ -265,7 +288,7 @@ fn is_shortcut(modifiers: Modifiers) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Key, PointerButton, Pos2, TouchDeviceId, TouchId};
+    use egui::{Key, MouseWheelUnit, PointerButton, Pos2, TouchDeviceId, TouchId, Vec2};
 
     /// The ring paints nothing on an unfocused widget, then every frame
     /// the widget holds the focus requested through egui's own Tab
@@ -320,6 +343,9 @@ mod tests {
         ring: [bool; 2],
         /// Whether each button holds egui focus.
         focus: [bool; 2],
+        /// The highest pass index the frame reached: 0 for a frame that
+        /// ran once, 1 for one whose first pass asked for a second.
+        last_pass: usize,
     }
 
     /// Two plain buttons wrapped the way the kit's widgets are: a
@@ -329,6 +355,7 @@ mod tests {
         ctx: egui::Context,
         text_input: bool,
         centres: [Pos2; 2],
+        ids: [Id; 2],
     }
 
     impl Screen {
@@ -339,6 +366,7 @@ mod tests {
                 ctx: egui::Context::default(),
                 text_input,
                 centres: [Pos2::ZERO; 2],
+                ids: [Id::NULL; 2],
             };
             screen.run(vec![], false);
             screen
@@ -349,14 +377,18 @@ mod tests {
         /// and the readings are the second pass's.
         fn run(&mut self, events: Vec<Event>, two_passes: bool) -> Shown {
             let flags = UiKitFlags::default();
-            let mut input = egui::RawInput::default();
-            input.events.extend(events);
+            let input = egui::RawInput {
+                events,
+                ..Default::default()
+            };
             let mut shown = Shown {
                 ring: [false; 2],
                 focus: [false; 2],
+                last_pass: 0,
             };
             self.ctx
                 .run_ui(input, |ui| {
+                    shown.last_pass = shown.last_pass.max(ui.ctx().current_pass_index());
                     for (index, label) in ["First", "Second"].into_iter().enumerate() {
                         let response = ui.add(egui::Button::new(label));
                         if response.clicked() {
@@ -369,6 +401,7 @@ mod tests {
                         shown.ring[index] = ring.paint(ui, &response, ThemeId::Light, &flags);
                         shown.focus[index] = response.has_focus();
                         self.centres[index] = response.rect.center();
+                        self.ids[index] = response.id;
                     }
                     if two_passes && ui.ctx().current_pass_index() == 0 {
                         ui.ctx().request_discard("focus ring test: a second pass");
@@ -377,10 +410,30 @@ mod tests {
                 .drop_without_applying_deltas();
             shown
         }
+
+        /// The fade stamp the ring keeps for `button`: the input time it
+        /// was first shown, `None` while it is down.
+        fn stamp(&self, button: usize) -> Option<f64> {
+            self.ctx.data(|data| data.get_temp::<f64>(self.ids[button]))
+        }
+
+        /// The input time of the latest frame.
+        fn time(&self) -> f64 {
+            self.ctx.input(|input| input.time)
+        }
     }
 
-    /// The pointer moving to `pos` and pressing or releasing there.
-    fn click_half(pos: Pos2, pressed: bool) -> Vec<Event> {
+    /// The pointer moving to `pos` and pressing there.
+    fn press_at(pos: Pos2) -> Vec<Event> {
+        pointer_button_at(pos, true)
+    }
+
+    /// The pointer moving to `pos` and releasing there.
+    fn release_at(pos: Pos2) -> Vec<Event> {
+        pointer_button_at(pos, false)
+    }
+
+    fn pointer_button_at(pos: Pos2, pressed: bool) -> Vec<Event> {
         vec![
             Event::PointerMoved(pos),
             Event::PointerButton {
@@ -424,54 +477,81 @@ mod tests {
         // focuses the button. The release frame runs two passes, the
         // second with no events at all: the account has to outlive the
         // pass that read it.
-        screen.run(click_half(first, true), false);
-        let clicked = screen.run(click_half(first, false), true);
+        screen.run(press_at(first), false);
+        let clicked = screen.run(release_at(first), true);
+        assert_eq!(clicked.last_pass, 1, "the release frame ran a second pass");
         assert_eq!(clicked.focus, [true, false], "the click focused it");
         assert_eq!(clicked.ring, [false, false], "pointer focus: no ring");
+        assert_eq!(screen.stamp(0), None, "so no fade is running either");
         let idle = screen.run(vec![], false);
         assert_eq!(idle.focus, [true, false]);
         assert_eq!(idle.ring, [false, false], "and none appears idling");
 
-        // Tab hands the focus on; the key press is keyboard use, so
-        // the new focus is ringed (the frame after, when egui has
-        // settled it).
-        screen.run(vec![key_press(Key::Tab, Modifiers::NONE)], false);
-        let tabbed = screen.run(vec![], false);
+        // Tab hands the focus on within its own pass (egui gives it to
+        // the next widget as that widget is created), and the key press
+        // is keyboard use, so the new focus is ringed in the Tab frame
+        // itself, its fade starting there. The idle frame after shows
+        // it holds.
+        let tabbed = screen.run(vec![key_press(Key::Tab, Modifiers::NONE)], false);
         assert_eq!(tabbed.focus, [false, true], "Tab moved the focus on");
         assert_eq!(tabbed.ring, [false, true], "keyboard focus: ringed");
+        assert_eq!(
+            screen.stamp(1),
+            Some(screen.time()),
+            "the fade starts in the Tab frame"
+        );
+        let held = screen.run(vec![], false);
+        assert_eq!(held.focus, [false, true], "and it holds");
+        assert_eq!(held.ring, [false, true]);
     }
 
     /// A shown ring comes down when a mouse button is pressed or a
-    /// finger lands, with the focus kept, and typing brings it back.
+    /// finger lands, with the focus kept, and typing brings it back,
+    /// fading in afresh.
     #[test]
     fn a_press_or_a_touch_takes_the_ring_down_and_typing_brings_it_back() {
         let mut screen = Screen::new(false);
         let [first, _] = screen.centres;
 
-        // Keyboard focus to start with: Tab onto the first button.
-        screen.run(vec![key_press(Key::Tab, Modifiers::NONE)], false);
-        let tabbed = screen.run(vec![], false);
+        // Keyboard focus to start with. Nothing is focused, so Tab
+        // lands on the first button within the Tab frame itself, ringed
+        // there because the key press is keyboard use. The idle frame
+        // after shows it holds.
+        let tabbed = screen.run(vec![key_press(Key::Tab, Modifiers::NONE)], false);
         assert_eq!(tabbed.focus, [true, false]);
         assert_eq!(tabbed.ring, [true, false]);
+        let held = screen.run(vec![], false);
+        assert_eq!(held.focus, [true, false], "and it holds");
+        assert_eq!(held.ring, [true, false]);
 
         // A mouse press on the focused button (and its release, the
-        // click) keeps the focus and hides the ring.
-        let pressed = screen.run(click_half(first, true), false);
+        // click) keeps the focus and hides the ring, its fade stamp
+        // with it.
+        let pressed = screen.run(press_at(first), false);
         assert_eq!(pressed.focus, [true, false], "the press kept the focus");
         assert_eq!(pressed.ring, [false, false], "a mouse press: no ring");
-        let released = screen.run(click_half(first, false), false);
+        assert_eq!(screen.stamp(0), None, "the stamp went with the ring");
+        let released = screen.run(release_at(first), false);
         assert_eq!(released.focus, [true, false]);
         assert_eq!(released.ring, [false, false]);
+        assert_eq!(screen.stamp(0), None);
 
-        // Typed text is keyboard use.
+        // Typed text is keyboard use. The ring fades in afresh: its
+        // stamp is this frame's time, not the time the focus was gained.
         let typed = screen.run(vec![Event::Text("a".to_owned())], false);
         assert_eq!(typed.ring, [true, false], "typing brings the ring back");
+        assert_eq!(
+            screen.stamp(0),
+            Some(screen.time()),
+            "the fade starts in the frame the ring returned"
+        );
 
         // A bare touch start, with no pointer press alongside it to
         // click or move the focus, takes it down again.
         let touched = screen.run(vec![touch(TouchPhase::Start)], false);
         assert_eq!(touched.focus, [true, false], "the touch kept the focus");
         assert_eq!(touched.ring, [false, false], "a touch: no ring");
+        assert_eq!(screen.stamp(0), None);
     }
 
     /// A text input rings its focus whichever way it arrived.
@@ -480,8 +560,8 @@ mod tests {
         let mut screen = Screen::new(true);
         let [first, _] = screen.centres;
 
-        screen.run(click_half(first, true), false);
-        let clicked = screen.run(click_half(first, false), false);
+        screen.run(press_at(first), false);
+        let clicked = screen.run(release_at(first), false);
         assert_eq!(clicked.focus, [true, false], "the click focused it");
         assert_eq!(clicked.ring, [true, false], "a text input: ringed");
     }
@@ -498,10 +578,18 @@ mod tests {
             modifiers: Modifiers::NONE,
         };
 
-        assert_eq!(last_modality(&[]), None, "no events: no verdict");
+        assert_eq!(deciding_modality(&[]), None, "no events: no verdict");
         assert_eq!(
-            last_modality(&[
+            deciding_modality(&[
                 Event::PointerMoved(pos),
+                Event::PointerGone,
+                Event::MouseWheel {
+                    unit: MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, -40.0),
+                    phase: TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                },
+                Event::Zoom(1.1),
                 press(false),
                 touch(TouchPhase::Move),
                 touch(TouchPhase::End),
@@ -514,43 +602,43 @@ mod tests {
                 },
             ]),
             None,
-            "moves, releases and key releases decide nothing"
+            "moves, scrolls, zooms, releases and key releases decide nothing"
         );
 
-        assert_eq!(last_modality(&[press(true)]), Some(Modality::Pointer));
+        assert_eq!(deciding_modality(&[press(true)]), Some(Modality::Pointer));
         assert_eq!(
-            last_modality(&[touch(TouchPhase::Start)]),
+            deciding_modality(&[touch(TouchPhase::Start)]),
             Some(Modality::Pointer)
         );
         assert_eq!(
-            last_modality(&[key_press(Key::Tab, Modifiers::NONE)]),
+            deciding_modality(&[key_press(Key::Tab, Modifiers::NONE)]),
             Some(Modality::Keyboard)
         );
         assert_eq!(
-            last_modality(&[key_press(Key::Tab, Modifiers::SHIFT)]),
+            deciding_modality(&[key_press(Key::Tab, Modifiers::SHIFT)]),
             Some(Modality::Keyboard),
             "Shift+Tab is the keyboard"
         );
         assert_eq!(
-            last_modality(&[Event::Text("a".to_owned())]),
+            deciding_modality(&[Event::Text("a".to_owned())]),
             Some(Modality::Keyboard)
         );
 
         for chord in [Modifiers::CTRL, Modifiers::COMMAND, Modifiers::ALT] {
             assert_eq!(
-                last_modality(&[key_press(Key::S, chord)]),
+                deciding_modality(&[key_press(Key::S, chord)]),
                 None,
                 "{chord:?}+S is a shortcut, not keyboard use"
             );
         }
 
         assert_eq!(
-            last_modality(&[key_press(Key::Tab, Modifiers::NONE), press(true)]),
+            deciding_modality(&[key_press(Key::Tab, Modifiers::NONE), press(true)]),
             Some(Modality::Pointer),
             "a press after the key wins"
         );
         assert_eq!(
-            last_modality(&[press(true), key_press(Key::Tab, Modifiers::NONE)]),
+            deciding_modality(&[press(true), key_press(Key::Tab, Modifiers::NONE)]),
             Some(Modality::Keyboard),
             "a key after the press wins"
         );

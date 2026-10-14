@@ -456,7 +456,8 @@ pub struct TextFieldResponse {
 
 #[cfg(test)]
 mod tests {
-    use egui::{Pos2, RawInput, Rect, Stroke, Vec2};
+    use egui::epaint::ClippedShape;
+    use egui::{PointerButton, Pos2, RawInput, Rect, Shape, Stroke, StrokeKind, Vec2};
 
     use crate::icon::IconSize;
     use crate::states::{self, UiKitFlags, WidgetState};
@@ -821,5 +822,90 @@ mod tests {
         })
         .drop_without_applying_deltas();
         assert_eq!(reference, "A-2026-114", "the buffer is untouched");
+    }
+
+    /// The pointer moving to `pos` and pressing or releasing there.
+    fn pointer_button_at(pos: Pos2, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    /// Whether `shapes` hold the focus ring around `control`: the 2px
+    /// outline stroked `Outside` the control box grown by the 2px
+    /// offset. Matched by geometry, not colour: the ring's first frame
+    /// paints at fade 0, in a transparent stroke.
+    fn paints_ring_around(shapes: &[ClippedShape], control: Rect) -> bool {
+        fn is_ring(shape: &Shape, around: Rect) -> bool {
+            match shape {
+                Shape::Rect(rect) => {
+                    rect.rect == around
+                        && rect.stroke.width == states::FOCUS_RING_WIDTH
+                        && rect.stroke_kind == StrokeKind::Outside
+                }
+                Shape::Vec(nested) => nested.iter().any(|shape| is_ring(shape, around)),
+                _ => false,
+            }
+        }
+        let around = control.expand(states::FOCUS_RING_OFFSET);
+        shapes.iter().any(|clipped| is_ring(&clipped.shape, around))
+    }
+
+    /// A click gives the field focus and the ring comes with it: a text
+    /// input rings pointer focus too (the browsers' `:focus-visible`
+    /// rule for text fields), where every other widget keeps the ring
+    /// down under a pointer's focus. The field's ring is built with
+    /// `.text_input()`; without it the click would leave the focused
+    /// field unringed and this test fails.
+    #[test]
+    fn a_clicked_field_shows_its_focus_ring() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+        let mut name = String::new();
+
+        // One frame of the field carrying `events`: its control box,
+        // whether its edit holds focus, and the shapes it painted.
+        let mut frame = |events: Vec<egui::Event>| {
+            let mut seen = None;
+            let mut out = ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let field = TextField::new("Project name", &mut name).ui(ui, theme, &flags);
+                    seen = Some((field.control_rect, field.response.has_focus()));
+                },
+            );
+            let shapes = std::mem::take(&mut out.shapes);
+            out.drop_without_applying_deltas();
+            let (control, focused) = seen.expect("the pass ran the field");
+            (control, focused, shapes)
+        };
+
+        let (control, focused, shapes) = frame(vec![]);
+        assert!(!focused, "nothing focuses the field before the click");
+        assert!(
+            !paints_ring_around(&shapes, control),
+            "and it paints no ring"
+        );
+
+        // The click: the press, then the release.
+        let at = control.center();
+        frame(pointer_button_at(at, true));
+        let (_, focused, shapes) = frame(pointer_button_at(at, false));
+        assert!(focused, "the click focused the edit");
+        assert!(
+            paints_ring_around(&shapes, control),
+            "a clicked text field wears its focus ring"
+        );
     }
 }
