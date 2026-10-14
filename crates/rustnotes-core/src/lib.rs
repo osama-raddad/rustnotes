@@ -11,11 +11,13 @@
 //! - [`App::ui`] every frame.
 //! - [`App::save_current`] when the app loses focus or exits.
 
+mod editor_touch;
 pub mod layout;
 pub mod notes;
 mod screens;
 pub mod util;
 
+use editor_touch::EditorTouch;
 use egui::{Event, FontData, FontDefinitions, FontFamily, RawInput, TouchPhase, Vec2};
 use layout::{Metrics, Nav, Palette};
 use notes::{Note, NotesDb};
@@ -129,6 +131,13 @@ pub struct App {
     edge: Option<EdgeSwipe>,
     /// Drop the simulated pointer events of a touch the edge swipe claimed.
     swallow_pointer: bool,
+    /// Touch intent in the editor: a swipe scrolls, a tap places the caret,
+    /// a long press selects (see `editor_touch`).
+    editor_touch: EditorTouch,
+    /// Where the editor's scroll area was drawn, set by `editor_drawn` each
+    /// frame the editor draws and taken by the next `filter_input`, so it
+    /// is `None` there whenever the editor did not draw last frame.
+    editor_rect: Option<egui::Rect>,
     // Pull to refresh
     pull_raw: f32,
     pull_armed: bool,
@@ -293,6 +302,8 @@ impl App {
             edge_swipe_enabled: false,
             edge: None,
             swallow_pointer: false,
+            editor_touch: EditorTouch::default(),
+            editor_rect: None,
             pull_raw: 0.0,
             pull_armed: false,
             pull_active: false,
@@ -578,11 +589,37 @@ impl App {
             && !self.nav.is_animating()
     }
 
-    /// Call from `raw_input_hook` every frame. Records egui's clock and claims
-    /// touches that start at the left edge for the interactive back swipe:
-    /// those touches (and the pointer events egui-winit simulates for them)
-    /// never reach the widgets. A claimed touch that never moves is replayed
-    /// as a plain tap, so the back button under the edge still works.
+    /// The editor may own a touch: it is the notes tab's current route and
+    /// nothing slides it (`is_animating` covers an edge drag too).
+    fn editor_owns_touches(&self) -> bool {
+        self.tab == Tab::Notes && self.screen() == Screen::Editor && !self.nav.is_animating()
+    }
+
+    /// The editor calls this each frame it draws, right before its scroll
+    /// area: the touch filter learns where that area is (a touch must start
+    /// there to be the editor's, and the wheel must land there), and a touch
+    /// waiting out the long-press window is woken when the window ends,
+    /// whether the finger moves or not.
+    pub(crate) fn editor_drawn(&mut self, ui: &egui::Ui) {
+        self.editor_rect = Some(ui.available_rect_before_wrap().intersect(ui.clip_rect()));
+        if let Some(wait) = self.editor_touch.wake_after(self.time) {
+            ui.ctx().request_repaint_after(wait);
+        }
+    }
+
+    /// Call from `raw_input_hook` every frame. Records egui's clock and runs
+    /// the two touch filters, the edge swipe first:
+    ///
+    /// - The edge swipe (iOS) claims touches that start at the left edge for
+    ///   the interactive back swipe: those touches (and the pointer events
+    ///   egui-winit simulates for them) never reach the widgets. A claimed
+    ///   touch that never moves is replayed as a plain tap, so the back
+    ///   button under the edge still works.
+    /// - The editor's touch intent (every platform, `editor_touch`): a touch
+    ///   on the editor scrolls it when it moves, places the caret when it
+    ///   taps, and starts a selection when held still. It never sees a touch
+    ///   the edge swipe claimed.
+    ///
     /// TODO(verify-on-device): multi-touch interleavings (second finger
     /// during a claim, OS-cancelled touches) can't be produced headlessly —
     /// check the TouchId gating on hardware.
@@ -590,9 +627,22 @@ impl App {
         if let Some(t) = raw.time {
             self.time = t;
         }
-        if !self.edge_swipe_enabled {
-            return;
+        let drawn = self.editor_rect.take();
+        if self.edge_swipe_enabled {
+            self.filter_edge_swipe(raw);
         }
+        // Checked after the edge swipe, which may just have started a drag
+        // or popped the editor.
+        let editor = drawn.filter(|_| self.editor_owns_touches());
+        // While the edge swipe holds a finger, a new finger is not the one
+        // egui-winit mirrors as the pointer: the editor must not claim it.
+        let claim = self.edge.is_none();
+        let events = std::mem::take(&mut raw.events);
+        raw.events = self.editor_touch.filter(events, self.time, editor, claim);
+    }
+
+    /// The edge swipe's part of `filter_input`.
+    fn filter_edge_swipe(&mut self, raw: &mut RawInput) {
         let width = raw.screen_rect.map_or(400.0, |r| r.width()).max(1.0);
         let events = std::mem::take(&mut raw.events);
         for ev in events {
@@ -1048,7 +1098,11 @@ mod tests {
     /// One egui pass, as the host runs it: the app draws into a root `Ui`
     /// covering the screen between begin_pass/end_pass.
     fn run_pass(app: &mut App, ctx: &egui::Context, events: Vec<Event>, t: f64) {
-        let raw = frame(events, t);
+        pass(app, ctx, frame(events, t));
+    }
+
+    /// The pass itself, for input that is already built (and filtered).
+    fn pass(app: &mut App, ctx: &egui::Context, raw: RawInput) {
         let screen = raw.screen_rect.unwrap();
         ctx.begin_pass(raw);
         let mut root = egui::Ui::new(
@@ -1164,5 +1218,304 @@ mod tests {
     /// The full stored body of a note (the list rows only carry a prefix).
     fn db_body(app: &App, id: i64) -> String {
         app.db.get(id).unwrap().expect("row exists").body
+    }
+
+    // ---- editor touch intent ---------------------------------------------
+    // A finger in the editor: a swipe scrolls, a tap places the caret, a
+    // press held still past the long-press window starts a selection. These
+    // run the host's order every frame: `filter_input`, then the pass.
+
+    /// What egui-winit's `on_touch` emits for the primary finger: the touch
+    /// plus the pointer events it mirrors for the first finger down.
+    fn winit_finger(phase: TouchPhase, pos: egui::Pos2) -> Vec<Event> {
+        let touch = Event::Touch {
+            device_id: egui::TouchDeviceId(0),
+            id: egui::TouchId(0),
+            phase,
+            pos,
+            force: None,
+        };
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        match phase {
+            TouchPhase::Start => vec![touch, Event::PointerMoved(pos), button(true)],
+            TouchPhase::Move => vec![touch, Event::PointerMoved(pos)],
+            TouchPhase::End => vec![touch, button(false), Event::PointerGone],
+            TouchPhase::Cancel => vec![touch, Event::PointerGone],
+        }
+    }
+
+    /// One host frame: eframe's `raw_input_hook` (`filter_input`), then the
+    /// pass. Returns the events egui received.
+    fn host_frame(app: &mut App, ctx: &egui::Context, events: Vec<Event>, t: f64) -> Vec<Event> {
+        let mut raw = frame(events, t);
+        app.filter_input(&mut raw);
+        let seen = raw.events.clone();
+        pass(app, ctx, raw);
+        seen
+    }
+
+    /// A 200-line note open in the editor, its layout settled.
+    fn long_note_in_editor(name: &str) -> (egui::Context, App) {
+        let ctx = egui::Context::default();
+        let mut app = App::new(temp(name).join("data"), &ctx, None);
+        app.open_editor(0);
+        app.buffer = (1..=200)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        app.close_editor();
+        let id = app.notes[0].id;
+        app.open_editor(id);
+        app.nav.settle();
+        for k in 0..3 {
+            host_frame(&mut app, &ctx, vec![], 0.5 + 0.016 * k as f64);
+        }
+        (ctx, app)
+    }
+
+    /// The editor's text field as last laid out. It moves up as the editor
+    /// scrolls down, so its top tracks the scroll offset point for point.
+    fn editor_field(ctx: &egui::Context) -> egui::Rect {
+        ctx.read_response(egui::Id::new(EDITOR_ID))
+            .expect("the editor is laid out")
+            .rect
+    }
+
+    /// The editor's caret or selection.
+    fn editor_cursor(ctx: &egui::Context) -> egui::text::CCursorRange {
+        egui::text_edit::TextEditState::load(ctx, egui::Id::new(EDITOR_ID))
+            .and_then(|s| s.cursor.char_range())
+            .expect("the editor has a cursor")
+    }
+
+    /// The pointer presses and releases in `events`, in order.
+    fn buttons(events: &[Event]) -> Vec<(egui::Pos2, bool)> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::PointerButton { pos, pressed, .. } => Some((*pos, *pressed)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A quick upward swipe scrolls the note: the wheel carries the finger's
+    /// travel with its sign (finger up, dy < 0, content up, offset grows),
+    /// nothing is pressed, and no text gets selected.
+    #[test]
+    fn swipe_in_the_editor_scrolls_instead_of_selecting() {
+        let (ctx, mut app) = long_note_in_editor("touch-swipe");
+        let top_before = editor_field(&ctx).top();
+        let caret_before = editor_cursor(&ctx);
+
+        let x = 200.0;
+        let mut t = 1.0;
+        let start = winit_finger(TouchPhase::Start, egui::pos2(x, 600.0));
+        let mut seen = host_frame(&mut app, &ctx, start, t);
+        for k in 1..=15 {
+            t += 0.016;
+            let y = 600.0 - 20.0 * k as f32;
+            let finger = winit_finger(TouchPhase::Move, egui::pos2(x, y));
+            seen.extend(host_frame(&mut app, &ctx, finger, t));
+        }
+        t += 0.016;
+        let lift = winit_finger(TouchPhase::End, egui::pos2(x, 300.0));
+        seen.extend(host_frame(&mut app, &ctx, lift, t));
+        // egui repaints once more after a frame with input.
+        seen.extend(host_frame(&mut app, &ctx, vec![], t + 0.016));
+
+        assert!(buttons(&seen).is_empty(), "a swipe never presses: {seen:?}");
+        let wheel: f32 = seen
+            .iter()
+            .filter_map(|e| match e {
+                Event::MouseWheel { delta, .. } => Some(delta.y),
+                _ => None,
+            })
+            .sum();
+        assert!(
+            (wheel + 300.0).abs() < 0.5,
+            "the wheel carries the finger's 300 pt upward travel: {wheel}"
+        );
+        let moved = top_before - editor_field(&ctx).top();
+        assert!(
+            (moved - 300.0).abs() < 0.5,
+            "the content follows the finger 1:1 (offset +300): moved {moved}"
+        );
+        let cursor = editor_cursor(&ctx);
+        assert!(cursor.is_empty(), "no text selected: {cursor:?}");
+        assert_eq!(cursor.primary, caret_before.primary, "the caret stays put");
+    }
+
+    /// A quick tap is replayed as a click at the touch point, in one frame,
+    /// and the caret moves there (from the end, where opening put it).
+    #[test]
+    fn tap_in_the_editor_places_the_caret() {
+        let (ctx, mut app) = long_note_in_editor("touch-tap");
+        let len = app.buffer.chars().count();
+        assert_eq!(
+            editor_cursor(&ctx).primary.index.0,
+            len,
+            "opening puts the caret at the end"
+        );
+        let field = editor_field(&ctx);
+        let p = egui::pos2(field.left() + 40.0, field.top() + 10.0); // line 1
+
+        let down = host_frame(&mut app, &ctx, winit_finger(TouchPhase::Start, p), 1.0);
+        assert!(buttons(&down).is_empty(), "the press waits for the intent");
+        let up = host_frame(&mut app, &ctx, winit_finger(TouchPhase::End, p), 1.08);
+        assert_eq!(
+            buttons(&up),
+            vec![(p, true), (p, false)],
+            "replayed as press + release at the touch point, in one frame"
+        );
+        let cursor = editor_cursor(&ctx);
+        assert!(cursor.is_empty(), "a tap selects nothing: {cursor:?}");
+        assert!(
+            cursor.primary.index.0 <= "line 1".len(),
+            "the caret moved to the tapped first line: {cursor:?}"
+        );
+    }
+
+    /// A press held still past the long-press window is delivered late, at
+    /// the touch point; a drag after it selects text, as egui does today.
+    #[test]
+    fn press_held_still_starts_a_selection() {
+        let (ctx, mut app) = long_note_in_editor("touch-hold");
+        let field = editor_field(&ctx);
+        let p = egui::pos2(field.left() + 40.0, field.top() + 10.0);
+
+        let mut seen = host_frame(&mut app, &ctx, winit_finger(TouchPhase::Start, p), 1.0);
+        let wait = app
+            .editor_touch
+            .wake_after(1.0)
+            .expect("the editor asks to be woken");
+        assert!((wait.as_secs_f64() - editor_touch::LONG_PRESS).abs() < 1e-6);
+        for t in [1.1, 1.2, 1.3] {
+            seen.extend(host_frame(&mut app, &ctx, vec![], t));
+        }
+        assert!(
+            buttons(&seen).is_empty(),
+            "still undecided inside the window"
+        );
+
+        // The frame that wake-up brings at the deadline: no new events, the
+        // finger still down.
+        let late = host_frame(&mut app, &ctx, vec![], 1.0 + editor_touch::LONG_PRESS);
+        assert_eq!(buttons(&late), vec![(p, true)], "the withheld press, now");
+
+        // egui's own long-touch fires 0.8 s after a press held still and
+        // ends the drag, so the drag comes well inside that.
+        let mut t = 1.45;
+        for k in 1..=4 {
+            let q = p + egui::vec2(0.0, 30.0 * k as f32);
+            host_frame(&mut app, &ctx, winit_finger(TouchPhase::Move, q), t);
+            t += 0.016;
+        }
+        let lift = winit_finger(TouchPhase::End, p + egui::vec2(0.0, 120.0));
+        host_frame(&mut app, &ctx, lift, t);
+        let cursor = editor_cursor(&ctx);
+        assert!(!cursor.is_empty(), "the drag after the hold selected text");
+    }
+
+    /// A touch that starts on the top bar, and any touch while the list is
+    /// on top, reach egui exactly as egui-winit sent them.
+    #[test]
+    fn touches_off_the_editor_pass_through_untouched() {
+        let (ctx, mut app) = long_note_in_editor("touch-elsewhere");
+        let bar = egui::pos2(200.0, 20.0);
+        for (phase, pos, t) in [
+            (TouchPhase::Start, bar, 1.0),
+            (TouchPhase::Move, bar + egui::vec2(0.0, 40.0), 1.02),
+            (TouchPhase::End, bar + egui::vec2(0.0, 40.0), 1.04),
+        ] {
+            let sent = winit_finger(phase, pos);
+            let seen = host_frame(&mut app, &ctx, sent.clone(), t);
+            assert_eq!(seen, sent, "a top-bar touch is not the editor's");
+        }
+
+        app.close_editor();
+        app.nav.settle();
+        host_frame(&mut app, &ctx, vec![], 1.2);
+        let body = egui::pos2(200.0, 600.0);
+        for (phase, pos, t) in [
+            (TouchPhase::Start, body, 1.3),
+            (TouchPhase::Move, body - egui::vec2(0.0, 40.0), 1.32),
+            (TouchPhase::End, body - egui::vec2(0.0, 40.0), 1.34),
+        ] {
+            let sent = winit_finger(phase, pos);
+            let seen = host_frame(&mut app, &ctx, sent.clone(), t);
+            assert_eq!(seen, sent, "the list's touches are egui's");
+        }
+    }
+
+    /// The edge swipe keeps priority over the editor (iOS): a touch it
+    /// claims never reaches the editor's filter, its replayed tap still
+    /// clicks, and its swipe pops without scrolling anything.
+    #[test]
+    fn the_edge_swipe_keeps_its_touches() {
+        let (ctx, mut app) = long_note_in_editor("touch-edge");
+        app.set_edge_swipe_back(true);
+        let edge = egui::pos2(5.0, 400.0); // inside the editor's body too
+
+        let down = host_frame(&mut app, &ctx, winit_finger(TouchPhase::Start, edge), 1.0);
+        assert!(down.is_empty(), "the edge claims the whole touch");
+        let up = host_frame(&mut app, &ctx, winit_finger(TouchPhase::End, edge), 1.05);
+        assert_eq!(
+            buttons(&up),
+            vec![(edge, true), (edge, false)],
+            "the edge filter's replayed tap passes the editor's untouched"
+        );
+
+        let far = egui::pos2(250.0, 400.0);
+        let mut seen = host_frame(&mut app, &ctx, winit_finger(TouchPhase::Start, edge), 2.0);
+        seen.extend(host_frame(
+            &mut app,
+            &ctx,
+            winit_finger(TouchPhase::Move, far),
+            2.1,
+        ));
+        seen.extend(host_frame(
+            &mut app,
+            &ctx,
+            winit_finger(TouchPhase::End, far),
+            2.2,
+        ));
+        assert!(
+            !seen.iter().any(|e| matches!(e, Event::MouseWheel { .. })),
+            "the edge swipe scrolls nothing"
+        );
+        assert!(app.screen() == Screen::List, "the swipe popped the editor");
+    }
+
+    /// A mouse sends no touches, so the filter never engages: dragging in
+    /// the editor still selects text on desktop.
+    #[test]
+    fn a_mouse_drag_in_the_editor_still_selects() {
+        let (ctx, mut app) = long_note_in_editor("mouse-drag");
+        let field = editor_field(&ctx);
+        let p = egui::pos2(field.left() + 40.0, field.top() + 10.0);
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        let down = vec![Event::PointerMoved(p), button(p, true)];
+        assert_eq!(host_frame(&mut app, &ctx, down.clone(), 1.0), down);
+        let mut t = 1.0;
+        for k in 1..=4 {
+            t += 0.016;
+            let q = p + egui::vec2(0.0, 30.0 * k as f32);
+            host_frame(&mut app, &ctx, vec![Event::PointerMoved(q)], t);
+        }
+        let end = p + egui::vec2(0.0, 120.0);
+        host_frame(&mut app, &ctx, vec![button(end, false)], t + 0.016);
+        assert!(!editor_cursor(&ctx).is_empty(), "the mouse drag selected");
     }
 }

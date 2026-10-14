@@ -778,6 +778,7 @@ impl App {
         }
         let body_h = ui.available_height();
         let side = m.sp(3) as i8;
+        self.editor_drawn(ui);
         ScrollArea::vertical()
             .id_salt("editor")
             .auto_shrink(false)

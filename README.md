@@ -38,7 +38,9 @@ only what they lack on mobile.
 - Create / edit / delete (tap ✕ twice within 2 s to confirm)
 - Word-wrapped plain-text editor (egui `TextEdit`): blinking cursor,
   tap-to-place-cursor, drag selection
-- Scrolling list and editor, auto-scroll to keep the cursor visible
+- List and editor scroll by finger swipe; in the editor a tap places the
+  caret and a press held still for ~0.4 s starts a drag selection; the
+  editor auto-scrolls to keep the cursor visible
 - Notes persisted in SQLite across restarts — saved when the editor closes
   or switches, ~1.5 s after typing stops, on Android focus loss, and on iOS
   app backgrounding (`WillResignActive`/`DidEnterBackground` observers)
@@ -239,8 +241,11 @@ list of where the port deviates from the brand book.
 - arm64-v8a only (add more ABIs in the `justfile`).
 - No search, no clipboard, no user-selectable theme — it's a demo of the pure-Rust stack,
   not a product.
-- Dragging inside the editor selects text (egui `TextEdit`); long notes
-  scroll by moving the cursor, not by swiping.
+- Editor touch is decided by intent, but kept basic: a swipe scrolls (no
+  fling after the finger lifts), a tap places the caret, and a press held
+  still for ~0.4 s starts a drag selection, with no handles or magnifier.
+  Start that drag within ~0.8 s of the hold: egui's own long-touch ends it
+  after that.
 
 ## Project layout
 
