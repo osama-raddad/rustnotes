@@ -46,8 +46,11 @@ pub const BAND_BLEED: f32 = 16.0;
 /// The 960-unit grid the preview's band is drawn on.
 pub const BAND_UNITS: f32 = 960.0;
 
-/// The band's left margin, in grid units.
-pub const BAND_MARGIN_UNITS: f32 = 32.0;
+/// The band's left margin, in grid units: none. The preview's 32-unit
+/// margin was its page padding, and the page's own gutter now supplies
+/// that edge, so the lead block starts on the text's left edge rather
+/// than indented beside it.
+pub const BAND_MARGIN_UNITS: f32 = 0.0;
 
 /// The gutter between blocks, in grid units (`space-4`).
 pub const BAND_GUTTER_UNITS: f32 = 16.0;
@@ -299,10 +302,13 @@ mod tests {
             (layout[0].1 - 416.0 / 2.0).abs() < 1e-4,
             "lead width scales"
         );
-        assert!((layout[1].0 - 464.0 / 2.0).abs() < 1e-4, "gutters scale");
+        // With no margin the second block starts one gutter past the
+        // lead (416 + 16), and the guest ends 32 units short of the old
+        // 976: the bleed past the grid is the same, the origin moved.
+        assert!((layout[1].0 - 432.0 / 2.0).abs() < 1e-4, "gutters scale");
         let end = layout[3].0 + layout[3].1;
         assert!(
-            (end - 976.0 / 2.0).abs() < 1e-4,
+            (end - 944.0 / 2.0).abs() < 1e-4,
             "the guest bleeds off the grid"
         );
     }

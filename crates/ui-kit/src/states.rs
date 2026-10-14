@@ -18,7 +18,7 @@
 //! would gamma-convert them, so nothing here touches it.
 
 use egui::epaint::{CornerRadius, RectShape, StrokeKind};
-use egui::{Color32, Painter, Rect, Response, Stroke};
+use egui::{Color32, Event, Painter, Pos2, Rect, Response, Stroke, Ui};
 
 use crate::theme::ThemeId;
 use crate::tokens::{radii, ThemeColors};
@@ -126,7 +126,9 @@ pub struct WidgetState {
     /// The pointer hovers the widget, unobstructed.
     pub hovered: bool,
     /// The pointer button is held down on the widget (a click or a
-    /// drag in progress): the press state.
+    /// drag in progress): the press state. egui drops it once the press
+    /// can no longer be a click, so a long hold reads through
+    /// [`held_press`] as well.
     pub pressed: bool,
     /// The widget holds keyboard focus (Tab order, clicks into text).
     pub has_focus: bool,
@@ -143,6 +145,106 @@ impl WidgetState {
             has_focus: response.has_focus(),
             disabled: !response.enabled(),
         }
+    }
+}
+
+/// A press armed on one control and carried from frame to frame by
+/// [`held_press`]: where it landed, and which press it is.
+#[derive(Clone, Copy, Debug)]
+struct ArmedPress {
+    /// Where the press landed: the origin a drag is measured from.
+    origin: Pos2,
+    /// egui's press start time, which tells one press from the next.
+    started: f64,
+}
+
+/// One control's primary press, read past egui's click window by
+/// [`held_press`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeldPress {
+    /// The primary button is held on the control and the press is still
+    /// armed: the press state, however long the hold lasts.
+    pub held: bool,
+    /// The primary button was released over the control with the press
+    /// still armed: a click, at any hold length.
+    pub clicked: bool,
+}
+
+/// Track the primary press on a control past egui's click window.
+///
+/// egui counts a press as a click only while it is shorter than
+/// `max_click_duration` and has moved no more than `max_click_dist`,
+/// and [`Response::is_pointer_button_down_on`] follows that. A hold
+/// that is still a press would lose its pressed look after the
+/// duration and never click on release. This helper only extends the
+/// press: while egui still tracks it, egui's own state and click stand,
+/// so quick taps are unchanged.
+///
+/// The press is armed on the frame the primary button goes down on a
+/// control egui targets. It is cancelled for good when the pointer moves
+/// more than `max_click_dist` from where it landed, when the pointer is
+/// no longer over the control, or when the press ends. Over the control
+/// means [`Response::contains_pointer`], which keeps egui's interaction
+/// radius (5pt by default) around the rect. A release over the control
+/// with the press still armed is a click.
+///
+/// Call it once per frame, after the control's `ui.interact`. A control
+/// that does not sense clicks, or is disabled, holds no press.
+pub fn held_press(ui: &Ui, response: &Response) -> HeldPress {
+    let ctx = ui.ctx();
+    let key = response.id.with("kit-held-press");
+    if !response.enabled() || !response.sense.senses_click() {
+        ctx.data_mut(|data| data.remove::<ArmedPress>(key));
+        return HeldPress::default();
+    }
+    let mut armed = ctx.data(|data| data.get_temp::<ArmedPress>(key));
+    let max_click_dist = ctx.options(|options| options.input_options.max_click_dist);
+    let (pressed, released, down, press_start, press_origin, moved_past) = ctx.input(|input| {
+        let moved_past = armed.is_some_and(|press| {
+            input.events.iter().any(|event| match event {
+                Event::PointerMoved(pos) => press.origin.distance(*pos) > max_click_dist,
+                _ => false,
+            })
+        });
+        (
+            input.pointer.primary_pressed(),
+            input.pointer.primary_released(),
+            input.pointer.primary_down(),
+            input.pointer.press_start_time(),
+            input.pointer.press_origin(),
+            moved_past,
+        )
+    });
+
+    let mut clicked = false;
+    if let Some(press) = armed {
+        if released {
+            // The release ends the press. It clicks only if the press was
+            // never cancelled and the release is over the control.
+            clicked = response.contains_pointer() && !moved_past;
+            armed = None;
+        } else if !down
+            || press_start != Some(press.started)
+            || moved_past
+            || !response.contains_pointer()
+        {
+            armed = None;
+        }
+    }
+    if pressed && response.is_pointer_button_down_on() {
+        if let (Some(origin), Some(started)) = (press_origin, press_start) {
+            armed = Some(ArmedPress { origin, started });
+        }
+    }
+    ctx.data_mut(|data| match armed {
+        Some(press) => {
+            data.insert_temp(key, press);
+        }
+        None => data.remove::<ArmedPress>(key),
+    });
+    HeldPress {
+        held: armed.is_some(),
+        clicked,
     }
 }
 

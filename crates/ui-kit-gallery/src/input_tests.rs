@@ -369,6 +369,39 @@ fn sideways_touch_drag_scrolls_a_specimen_row() {
     );
 }
 
+/// A vertical swipe that starts on a specimen row scrolls the page under
+/// the finger, and the row holds still. Before the row owned its gesture's
+/// axis, its horizontal area claimed the whole drag and the page stayed
+/// put; the first few points of travel now pick the axis, and a vertical
+/// gesture hands its movement to the page.
+#[test]
+fn vertical_touch_drag_on_a_specimen_row_scrolls_the_page() {
+    let mut h = Harness::phone();
+    h.app.gallery.tab = 1;
+    h.idle(3);
+    let caption = copy::STATE_CAPTIONS[2];
+    let before = h
+        .scroll_to(caption, 250.0..600.0)
+        .expect("the state tiles scroll into view");
+    let page = h.page_offset().y;
+    let x = before.center().x;
+    let y = before.center().y;
+    h.swipe(egui::pos2(x, y), egui::pos2(x, y - 200.0), 10);
+    h.idle(30);
+    assert!(
+        h.page_offset().y >= page + 150.0,
+        "a vertical swipe on the row must scroll the page: {page} -> {}",
+        h.page_offset().y
+    );
+    let after = h.painted(caption).expect("the caption is still on screen");
+    assert!(
+        (after.left() - before.left()).abs() < 1.0,
+        "the row must hold still on a vertical swipe: x {} -> {}",
+        before.left(),
+        after.left()
+    );
+}
+
 /// Dismiss the Feedback panel's info banner by touch, the topmost close
 /// glyph on the page, and check that the panel then offers to restore
 /// it: a tap inside the scrolling page lands.
@@ -417,9 +450,9 @@ fn taps_still_land_after_touches_have_been_seen() {
 #[test]
 fn a_first_swipe_on_the_tab_strip_scrolls_it_and_taps_still_land() {
     let mut h = Harness::window(egui::vec2(360.0, PHONE.y));
-    // The strip ends at the content panel's inset; Feedback, its last
+    // The strip ends at the content panel's gutter; Feedback, its last
     // tab, runs past that edge until the strip scrolls.
-    let edge = h.window.x - ui_kit::tokens::spacing::SPACE_6;
+    let edge = h.window.x - crate::gallery::PAGE_GUTTER;
     let before = h.painted(copy::TABS[3]).expect("the tab strip is painted");
     assert!(
         before.right() > edge,

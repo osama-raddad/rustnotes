@@ -85,7 +85,8 @@ use ui_kit::components::top_app_bar::{
     NavLink, TopAppBar, ACTIONS_GAP, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
 };
 use ui_kit::components::{
-    BrandShowcase, Card, Cover, EditorialCard, FocusRing, LiquidGlass, MetricCard, ThemesShowcase,
+    BrandShowcase, Card, Cover, EditorialCard, FocusRing, Grid, LiquidGlass, MetricCard,
+    ThemesShowcase,
 };
 use ui_kit::gallery_copy as copy;
 use ui_kit::icon::{icon, icon_active, IconSize};
@@ -113,6 +114,39 @@ const NARROW_WIDTH: f32 = breakpoints::BREAKPOINT_TABLET;
 /// carries its own salt now; this one keeps the page's state its own
 /// whatever else the panel holds.
 const PAGE_SCROLL: &str = "gallery-page";
+
+/// The page's side gutter. The bar, the tab strip and the page all share
+/// it, so the chrome's edges line up with the text rather than sitting
+/// at two different insets.
+pub(crate) const PAGE_GUTTER: f32 = spacing::SPACE_4;
+
+/// The content panel's inner margin: the gutter at each side, and the
+/// 24px rhythm above the tab strip and below the page.
+fn content_margin() -> egui::Margin {
+    egui::Margin {
+        left: PAGE_GUTTER as i8,
+        right: PAGE_GUTTER as i8,
+        top: spacing::SPACE_6 as i8,
+        bottom: spacing::SPACE_6 as i8,
+    }
+}
+
+/// A drag on a sideways row picks its axis once it has travelled this
+/// far: a mostly vertical gesture scrolls the page, a mostly horizontal
+/// one scrolls the row, never both.
+const AXIS_LOCK_DISTANCE: f32 = 6.0;
+
+/// The offset change a sideways row hands the page for its next frame,
+/// keyed in egui's temp memory. The page takes it at the start of its
+/// frame, so the hand-off lags one frame.
+const PAGE_FORWARD: &str = "gallery-page-forward";
+
+/// One drag gesture on a sideways row: the axis it picked (`true` for
+/// vertical), `None` until its travel passes [`AXIS_LOCK_DISTANCE`].
+#[derive(Clone, Copy, Default)]
+struct DragAxis {
+    vertical: Option<bool>,
+}
 
 /// The theme menu's popover width: the longest toggle row ("Reduced
 /// transparency" beside its 44px track) and the frame's insets.
@@ -178,7 +212,56 @@ fn drag_scroll() -> DragScroll {
 /// instead of clipping its tail. The web previews scroll the same
 /// rows; `id` keeps the scroll areas distinct. A finger drags the row
 /// on [`drag_scroll`]'s terms.
+///
+/// The row's drag is horizontal, and egui's horizontal area claims the
+/// whole gesture, so a vertical swipe that began on the row used to
+/// scroll nothing. The row therefore owns the gesture's axis: the first
+/// [`AXIS_LOCK_DISTANCE`] of travel decides it. A vertical drag hands
+/// its movement to the page through [`PAGE_FORWARD`] and holds the row
+/// still; a horizontal drag scrolls the row as egui already does.
 fn scrolling_row(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    let ctx = ui.ctx().clone();
+    // The scroll area keys its state by an `IdSalt`, not the bare string.
+    let row_id = ui.make_persistent_id(egui::IdSalt::new(id));
+    // egui's background drag of a scroll area is `id.with("area")`.
+    let dragging = ctx.dragged_id() == Some(row_id.with("area"));
+    let axis_key = row_id.with("axis");
+    let mut axis = ctx
+        .data(|d| d.get_temp::<DragAxis>(axis_key))
+        .unwrap_or_default();
+    let before = egui::scroll_area::State::load(&ctx, row_id);
+    if dragging {
+        // Travel is measured from where the finger landed, not by summing
+        // deltas: a touch's first delta can jump from wherever the pointer
+        // last was, which would lock the axis before the finger moved.
+        let (origin, latest, delta) = ctx.input(|i| {
+            (
+                i.pointer.press_origin(),
+                i.pointer.latest_pos(),
+                i.pointer.delta(),
+            )
+        });
+        match axis.vertical {
+            None => {
+                if let (Some(origin), Some(latest)) = (origin, latest) {
+                    let travelled = latest - origin;
+                    if travelled.length() >= AXIS_LOCK_DISTANCE {
+                        let vertical = travelled.y.abs() > travelled.x.abs();
+                        axis.vertical = Some(vertical);
+                        if vertical {
+                            forward_to_page(&ctx, -travelled.y);
+                        }
+                    }
+                }
+            }
+            Some(true) => forward_to_page(&ctx, -delta.y),
+            Some(false) => {}
+        }
+        ctx.data_mut(|d| d.insert_temp(axis_key, axis));
+    } else {
+        ctx.data_mut(|d| d.remove_temp::<DragAxis>(axis_key));
+    }
+
     egui::ScrollArea::horizontal()
         .id_salt(id)
         .scroll_source(ScrollSource {
@@ -186,6 +269,23 @@ fn scrolling_row(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
             ..ScrollSource::default()
         })
         .show(ui, |ui| ui.horizontal(add));
+
+    // egui has already moved the row by the drag's horizontal part this
+    // frame; a vertical gesture holds it still, so put its offset back.
+    if dragging && axis.vertical == Some(true) {
+        if let Some(before) = before {
+            if let Some(mut after) = egui::scroll_area::State::load(&ctx, row_id) {
+                after.offset.x = before.offset.x;
+                after.store(&ctx, row_id);
+            }
+        }
+    }
+}
+
+/// Add `offset` to the page's scroll for its next frame (see
+/// [`PAGE_FORWARD`]).
+fn forward_to_page(ctx: &egui::Context, offset: f32) {
+    ctx.data_mut(|d| *d.get_temp_mut_or_default::<f32>(egui::Id::new(PAGE_FORWARD)) += offset);
 }
 
 /// A row of captioned specimens (each one a [`wrapping_specimen`]) that
@@ -731,24 +831,33 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
         ui.add_space(spacing::SPACE_4);
         ui.label(format!("{category} · {}", icons.len()));
         ui.add_space(spacing::SPACE_1);
-        wrapping_row(ui, |ui, inherited| {
-            for one in *icons {
-                let caption = if one.has_fill() {
-                    format!("{} · fills", one.name())
-                } else {
-                    one.name().to_owned()
-                };
-                wrapping_specimen(ui, inherited, theme, IconSize::Lg.px(), &caption, |ui| {
-                    if one.has_fill() {
-                        icon_active(ui, *one, IconSize::Lg, colors.primary);
-                    } else {
-                        icon(ui, *one, IconSize::Lg, colors.primary);
-                    }
-                });
+        // Equal cells, at least ICON_CELL_MIN wide: the columns come from
+        // the width, so the catalogue lines up on any phone or window.
+        Grid::new(ICON_CELL_MIN).show(ui, icons, |ui, _, one, size| {
+            if one.has_fill() {
+                icon_active(ui, *one, IconSize::Lg, colors.primary);
+            } else {
+                icon(ui, *one, IconSize::Lg, colors.primary);
             }
+            let caption = if one.has_fill() {
+                format!("{} · fills", one.name())
+            } else {
+                one.name().to_owned()
+            };
+            ui.add(egui::Label::new(specimen_job(
+                &caption,
+                TypeStyle::Caption,
+                theme,
+                colors.text_muted(),
+                Some(size.x),
+            )));
         });
     }
 }
+
+/// The narrowest icon cell: three columns on a 360pt phone, four on a
+/// desktop window, each caption wrapping inside its cell.
+const ICON_CELL_MIN: f32 = 96.0;
 
 /// One logo band: a filled ground carrying the logo in the placement's
 /// ink, with its caption.
@@ -1551,6 +1660,7 @@ fn fields_left(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut
         .placeholder(copy::FIELD_NAME_PLACEHOLDER)
         .hint(copy::FIELD_NAME_HINT)
         .ui(ui, theme, flags);
+    ui.add_space(spacing::SPACE_4);
 
     // The email validates when the person leaves the field, not
     // while they type: the first leave arms it, and the error
@@ -1574,6 +1684,7 @@ fn fields_right(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mu
         .placeholder(copy::SEARCH_PLACEHOLDER)
         .leading_icon(Icon::Search)
         .ui(ui, theme, flags);
+    ui.add_space(spacing::SPACE_4);
 
     TextField::new(copy::FIELD_REFERENCE_LABEL, &mut form.reference)
         .disabled()
@@ -1602,11 +1713,13 @@ fn fields_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mu
     }
 
     // The textarea, spanning both columns.
+    ui.add_space(spacing::SPACE_4);
     TextField::new(copy::FIELD_BRIEF_LABEL, &mut form.brief)
         .placeholder(copy::FIELD_BRIEF_PLACEHOLDER)
         .multiline(3)
         .ui(ui, theme, flags);
 
+    ui.add_space(spacing::SPACE_4);
     ui.add(egui::Label::new(specimen_job(
         copy::FIELDS_NOTE,
         TypeStyle::Caption,
@@ -1628,6 +1741,7 @@ fn selects_left(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mu
     if let Some(picked) = region.committed {
         form.region = Some(picked);
     }
+    ui.add_space(spacing::SPACE_4);
 
     let office = Select::new(copy::SELECT_OFFICE_LABEL)
         .options(&offices)
@@ -1652,6 +1766,7 @@ fn selects_right(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &m
     if let Some(picked) = team.committed {
         form.team_size = Some(picked);
     }
+    ui.add_space(spacing::SPACE_4);
 
     Select::new(copy::SELECT_CURRENCY_LABEL)
         .options(&currencies)
@@ -1681,6 +1796,7 @@ fn selects_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &m
         });
     }
 
+    ui.add_space(spacing::SPACE_4);
     ui.add(egui::Label::new(specimen_job(
         copy::SELECTS_NOTE,
         TypeStyle::Caption,
@@ -2508,21 +2624,33 @@ impl Gallery {
     /// the finger with the kinetic fling on release. The output's
     /// `content_size` is the panel's laid-out extent.
     fn page(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
-        egui::ScrollArea::vertical()
+        let ctx = ui.ctx().clone();
+        let page_id = ui.make_persistent_id(egui::IdSalt::new(PAGE_SCROLL));
+        // A vertical drag that began on a sideways row arrives as the
+        // offset change the row handed over last frame (`scrolling_row`).
+        let forwarded = ctx.data_mut(|d| {
+            std::mem::take(d.get_temp_mut_or_default::<f32>(egui::Id::new(PAGE_FORWARD)))
+        });
+        let mut area = egui::ScrollArea::vertical()
             .id_salt(PAGE_SCROLL)
             .scroll_source(ScrollSource {
                 drag: drag_scroll(),
                 ..ScrollSource::default()
-            })
-            .show(ui, |ui| {
-                match self.tab {
-                    0 => self.brand_panel(ui),
-                    1 => self.foundations_panel(ui),
-                    2 => self.components_panel(ui),
-                    _ => self.feedback_panel(ui),
-                }
-                ui.add_space(spacing::SPACE_6);
-            })
+            });
+        if forwarded != 0.0 {
+            let offset =
+                egui::scroll_area::State::load(&ctx, page_id).map_or(0.0, |state| state.offset.y);
+            area = area.vertical_scroll_offset(offset + forwarded);
+        }
+        area.show(ui, |ui| {
+            match self.tab {
+                0 => self.brand_panel(ui),
+                1 => self.foundations_panel(ui),
+                2 => self.components_panel(ui),
+                _ => self.feedback_panel(ui),
+            }
+            ui.add_space(spacing::SPACE_6);
+        })
     }
 
     /// The window's chrome for one frame: the TopAppBar on Liquid Glass
@@ -2543,9 +2671,13 @@ impl Gallery {
     pub(crate) fn chrome(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         let insets = ctx.input(|i| i.safe_area_insets()).0;
+        // The horizontal insets are mirrored: a cutout on one side of a
+        // landscape phone would otherwise push the whole chrome to the
+        // other side, so both gutters grow to the larger of the two.
+        let side = insets.left.max(insets.right);
         let chrome_margin = |top: f32, bottom: f32| egui::Margin {
-            left: (spacing::SPACE_3 + insets.left) as i8,
-            right: (spacing::SPACE_3 + insets.right) as i8,
+            left: (PAGE_GUTTER + side) as i8,
+            right: (PAGE_GUTTER + side) as i8,
             top: (spacing::SPACE_3 + top) as i8,
             bottom: (spacing::SPACE_3 + bottom) as i8,
         };
@@ -2561,14 +2693,14 @@ impl Gallery {
 
         egui::CentralPanel::default()
             .frame(egui::Frame::default().outer_margin(egui::Margin {
-                left: insets.left as i8,
-                right: insets.right as i8,
+                left: side as i8,
+                right: side as i8,
                 top: 0,
                 bottom: insets.bottom as i8,
             }))
             .show(root, |ui| {
                 egui::Frame::default()
-                    .inner_margin(spacing::SPACE_6)
+                    .inner_margin(content_margin())
                     .show(ui, |ui| {
                         // The Tabs strip: the widget's own real demo, the
                         // gallery's panel switcher. It stays above the
@@ -2649,8 +2781,8 @@ mod tests {
     ];
 
     /// Lay `tab`'s panel out on a window `width` wide inside the
-    /// chrome's own page margins (the content panel's frame, then the
-    /// page's `space-6` inset), and return how far the panel's content
+    /// chrome's own page margins (the content panel's frame, the same
+    /// [`content_margin`] `chrome` applies), and return how far the panel's content
     /// reaches past the width the page gives it: zero or less when it
     /// fits. The measure is the page area's `content_size`, the panel
     /// `Ui`'s own extent; the sideways specimen rows are wider inside
@@ -2681,7 +2813,7 @@ mod tests {
                         .frame(egui::Frame::default())
                         .show(ui, |ui| {
                             egui::Frame::default()
-                                .inner_margin(spacing::SPACE_6)
+                                .inner_margin(content_margin())
                                 .show(ui, |ui| {
                                     let available = ui.available_width();
                                     let page = gallery.page(ui);
