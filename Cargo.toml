@@ -4,6 +4,7 @@ members = [
     "crates/rustnotes-core",
     "crates/rustnotes",
     "crates/hello-mobile",
+    "crates/demo-mobile",
     "crates/ui-kit",
     "crates/ui-kit-gallery",
 ]

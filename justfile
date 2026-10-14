@@ -118,6 +118,20 @@ app-identity app:
         echo "ks_dname='CN=Hello Mobile Debug,O=Rust,C=US'"
         echo "entry=''"
         ;;
+    demo-mobile)
+        echo "key='demo-mobile'"
+        echo "crate='demo-mobile'"
+        echo "cdylib='demo_mobile'"
+        echo "bin='demo-mobile'"
+        echo "android_pkg='com.example.demomobile'"
+        echo "label='Demo Mobile'"
+        echo "ios_bundle='com.example.demomobile.ios'"
+        echo "res='crates/demo-mobile/resources'"
+        echo "ks='demo-mobile.debug.keystore'"
+        echo "ks_alias='demomobile'"
+        echo "ks_dname='CN=Demo Mobile Debug,O=Rust,C=US'"
+        echo "entry=''"
+        ;;
     ui-kit-gallery)
         echo "key='ui-kit-gallery'"
         echo "crate='ui-kit-gallery'"
@@ -133,7 +147,7 @@ app-identity app:
         echo "entry=''"
         ;;
     *)
-        echo "ERROR: unknown app '{{app}}' (expected 'rustnotes', 'hello-mobile' or 'ui-kit-gallery')." >&2
+        echo "ERROR: unknown app '{{app}}' (expected 'rustnotes', 'hello-mobile', 'demo-mobile' or 'ui-kit-gallery')." >&2
         exit 1
         ;;
     esac
@@ -620,9 +634,9 @@ screenshot-ios app='rustnotes':
 
 # ---- misc -------------------------------------------------------------------
 
-# Type-check every crate for its real targets (rustnotes, hello-mobile
-# and ui-kit-gallery are each checked three ways: Android lib, iOS-sim
-# bin, host desktop bin)
+# Type-check every crate for its real targets (rustnotes, hello-mobile,
+# demo-mobile and ui-kit-gallery are each checked three ways: Android
+# lib, iOS-sim bin, host desktop bin)
 # (the workspace can't be checked as a whole: ndk-sys only compiles for Android)
 # (ui-kit is pure egui with no platform glue, so the host check covers it;
 # its gallery app carries the platform legs through the rustnotes host)
@@ -638,12 +652,16 @@ check:
     cargo check -p hello-mobile --lib --target aarch64-linux-android
     cargo check -p hello-mobile --bin hello-mobile --target aarch64-apple-ios-sim
     cargo check -p hello-mobile --bin hello-mobile
+    cargo check -p demo-mobile --lib --target aarch64-linux-android
+    cargo check -p demo-mobile --bin demo-mobile --target aarch64-apple-ios-sim
+    cargo check -p demo-mobile --bin demo-mobile
 
-# Link both Android cdylibs (debug), both backends: the one guard
+# Link all three Android cdylibs (debug), both backends: the one guard
 # `cargo check` cannot give — a duplicate `android_main` symbol only
 # surfaces at link, and only on Android's lld (macOS's ld64 drops the
 # duplicate silently). Each app links alone, per-package: rustnotes with
-# its default android-entry feature, hello-mobile with it opted out
+# its default android-entry feature, hello-mobile and demo-mobile with
+# it opted out
 # (crates/rustnotes/Cargo.toml has the symbol-collision rationale). The
 # GameActivity legs prove the opt-in combination links too — one
 # `android_main` per app under the swapped backend — which is the whole
@@ -653,27 +671,31 @@ check:
 check-links:
     cargo build -p rustnotes --lib --target aarch64-linux-android
     cargo build -p hello-mobile --lib --target aarch64-linux-android
+    cargo build -p demo-mobile --lib --target aarch64-linux-android
     cargo build -p rustnotes --lib --target aarch64-linux-android \
         --no-default-features --features android-game-activity,android-entry
     cargo build -p hello-mobile --lib --target aarch64-linux-android \
+        --no-default-features --features android-game-activity
+    cargo build -p demo-mobile --lib --target aarch64-linux-android \
         --no-default-features --features android-game-activity
 
 # Format every crate (what `just lint` enforces)
 fmt:
     cargo fmt --all
 
-# Unit tests for the core and ui-kit crates, plus the gallery's headless
-# input tests (the host crates are platform glue — no tests)
+# Unit tests for the core, ui-kit and demo crates, plus the gallery's
+# headless input tests (the host crate is platform glue — no tests)
 test:
     cargo test -p rustnotes-core
     cargo test -p ui-kit
     cargo test -p ui-kit-gallery
+    cargo test -p demo-mobile
 
-# Format check, then clippy over all four crates on the host feature set
+# Format check, then clippy over every crate on the host feature set
 # (the Android/iOS glue is additionally type-checked by `just check`)
 lint:
     cargo fmt --all -- --check
-    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile -p ui-kit -p ui-kit-gallery --all-targets -- -D warnings
+    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile -p demo-mobile -p ui-kit -p ui-kit-gallery --all-targets -- -D warnings
 
 clean:
     rm -rf build
