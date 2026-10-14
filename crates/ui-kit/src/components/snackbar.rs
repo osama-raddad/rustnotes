@@ -5,7 +5,8 @@
 //! A snackbar is a brief message about something the person just did,
 //! on an inverse surface near the bottom of the screen with at most
 //! one action: `inverse-surface` at `radius-lg` under `shadow-l3`,
-//! 48px tall at the least, 14px `inverse-on-surface` text. The action
+//! 48px tall at the least (the 36px dismiss circle between the row's
+//! padding lifts that to 52), 14px `inverse-on-surface` text. The action
 //! is a text button in `inverse-primary` at weight 600; the dismiss a
 //! 36px `close` icon button. The status variants carry a 32px tile
 //! before the text: `check_circle` in `success` on
@@ -30,7 +31,10 @@
 //! foreground order, with egui's own fade-in off so the entrance is the
 //! only fade), never moving focus to it, and the snackbar's action
 //! stays available elsewhere in the page. The row inside follows the
-//! preview: `padding: 8 8 8 16`, `gap: space-3`.
+//! preview across and down: `padding: 8 8 8 16` and `gap: space-3`,
+//! border-box, so the 36px dismiss circle between the padding makes
+//! the pane 52 tall at the least, and the text block carries its own
+//! `padding-block: space-1`.
 //!
 //! Copy voice: one short sentence, outcome first; the action is a
 //! verb — "Undo", "Retry now", "Saved.", "Link copied."
@@ -57,7 +61,8 @@ pub const ENTRANCE_SLIDE_PX: f32 = 8.0;
 pub const MAX_WIDTH: f32 = 600.0;
 /// The clearance above the screen's bottom edge (or any bottom bar).
 pub const BOTTOM_MARGIN: f32 = spacing::SPACE_6;
-/// The least a snackbar stands tall.
+/// The least a snackbar stands tall: the preview's `min-height`. The
+/// dismiss circle between the row's padding makes it 52 in practice.
 pub const MIN_HEIGHT: f32 = 48.0;
 /// The action button's height.
 pub const ACTION_MIN_HEIGHT: f32 = 36.0;
@@ -74,6 +79,9 @@ const ROW_PAD_END: f32 = spacing::SPACE_2;
 const ROW_PAD_Y: f32 = spacing::SPACE_2;
 /// The gap between the row's items: `gap: space-3`.
 const ROW_GAP: f32 = spacing::SPACE_3;
+/// The text block's own padding above and below, inside the row's:
+/// `.snackbar__text { padding-block: space-1 }`.
+const TEXT_PAD_Y: f32 = spacing::SPACE_1;
 
 /// One snackbar's status: the plain inverse surface, or one of the
 /// two tile variants.
@@ -391,7 +399,11 @@ impl SnackbarHost {
                 let max_width = MAX_WIDTH
                     .min(content_width - 2.0 * spacing::SPACE_4)
                     .max(0.0);
-                let wrap = (max_width - before_text - after_text).max(120.0);
+                // The text column takes what the row leaves and may shrink
+                // to nothing, as the preview's `min-width: 0` lets it: a
+                // floor would run the text into the pill on a narrow
+                // phone. epaint breaks a word that is wider than the room.
+                let wrap = (max_width - before_text - after_text).max(0.0);
 
                 // The text: the message alone at 14px, or the bold title
                 // over the 13px line. Both wrap into the room left.
@@ -437,11 +449,13 @@ impl SnackbarHost {
                     text_width = text_width.max(galley.size().x);
                     text_height += galley.size().y;
                 }
-                let height = MIN_HEIGHT.max(text_height + 2.0 * ROW_PAD_Y).max(if tile {
-                    STATUS_TILE + 2.0 * ROW_PAD_Y
-                } else {
-                    0.0
-                });
+                // The row is border-box in the preview: the dismiss circle
+                // between the row's padding makes the pane 52 at the least
+                // (the tile and the pill are no taller than it), and the
+                // text block carries a padding of its own above and below.
+                let height = MIN_HEIGHT
+                    .max(DISMISS_SIZE + 2.0 * ROW_PAD_Y)
+                    .max(text_height + 2.0 * (ROW_PAD_Y + TEXT_PAD_Y));
                 // On a phone, under the tablet breakpoint, the pane spans
                 // the window less its margins, the text taking the room the
                 // controls leave; from the breakpoint up it hugs its text,
@@ -1071,7 +1085,11 @@ mod tests {
     /// midline. The pill's x once carried a height term that slid it
     /// about 14px from the circle, its width left out its own side
     /// padding so it overlapped the message, and the circle sat flush
-    /// against the pane's edge.
+    /// against the pane's edge. Down the row follows the preview too
+    /// (border-box): the 36px circle between the space-2 padding makes
+    /// the pane 52 tall, and the circle and the pill sit a space-2
+    /// padding from its top and bottom; the pane was 48 tall, so they sat
+    /// 6px from the edges.
     #[test]
     fn the_row_sits_as_the_preview_sets_it() {
         let theme = ThemeId::Light;
@@ -1114,6 +1132,23 @@ mod tests {
             action.left() + spacing::SPACE_3,
             "the label starts one space-3 padding inside the pill",
         );
+        assert_close(
+            surface.height(),
+            DISMISS_SIZE + 2.0 * spacing::SPACE_2,
+            "the pane is the dismiss circle between the row's padding",
+        );
+        for (what, control) in [("circle", dismiss), ("pill", action)] {
+            assert_close(
+                control.top() - surface.top(),
+                spacing::SPACE_2,
+                &format!("the {what} sits a space-2 padding below the pane's top"),
+            );
+            assert_close(
+                surface.bottom() - control.bottom(),
+                spacing::SPACE_2,
+                &format!("the {what} sits a space-2 padding above the pane's bottom"),
+            );
+        }
     }
 
     /// The focus ring and halo of the dismiss circle and of the action's
@@ -1195,8 +1230,11 @@ mod tests {
             vec![None, Some(SnackbarEvent::Dismissed)],
             "the release dismisses, the press alone does not"
         );
-        assert!(!host.is_showing(), "the snackbar is gone");
-        assert_eq!(host.current(), None, "nothing is left on screen");
+        assert_eq!(
+            host.current(),
+            None,
+            "the snackbar is gone: nothing is left on screen"
+        );
     }
 
     /// The text takes the look's colours and rides the entrance fade:
@@ -1305,49 +1343,73 @@ mod tests {
 
     /// On a phone the snackbar is no wider than the window less a space-4
     /// margin on each side (the README: "full width less 16px margins"),
-    /// not its 600px cap centred and clipped: at 390pt the pane fits the
-    /// content rect with its margins, the long message wraps inside it
-    /// and ends before the pill, and the dismiss circle is whole inside
-    /// the window.
+    /// not its 600px cap centred and clipped, and its text never runs
+    /// into the pill. At 390pt a long message wraps inside the pane. At
+    /// 320pt the gallery's "Sync failed" demo, with its tile and "Retry
+    /// now", leaves the text column only about 70pt; the column shrinks
+    /// to that (the preview's `min-width: 0`) instead of holding a 120pt
+    /// floor that ran the text into the pill. The pane fits the content
+    /// rect with its margins and the dismiss circle is whole inside the
+    /// window.
     #[test]
     fn the_snackbar_fits_a_phone_with_its_margins() {
         let theme = ThemeId::Light;
         let flags = UiKitFlags::default();
         let message = "Timesheet submitted for week 41. Your manager will review it before Friday.";
-        let (ctx, mut host) = settled(
-            theme,
-            &flags,
-            Some(egui::vec2(390.0, 844.0)),
-            Snackbar::success(message).action("Retry now"),
-        );
-        let ((surface, action, dismiss), shapes) = paint_pass(&ctx, |ui| {
-            host.paint(ui.ctx(), theme, &flags);
+        let title = "Sync failed";
+        let line = "Upstream returned 503. Retrying automatically.";
+        let cases = [
             (
-                rect_of(ui, "surface"),
-                rect_of(ui, "action"),
-                rect_of(ui, "dismiss"),
-            )
-        });
+                390.0,
+                Snackbar::success(message).action("Retry now"),
+                vec![message],
+            ),
+            (
+                320.0,
+                Snackbar::error(title)
+                    .title(title)
+                    .line(line)
+                    .action("Retry now"),
+                vec![title, line],
+            ),
+        ];
+        for (window, snackbar, texts) in cases {
+            let (ctx, mut host) = settled(theme, &flags, Some(egui::vec2(window, 844.0)), snackbar);
+            let ((surface, action, dismiss), shapes) = paint_pass(&ctx, |ui| {
+                host.paint(ui.ctx(), theme, &flags);
+                (
+                    rect_of(ui, "surface"),
+                    rect_of(ui, "action"),
+                    rect_of(ui, "dismiss"),
+                )
+            });
 
-        let content = ctx.content_rect();
-        assert_close(content.width(), 390.0, "the window the pass ran in");
-        assert!(
-            surface.left() >= content.left() + spacing::SPACE_4 - 0.01
-                && surface.right() <= content.right() - spacing::SPACE_4 + 0.01,
-            "the pane {surface:?} leaves the content rect {content:?} less its margins"
-        );
-        assert!(
-            content.contains_rect(dismiss),
-            "the dismiss circle {dismiss:?} is cut off by the window {content:?}"
-        );
-        let text = painted_text(&shapes, message);
-        assert!(text.galley.rows.len() > 1, "the long message wraps");
-        let text_end = text.galley.rect.translate(text.pos.to_vec2()).right();
-        assert!(
-            text_end <= action.left() - spacing::SPACE_3 + 0.01,
-            "the message ends at x {text_end}, inside the gap before the pill at {}",
-            action.left()
-        );
+            let content = ctx.content_rect();
+            assert_close(content.width(), window, "the window the pass ran in");
+            assert!(
+                surface.left() >= content.left() + spacing::SPACE_4 - 0.01
+                    && surface.right() <= content.right() - spacing::SPACE_4 + 0.01,
+                "{window}pt: the pane {surface:?} leaves the content rect {content:?} less its margins"
+            );
+            assert!(
+                content.contains_rect(dismiss),
+                "{window}pt: the dismiss circle {dismiss:?} is cut off by the window {content:?}"
+            );
+            for text in &texts {
+                let shape = painted_text(&shapes, text);
+                let text_end = shape.galley.rect.translate(shape.pos.to_vec2()).right();
+                assert!(
+                    text_end <= action.left() - spacing::SPACE_3 + 0.01,
+                    "{window}pt: {text:?} ends at x {text_end}, inside the gap before the pill at {}",
+                    action.left()
+                );
+            }
+            let longest = painted_text(&shapes, texts[texts.len() - 1]);
+            assert!(
+                longest.galley.rows.len() > 1,
+                "{window}pt: the long text wraps"
+            );
+        }
     }
 
     /// On a phone, under the tablet breakpoint, the snackbar spans the
@@ -1476,8 +1538,8 @@ mod tests {
     /// The text block is centred on the pane's midline: a one-line
     /// message sits on it within half a point (top-aligned in a 48pt pane
     /// it sat about 7pt above), and a title over a wrapped line, whose
-    /// pane hugs the text, still starts a space-2 padding below the
-    /// pane's top, as it always did.
+    /// pane hugs the text, starts the row's space-2 padding plus the text
+    /// block's own space-1 below the pane's top.
     #[test]
     fn the_text_block_is_centred_on_the_pane() {
         let theme = ThemeId::Light;
@@ -1508,15 +1570,16 @@ mod tests {
             "the line wraps, so the pane hugs its text"
         );
         let text_height = title_shape.galley.size().y + line_shape.galley.size().y;
+        let text_pad = spacing::SPACE_2 + spacing::SPACE_1;
         assert_close(
             surface.height(),
-            text_height + 2.0 * spacing::SPACE_2,
-            "the pane hugs its text",
+            text_height + 2.0 * text_pad,
+            "the pane hugs its text, padded by the row and by the text block",
         );
         assert_close(
             title_shape.pos.y,
-            surface.top() + spacing::SPACE_2,
-            "the title starts a space-2 padding below the pane's top",
+            surface.top() + text_pad,
+            "the title starts a space-2 row padding and a space-1 text padding below the pane's top",
         );
         assert_close(
             line_shape.pos.y,
