@@ -8,8 +8,30 @@ description = "Vynatix design system as pure egui: generated tokens for all six 
 [dependencies]
 egui.workspace = true
 
-# The gallery example hosts itself on eframe the way crates/rustnotes does
-# on desktop: default fonts, the glow renderer and accesskit. A dev
+# The gallery example hosts itself on eframe the way crates/rustnotes does:
+# default fonts everywhere, then the renderer per platform. A dev
 # dependency only — the kit itself is pure egui with no host.
 [dev-dependencies]
-eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit"] }
+eframe = { workspace = true, features = ["default_fonts"] }
+log.workspace = true
+
+# Desktop gallery: the glow renderer and accesskit.
+[target.'cfg(not(target_os = "ios"))'.dev-dependencies]
+eframe = { workspace = true, features = ["glow", "accesskit"] }
+
+# iOS gallery: eframe's glow path needs glutin, which has no iOS backend —
+# wgpu/Metal instead (the same split as crates/rustnotes), plus the objc2
+# crates the example's UIKit glue (examples/gallery/ios.rs) needs.
+[target.'cfg(target_os = "ios")'.dev-dependencies]
+eframe = { workspace = true, features = ["wgpu"] }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSDictionary",
+    "NSObject",
+    "NSNotification",
+] }
+# CFURL is not used by the gallery; it is what makes CGRect resolve here,
+# mirroring the rustnotes host's use of the same crate.
+objc2-core-foundation = { version = "0.3", features = ["CFURL"] }
+objc2-ui-kit = { version = "0.3", features = ["UIApplication", "UIGeometry"] }

@@ -45,6 +45,17 @@
 //! window (the state tiles, the radii, the metrics, the editorial
 //! trio, the glass panes) scroll horizontally instead of clipping
 //! their tails, the way the web previews scroll the same rows.
+//!
+//! The host split, following `crates/rustnotes`: desktop runs the glow
+//! renderer with accesskit, iOS runs wgpu/Metal (eframe's glow path
+//! needs glutin, which has no iOS backend) with the UIKit glue the
+//! demo needs vendored in `ios.rs` — safe-area insets that include the
+//! keyboard, and wgpu limits the iOS Metal devices meet. Package the
+//! iOS build with `just ios app=ui-kit-gallery`, or end to end with
+//! `just run-ios app=ui-kit-gallery`.
+
+#[cfg(target_os = "ios")]
+mod ios;
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
@@ -76,10 +87,22 @@ use ui_kit::tokens::{radii, spacing, ThemeColors};
 use ui_kit::typography::{install, specimen_job, TrackedLabel, TypeStyle};
 
 fn main() -> eframe::Result {
+    // Panics go through NSLog on iOS: stderr is unreadable there.
+    #[cfg(target_os = "ios")]
+    ios::install_panic_hook();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(copy::APP_TITLE)
             .with_inner_size([1000.0, 780.0]),
+        // Glow on desktop; wgpu/Metal on iOS (eframe's glow path needs
+        // glutin, which has no iOS backend) — the same split as the
+        // rustnotes host, with the iOS Metal limits from the glue.
+        #[cfg(target_os = "ios")]
+        renderer: eframe::Renderer::Wgpu,
+        #[cfg(not(target_os = "ios"))]
+        renderer: eframe::Renderer::Glow,
+        #[cfg(target_os = "ios")]
+        wgpu_options: ios::wgpu_options(),
         ..Default::default()
     };
     eframe::run_native(
@@ -2068,6 +2091,13 @@ impl Gallery {
 }
 
 impl eframe::App for Gallery {
+    /// iOS only: feed egui the safe-area insets (keyboard included)
+    /// winit does not report there. See `ios.rs`.
+    #[cfg(target_os = "ios")]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        ios::apply_safe_area(ctx, raw);
+    }
+
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
         // The sticky bar, floating on the canvas with its clearance.

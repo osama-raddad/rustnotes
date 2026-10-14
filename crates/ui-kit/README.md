@@ -6,12 +6,15 @@ shadows, type scale), the typography stack with self-hosted fonts, the
 interaction states and focus ring, the Material Symbols icon catalogue,
 the logo mesh, and the 22 components built on them. Like
 `rustnotes-core`, the crate is pure egui — no window, GL or platform
-glue; the gallery hosts itself on eframe for desktop demo purposes only.
+glue; the gallery hosts itself on eframe (desktop and iOS simulator)
+for demo purposes only.
 
 ## Run the gallery
 
 ```sh
-cargo run -p ui-kit --example gallery
+cargo run -p ui-kit --example gallery        # desktop window
+just run-ios app=ui-kit-gallery              # iOS simulator (boots one if needed)
+just ios app=ui-kit-gallery                  # or: build the .app bundle only
 ```
 
 The gallery is the kit's demo surface and its QA: the bar-plus-tabs
@@ -19,6 +22,16 @@ chrome, four panels (Brand, Foundations, Components, Feedback), every
 component live in the active theme. The bar's Theme menu switches all
 six themes and the reduced-motion and reduced-transparency flags; the
 choice holds for the session.
+
+On iOS the example hosts itself the way `crates/rustnotes` does —
+wgpu/Metal (eframe's glow path needs glutin, which has no iOS backend)
+plus the UIKit glue an example demo needs, vendored in
+`examples/gallery/ios.rs`: safe-area insets that include the keyboard,
+wgpu limits the iOS Metal devices meet, and an NSLog panic hook. The
+kit itself stays pure egui with no host; the eframe and objc2
+dependencies are dev-dependencies, target-gated per renderer. The
+gallery has no Android packaging (an example has no cdylib
+`android_main`); the Android recipes error out for it by design.
 
 ## Using the kit in an egui app
 
