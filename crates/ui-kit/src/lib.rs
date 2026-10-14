@@ -15,8 +15,8 @@
 //! the gallery's copy constants and the voice lint that scans them.
 //!
 //! Pure egui like `rustnotes-core`: no window, GL or platform glue. The
-//! gallery (`examples/gallery.rs`) hosts itself on eframe for desktop
-//! demo purposes only.
+//! gallery (the `ui-kit-gallery` crate, hosted by `rustnotes`) is its
+//! demo surface on desktop and mobile.
 
 pub mod components;
 pub mod gallery_copy;

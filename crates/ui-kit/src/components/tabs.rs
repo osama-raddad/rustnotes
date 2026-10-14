@@ -25,7 +25,7 @@
 //! installs.
 //!
 //! The gallery is the component's real demo: its own panel switcher is
-//! a [`Tabs`] row (see `examples/gallery.rs`).
+//! a [`Tabs`] row (see the `ui-kit-gallery` crate).
 
 use egui::scroll_area::{DragScroll, ScrollSource};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Ui, Vec2};
