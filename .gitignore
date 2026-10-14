@@ -13,8 +13,13 @@
 /.claude/worktrees/
 .DS_Store
 xcuserdata/
+__pycache__/
 
 # Local research/orchestration scratch, not part of the repo
 /reports/
 /research_notes/
 /.orchestration/
+
+# AFK pipeline state: issue scratch, session state and the staged design
+# system (ui-kit's generated tokens are committed; the source stays local)
+/.afk/

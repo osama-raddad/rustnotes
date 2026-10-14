@@ -1,0 +1,57 @@
+[package]
+name = "ui-kit-gallery"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95" # egui 0.36 floor
+description = "The Vynatix UI kit's demo gallery as an app: every component live, on desktop, iOS and Android through the rustnotes host"
+
+# One crate, two shapes, mirroring rustnotes and hello-mobile: Android's
+# NativeActivity loads the cdylib and calls `android_main`; iOS and desktop
+# run the binary in src/main.rs.
+[lib]
+name = "ui_kit_gallery"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "ui-kit-gallery"
+path = "src/main.rs"
+
+# The backend swap, mirroring hello-mobile's (see its Cargo.toml for the
+# full rationale). This crate carries the choice itself: it declares
+# android-activity for its own `android_main` signature AND consumes
+# rustnotes with `default-features = false`, so the host's
+# `android-native-activity` default never leaks in — opt into GameActivity
+# here (`--features android-game-activity`) exactly as in the host.
+[features]
+default = ["android-native-activity"]
+android-native-activity = [
+    "rustnotes/android-native-activity",
+    "android-activity/native-activity",
+]
+android-game-activity = [
+    "rustnotes/android-game-activity",
+    "android-activity/game-activity",
+]
+
+[dependencies]
+# The kit under demo, and the host that runs it everywhere: the host's
+# iOS observers (safe area incl. keyboard, appearance, wgpu limits) and
+# Android bootstrap (insets, night mode, font scale) are the whole point
+# of hosting through it rather than vendoring glue in the example.
+ui-kit = { path = "../ui-kit" }
+rustnotes = { path = "../rustnotes", default-features = false }
+log.workspace = true
+egui.workspace = true
+# The bin's `eframe::Result` return type only; renderer features arrive
+# through rustnotes' own target-scoped eframe deps (features unify).
+eframe.workspace = true
+
+# Desktop only: the iOS binary logs through the host's panic hook (NSLog)
+# instead — same scoping as rustnotes and hello-mobile.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+env_logger = "0.11"
+
+# The lib's `android_main` signature; winit gets the AndroidApp through
+# the host's `start`, which sets `options.android_app` itself.
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = "0.6"

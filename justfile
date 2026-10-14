@@ -132,8 +132,22 @@ app-identity app:
         echo "ks_dname='CN=Demo Mobile Debug,O=Rust,C=US'"
         echo "entry=''"
         ;;
+    ui-kit-gallery)
+        echo "key='ui-kit-gallery'"
+        echo "crate='ui-kit-gallery'"
+        echo "cdylib='ui_kit_gallery'"
+        echo "bin='ui-kit-gallery'"
+        echo "android_pkg='com.osamaraddad.vynatixgallery'"
+        echo "label='Vynatix Gallery'"
+        echo "ios_bundle='com.osamaraddad.vynatixgallery.ios'"
+        echo "res='crates/ui-kit-gallery/resources'"
+        echo "ks='ui-kit-gallery.debug.keystore'"
+        echo "ks_alias='vynatixgallery'"
+        echo "ks_dname='CN=Vynatix Gallery Debug,O=Rust,C=US'"
+        echo "entry=''"
+        ;;
     *)
-        echo "ERROR: unknown app '{{app}}' (expected 'rustnotes', 'hello-mobile' or 'demo-mobile')." >&2
+        echo "ERROR: unknown app '{{app}}' (expected 'rustnotes', 'hello-mobile', 'demo-mobile' or 'ui-kit-gallery')." >&2
         exit 1
         ;;
     esac
@@ -473,18 +487,17 @@ ios-device app='rustnotes': (ios-build app 'aarch64-apple-ios')
 # bundle id and the identity whose certificate the profile embeds. Override
 # with IDENTITY='<name-or-hash>' / PROFILE=path.
 #
-# RUSTNOTES-ONLY, by explicit design: the profile story below is welded to
-# tools/ios-profile-helper, whose pbxproj bakes
-# com.osamaraddad.rustnotes.ios. Guarded per app so a second app fails with
-# the reason, never by attempting to sign with a rustnotes profile. Per-app
-# profile minting is the endpoint CLI's to build (plan addendum).
+# Per-app by scan, not by guard: the loop below matches each profile's
+# application-identifier against THIS app's bundle id (or a wildcard), so a
+# second app can never silently sign with rustnotes' profile — a missing
+# profile for its own bundle id is the error. Minting is `ios-profile`,
+# which overrides the helper's baked bundle id per app.
 [private]
 ios-sign app='rustnotes':
     #!/bin/zsh
     set -euo pipefail
     cfg=$(just app-identity "{{app}}")
     eval "$cfg"
-    [ "$key" = "rustnotes" ] || { echo "ERROR: ios-sign supports only app=rustnotes today: the profile helper (tools/ios-profile-helper) bakes com.osamaraddad.rustnotes.ios into its pbxproj, so no profile for another app's bundle id can be minted or matched here. Per-app profiles are the endpoint CLI's profile story — see docs/framework-extraction-plan.md."; exit 1; }
     app="build/ios/$label.app"
     profdir="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
     [ -d "$profdir" ] || profdir="$HOME/Library/MobileDevice/Provisioning Profiles"
@@ -519,9 +532,10 @@ ios-sign app='rustnotes':
     if [ -z "$profile" ]; then
         echo "ERROR: no provisioning profile covering $ios_bundle in:"
         echo "  $profdir"
-        echo "Fix: run 'just ios-profile' (rebuilds the bundled throwaway Xcode"
-        echo "project, tools/ios-profile-helper, to mint a fresh 7-day personal-team"
-        echo "profile — iPhone must be connected). Then rerun 'just ios-install'."
+        echo "Fix: run 'just ios-profile app=$key' (rebuilds the bundled throwaway Xcode"
+        echo "project, tools/ios-profile-helper, overriding its bundle id to mint a fresh"
+        echo "7-day personal-team profile — iPhone must be connected). Then rerun"
+        echo "'just ios-install app=$key'."
         echo "(Paid-team alternative: register the App ID + create a development"
         echo " profile at developer.apple.com, download it into the dir above.)"
         exit 1
@@ -551,26 +565,27 @@ ios-sign app='rustnotes':
 # Refresh the 7-day development profile: rebuild the throwaway Xcode project
 # (tools/ios-profile-helper) with automatic signing. Run when ios-install
 # reports no valid profile. iPhone connected once.
-# The helper project bakes a personal DEVELOPMENT_TEAM into its pbxproj; the
-# command-line override below beats pbxproj settings, so contributors pass
-# TEAM=<their-team-id> (or export TEAM) without editing anything checked in.
-# RUSTNOTES-ONLY, same coupling as ios-sign: the helper's pbxproj also bakes
-# com.osamaraddad.rustnotes.ios as the profiled bundle id.
+# The helper project's pbxproj bakes a personal DEVELOPMENT_TEAM and
+# com.osamaraddad.rustnotes.ios as its bundle id; the command-line overrides
+# below beat pbxproj settings, so contributors pass TEAM=<their-team-id>
+# (or export TEAM) without editing anything checked in, and each app mints
+# under its own bundle id from the identity table (free personal teams:
+# up to 10 App IDs per 7 days — the per-app override spends one per app).
 ios-profile app='rustnotes' TEAM=env_var_or_default('TEAM', 'P86GBGS2B7'):
     #!/bin/zsh
     set -euo pipefail
     cfg=$(just app-identity "{{app}}")
     eval "$cfg"
-    [ "$key" = "rustnotes" ] || { echo "ERROR: ios-profile supports only app=rustnotes today: tools/ios-profile-helper's pbxproj bakes com.osamaraddad.rustnotes.ios, so it cannot mint a profile for another app's bundle id. Per-app profiles are the endpoint CLI's profile story — see docs/framework-extraction-plan.md."; exit 1; }
     dev="${DEVICE:-$(just ios-device-id)}"
     [ -n "$dev" ] || { echo "ERROR: no connected device — profile refresh needs the iPhone once."; exit 1; }
     xcodebuild -project tools/ios-profile-helper/ios.xcodeproj -scheme ios \
         -destination "id=$dev" -allowProvisioningUpdates \
-        -allowProvisioningDeviceRegistration DEVELOPMENT_TEAM="{{TEAM}}" build
+        -allowProvisioningDeviceRegistration DEVELOPMENT_TEAM="{{TEAM}}" \
+        PRODUCT_BUNDLE_IDENTIFIER="$ios_bundle" build
 
 # .app + sign + install + launch on a connected iPhone (DEVICE=<uuid> to
-# pick). Device signing is rustnotes-only until profiles are per-app — the
-# ios-sign guard fires with the reason if another app reaches here.
+# pick). Signing is per-app: ios-sign matches a profile to the app's own
+# bundle id (mint one with `just ios-profile app=<key>` when none covers it).
 ios-install app='rustnotes': (ios-device app) (ios-sign app)
     #!/bin/zsh
     set -euo pipefail
@@ -619,12 +634,18 @@ screenshot-ios app='rustnotes':
 
 # ---- misc -------------------------------------------------------------------
 
-# Type-check every crate for its real targets (rustnotes, hello-mobile
-# and demo-mobile are each checked three ways: Android lib, iOS-sim bin,
-# host desktop bin)
+# Type-check every crate for its real targets (rustnotes, hello-mobile,
+# demo-mobile and ui-kit-gallery are each checked three ways: Android
+# lib, iOS-sim bin, host desktop bin)
 # (the workspace can't be checked as a whole: ndk-sys only compiles for Android)
+# (ui-kit is pure egui with no platform glue, so the host check covers it;
+# its gallery app carries the platform legs through the rustnotes host)
 check:
     cargo check -p rustnotes-core
+    cargo check -p ui-kit
+    cargo check -p ui-kit-gallery --lib --target aarch64-linux-android
+    cargo check -p ui-kit-gallery --bin ui-kit-gallery --target aarch64-apple-ios-sim
+    cargo check -p ui-kit-gallery --bin ui-kit-gallery
     cargo check -p rustnotes --lib --target aarch64-linux-android
     cargo check -p rustnotes --bin rustnotes --target aarch64-apple-ios-sim
     cargo check -p rustnotes --bin rustnotes
@@ -662,17 +683,19 @@ check-links:
 fmt:
     cargo fmt --all
 
-# Unit tests for the core crate and the demo gallery (the host crate is
-# platform glue — no tests)
+# Unit tests for the core, ui-kit and demo crates, plus the gallery's
+# headless input tests (the host crate is platform glue — no tests)
 test:
     cargo test -p rustnotes-core
+    cargo test -p ui-kit
+    cargo test -p ui-kit-gallery
     cargo test -p demo-mobile
 
-# Format check, then clippy over all four crates on the host feature set
+# Format check, then clippy over every crate on the host feature set
 # (the Android/iOS glue is additionally type-checked by `just check`)
 lint:
     cargo fmt --all -- --check
-    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile -p demo-mobile --all-targets -- -D warnings
+    cargo clippy -p rustnotes-core -p rustnotes -p hello-mobile -p demo-mobile -p ui-kit -p ui-kit-gallery --all-targets -- -D warnings
 
 clean:
     rm -rf build

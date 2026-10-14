@@ -1,0 +1,13 @@
+[package]
+name = "ui-kit"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95" # egui 0.36 floor
+description = "Vynatix design system as pure egui: generated tokens for all six themes, the themes, and the gallery demo surface"
+
+[dependencies]
+egui.workspace = true
+
+# The kit's own tests are headless (egui contexts, no window): the
+# gallery that once lived here as an example is now the ui-kit-gallery
+# app crate, hosted by `crates/rustnotes` the way hello-mobile is.
