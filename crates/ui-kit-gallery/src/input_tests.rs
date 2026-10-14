@@ -448,15 +448,7 @@ fn a_first_swipe_on_the_tab_strip_scrolls_it_and_taps_still_land() {
     h.tap(after.center());
     assert_eq!(h.app.gallery.tab, 3, "a tap on Feedback switches panels");
     h.idle(2);
-    // The info banner's dismiss is the topmost close glyph on the page.
-    let close = ui_kit::icons::Icon::Close.as_char().to_string();
-    let dismiss = h.painted(&close).expect("the info banner's dismiss");
-    h.tap(dismiss.center());
-    h.idle(2);
-    assert!(
-        h.painted(copy::BANNERS_RESTORE).is_some(),
-        "a tap inside the page dismisses the banner and offers the restore"
-    );
+    dismiss_the_info_banner(&mut h);
 }
 
 /// The wheel still scrolls the page, and the offset accumulates across
