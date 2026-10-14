@@ -103,6 +103,12 @@ impl ShowcaseRole {
 /// One theme card's copy: the character sentence, the ratio bar's
 /// segments (share out of one hundred and the role each paints) and
 /// the legend naming the direction's anchors.
+///
+/// The legend entries are paint names and shares ("60 Cloud Dancer",
+/// "30 Cloud Dancer + Teal"), not prose: every word a proper noun or
+/// a digit, so the gallery voice lint's sentence-case heuristic steps
+/// aside for them (the documented exemption at
+/// `gallery_copy::voice_failures`); the punctuation checks still run.
 pub struct ThemeCardCopy {
     /// The theme this card paints: its tokens, its faces, its name.
     pub theme: ThemeId,

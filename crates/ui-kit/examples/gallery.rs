@@ -1,4 +1,4 @@
-//! The Vynatix gallery in its final shape (issues 09 and 10): a
+//! The Vynatix gallery in its final shape (issues 09, 10 and 11): a
 //! Liquid Glass TopAppBar carrying the wordmark, the primary nav, the
 //! search affordance, the theme menu and the one call to action; a
 //! Tabs strip switching the gallery's panels — the Tabs widget's own
@@ -36,10 +36,19 @@
 //! The theme cards on that panel need every theme's faces, so
 //! startup installs all six themes' fonts (the installs are additive
 //! by design); the theme menu's per-switch install stays as it was.
+//!
+//! The polish pass (issue 11): every string the gallery paints is
+//! routed through `ui_kit::gallery_copy` as a constant, where the
+//! voice lint scans it (no em dashes, no stray ellipses, no
+//! exclamation marks, no emoji, no forbidden vocabulary, sentence
+//! case for headings); the specimen rows that can outgrow a narrow
+//! window (the state tiles, the radii, the metrics, the editorial
+//! trio, the glass panes) scroll horizontally instead of clipping
+//! their tails, the way the web previews scroll the same rows.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
-use ui_kit::components::badge::{count_text, Badge, BadgeTone, IconButton};
+use ui_kit::components::badge::{Badge, IconButton};
 use ui_kit::components::banner::{Banner, BannerEvent, BannerTone};
 use ui_kit::components::button::{Button, ButtonEmphasis};
 use ui_kit::components::checkbox::{Checkbox, CheckboxState};
@@ -57,6 +66,7 @@ use ui_kit::components::top_app_bar::{
 use ui_kit::components::{
     BrandShowcase, Card, Cover, EditorialCard, FocusRing, LiquidGlass, MetricCard, ThemesShowcase,
 };
+use ui_kit::gallery_copy as copy;
 use ui_kit::icon::{icon, icon_active, install as install_icons, IconSize};
 use ui_kit::icons::{Icon, CATEGORY_GROUPS};
 use ui_kit::logo::Logo;
@@ -68,12 +78,12 @@ use ui_kit::typography::{install, specimen_job, TrackedLabel, TypeStyle};
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Vynatix UI kit")
+            .with_title(copy::APP_TITLE)
             .with_inner_size([1000.0, 780.0]),
         ..Default::default()
     };
     eframe::run_native(
-        "Vynatix UI kit",
+        copy::APP_TITLE,
         options,
         Box::new(|cc| {
             let theme = ThemeId::Light;
@@ -102,9 +112,34 @@ fn main() -> eframe::Result {
     )
 }
 
-/// The gallery's four panels, in tab order: the brand book opens the
-/// gallery, the cover its first screen.
-const GALLERY_TABS: &[&str] = &["Brand", "Foundations", "Components", "Feedback"];
+/// A specimen row that can outgrow the page: laid out horizontally
+/// inside a horizontal scroll, so a narrow window scrolls the row
+/// instead of clipping its tail. The web previews scroll the same
+/// rows; `id` keeps the scroll areas distinct.
+fn scrolling_row(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
+    egui::ScrollArea::horizontal()
+        .id_salt(id)
+        .show(ui, |ui| ui.horizontal(add));
+}
+
+/// Pair the option enums with their labels from `gallery_copy`: the
+/// labels are copy, the enums are the form's state.
+fn pairs<T: Copy>(values: &[T], labels: &[&'static str]) -> Vec<(T, &'static str)> {
+    values
+        .iter()
+        .zip(labels)
+        .map(|(value, label)| (*value, *label))
+        .collect()
+}
+
+/// The radio flavour of [`pairs`]: `RadioOption` rows for a group.
+fn radio_options<T: Copy>(values: &[T], labels: &[&'static str]) -> Vec<RadioOption<'static, T>> {
+    values
+        .iter()
+        .zip(labels)
+        .map(|(value, label)| option(*value, label))
+        .collect()
+}
 
 struct Gallery {
     theme: ThemeId,
@@ -197,46 +232,6 @@ fn sentence_case(role: &str) -> String {
     out
 }
 
-/// The type-specimen samples, the design system's own copy from
-/// `tokens.json` `type.groups`, in specimen order.
-const SPECIMEN: &[(TypeStyle, &str)] = &[
-    (TypeStyle::Display, "Quiet is the new loud."),
-    (
-        TypeStyle::Headline1,
-        "We rebuilt Volvo's truck radio in sixteen weeks.",
-    ),
-    (
-        TypeStyle::Headline2,
-        "A premium consultancy moves the way a turntable moves: deliberate, damped, confident.",
-    ),
-    (
-        TypeStyle::Headline3,
-        "Why does most consulting writing sound the same?",
-    ),
-    (
-        TypeStyle::Headline4,
-        "Engineering judgement, sold by the senior person doing the work.",
-    ),
-    (TypeStyle::Lede, "Vynatix is a Nordic IT consultancy in Gothenburg."),
-    (
-        TypeStyle::Body,
-        "The discipline of the system is the luxury signal: not ornament, not saturation, not motion.",
-    ),
-    (
-        TypeStyle::Editorial,
-        "Premium isn't a price point. It's a discipline. The hundred small decisions a competitor would have skipped, made deliberately and visibly, day after day.",
-    ),
-    (TypeStyle::Eyebrow, "Field notes · Gothenburg · April 2026"),
-    (
-        TypeStyle::Mono,
-        "--md-sys-color-primary: #1E3A2F;",
-    ),
-    (
-        TypeStyle::Caption,
-        "Photography by Jens Lindqvist. Volvo Trucks workshop, Lundby, Gothenburg. April 2026.",
-    ),
-];
-
 /// The specimen colour each style sets, following the stylesheet's
 /// helpers: headlines and pull-quotes in text-display, ledes and captions
 /// in text-muted, body in text-body, the eyebrow in text-accent.
@@ -271,14 +266,14 @@ fn format_tracking(tracking_em: f32) -> String {
 fn type_section(ui: &mut egui::Ui, theme: ThemeId) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Materials · Type · 2026",
+        copy::TYPE_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
     ));
     ui.add_space(spacing::SPACE_4);
 
-    for (style, sample) in SPECIMEN {
+    for (style, sample) in copy::SPECIMEN {
         let color = specimen_color(*style, &colors);
         if *style == TypeStyle::Eyebrow {
             ui.add(TrackedLabel::new(
@@ -342,7 +337,7 @@ fn state_tile(
         ui.painter().text(
             body.center(),
             Align2::CENTER_CENTER,
-            "Start a project",
+            copy::START_A_PROJECT,
             TypeStyle::Body.font_id(theme),
             text,
         );
@@ -361,7 +356,7 @@ fn state_tile(
 fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "States · Hover, press, focus",
+        copy::STATES_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
@@ -373,13 +368,23 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     let pressed = states::composite_over(states::pressed_overlay(colors.on_primary), rest);
     let disabled = states::disabled(colors.on_surface, colors.surface_container);
 
-    ui.horizontal(|ui| {
-        state_tile(ui, theme, "Rest", rest, 1.0, colors.on_primary, false);
+    // The captions outsize their tiles, so the row scrolls rather
+    // than clip on a narrow window.
+    scrolling_row(ui, "states-tiles", |ui| {
+        state_tile(
+            ui,
+            theme,
+            copy::STATE_CAPTIONS[0],
+            rest,
+            1.0,
+            colors.on_primary,
+            false,
+        );
         ui.add_space(spacing::SPACE_2);
         state_tile(
             ui,
             theme,
-            "Hover · 8% on-colour overlay",
+            copy::STATE_CAPTIONS[1],
             hover,
             1.0,
             colors.on_primary,
@@ -389,7 +394,7 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         state_tile(
             ui,
             theme,
-            "Pressed · 12% overlay · 98.5% scale · 100ms",
+            copy::STATE_CAPTIONS[2],
             pressed,
             states::PRESS_SCALE,
             colors.on_primary,
@@ -399,7 +404,7 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         state_tile(
             ui,
             theme,
-            "Focus · 2px ring · 2px offset · 4px halo · 120ms",
+            copy::STATE_CAPTIONS[3],
             rest,
             1.0,
             colors.on_primary,
@@ -409,7 +414,7 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         state_tile(
             ui,
             theme,
-            "Disabled · content 38% · container 12%",
+            copy::STATE_CAPTIONS[4],
             disabled.container,
             1.0,
             disabled.content,
@@ -419,10 +424,10 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
 
     ui.add_space(spacing::SPACE_2);
     FocusRing::new().wrap(ui, theme, flags, |ui| {
-        ui.add(egui::Button::new("Tab to me"))
+        ui.add(egui::Button::new(copy::STATES_TAB_BUTTON))
     });
     ui.add(egui::Label::new(specimen_job(
-        "Press Tab until the ring lands here. Focus is carried by the ring, not a colour change.",
+        copy::STATES_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -434,14 +439,14 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
 fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Foundations · Spacing, radii, elevation",
+        copy::FOUNDATIONS_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
     ));
     ui.add_space(spacing::SPACE_4);
 
-    ui.label("Spacing · the approved scale · 4px base");
+    ui.label(copy::SPACING_LABEL);
     ui.add_space(spacing::SPACE_2);
     ui.horizontal_wrapped(|ui| {
         for (name, value) in spacing::ALL {
@@ -467,9 +472,10 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
     });
 
     ui.add_space(spacing::SPACE_4);
-    ui.label("Radii · all eight");
+    ui.label(copy::RADII_LABEL);
     ui.add_space(spacing::SPACE_2);
-    ui.horizontal(|ui| {
+    // Eight labelled swatches run wide; the row scrolls.
+    scrolling_row(ui, "radii-row", |ui| {
         for (name, value) in radii::ALL {
             ui.vertical(|ui| {
                 let (rect, _) =
@@ -495,7 +501,7 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
     });
 
     ui.add_space(spacing::SPACE_4);
-    ui.label(format!("Elevation · L1 to L5 · {}", theme.name()));
+    ui.label(format!("{} · {}", copy::ELEVATION_LABEL, theme.name()));
     ui.add_space(spacing::SPACE_2);
     let shadows = theme.shadows();
     let levels = [
@@ -552,7 +558,7 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
 fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Icons · Material Symbols Outlined · wght 300",
+        copy::ICONS_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
@@ -578,7 +584,7 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
         }
     });
     ui.add(egui::Label::new(specimen_job(
-        "One library in every theme. Weight 300; grade -25 on the dark canvases so light glyphs don't bloom. The optical size sits at 24 in every subset. location_on has no glyph in font 0.47.5 and paints push_pin, the catalogue's pin.",
+        copy::ICONS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -645,14 +651,14 @@ fn logo_band(
 fn logo_section(ui: &mut egui::Ui, theme: ThemeId) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Logo · The mark and the wordmark",
+        copy::LOGO_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
     ));
     ui.add_space(spacing::SPACE_4);
 
-    logo_band(ui, theme, "On the canvas · primary", None, |ui| {
+    logo_band(ui, theme, copy::LOGO_ON_CANVAS, None, |ui| {
         ui.add(Logo::mark().height(32.0));
         ui.add_space(spacing::SPACE_6);
         ui.add(Logo::wordmark());
@@ -661,7 +667,7 @@ fn logo_section(ui: &mut egui::Ui, theme: ThemeId) {
     logo_band(
         ui,
         theme,
-        "On a primary fill · on-primary",
+        copy::LOGO_ON_PRIMARY,
         Some(colors.primary),
         |ui| {
             ui.add(
@@ -677,7 +683,7 @@ fn logo_section(ui: &mut egui::Ui, theme: ThemeId) {
     logo_band(
         ui,
         theme,
-        "On an inverse band · inverse-on-surface",
+        copy::LOGO_ON_INVERSE,
         Some(colors.inverse_surface),
         |ui| {
             ui.add(
@@ -690,12 +696,12 @@ fn logo_section(ui: &mut egui::Ui, theme: ThemeId) {
         },
     );
     ui.add_space(spacing::SPACE_2);
-    logo_band(ui, theme, "The accent moment · text-accent", None, |ui| {
+    logo_band(ui, theme, copy::LOGO_ACCENT_MOMENT, None, |ui| {
         ui.add(Logo::mark().height(32.0).ink(ui_kit::logo::LogoInk::Accent));
     });
     ui.add_space(spacing::SPACE_2);
     ui.add(egui::Label::new(specimen_job(
-        "Smallest on screen: the wordmark 96px wide, the mark 24px in product chrome and 96px in a brand placement. Clear space on every side: the height of the V.",
+        copy::LOGO_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -737,7 +743,7 @@ fn card_specimen(
 /// elevated (the default), outlined, filled and interactive, the last
 /// one a real control to hover and tab to.
 fn cards_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
-    ui.label("Cards · four variants · radius-lg · padding 24");
+    ui.label(copy::CARDS_LABEL);
     ui.add_space(spacing::SPACE_2);
     egui::Grid::new("surfaces-cards")
         .num_columns(2)
@@ -747,8 +753,8 @@ fn cards_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
                 ui,
                 theme,
                 flags,
-                ".card",
-                "Elevated, the default: surface-container-low with shadow-l1.",
+                copy::CARD_DEFAULT_CLASS,
+                copy::CARD_DEFAULT_DESC,
                 Card::new(),
             );
             ui.end_row();
@@ -756,16 +762,16 @@ fn cards_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
                 ui,
                 theme,
                 flags,
-                ".card--outlined",
-                "Surface with a 1px outline-variant border, no shadow.",
+                copy::CARD_OUTLINED_CLASS,
+                copy::CARD_OUTLINED_DESC,
                 Card::new().outlined(),
             );
             card_specimen(
                 ui,
                 theme,
                 flags,
-                ".card--filled",
-                "Surface-container, no shadow.",
+                copy::CARD_FILLED_CLASS,
+                copy::CARD_FILLED_DESC,
                 Card::new().filled().compact(),
             );
             ui.end_row();
@@ -773,8 +779,8 @@ fn cards_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
                 ui,
                 theme,
                 flags,
-                ".card--interactive",
-                "Lifts to surface-container and shadow-l2 on hover. Tab to it for the ring.",
+                copy::CARD_INTERACTIVE_CLASS,
+                copy::CARD_INTERACTIVE_DESC,
                 Card::new().interactive(),
             );
             ui.end_row();
@@ -782,8 +788,8 @@ fn cards_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
                 ui,
                 theme,
                 flags,
-                ".card · large padding",
-                "The same elevated card at space-8, 32px, for pull-quotes and folios.",
+                copy::CARD_LARGE_CLASS,
+                copy::CARD_LARGE_DESC,
                 Card::new().large(),
             );
             ui.end_row();
@@ -793,29 +799,31 @@ fn cards_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
 /// The metric trio: one specific, sourced number per card, per the
 /// MetricCard preview's own copy.
 fn metrics_group(ui: &mut egui::Ui, theme: ThemeId) {
-    ui.label("Metrics · one number each, sourced");
+    ui.label(copy::METRICS_LABEL);
     ui.add_space(spacing::SPACE_2);
-    ui.horizontal(|ui| {
+    // Three cards side by side run near the page width; the row
+    // scrolls on a narrower window.
+    scrolling_row(ui, "metrics-row", |ui| {
         MetricCard::new(
-            "Trucks running our code",
-            "714k",
-            "Volvo FH, FM, FMX. April 2026 fleet count.",
+            copy::METRIC_FLEET_LABEL,
+            copy::METRIC_FLEET_FIGURE,
+            copy::METRIC_FLEET_SOURCE,
         )
         .ui(ui, theme);
         ui.add_space(spacing::SPACE_5);
         MetricCard::new(
-            "Average engagement length",
-            "19 mo",
-            "Across 27 engagements since 2022.",
+            copy::METRIC_TENURE_LABEL,
+            copy::METRIC_TENURE_FIGURE,
+            copy::METRIC_TENURE_SOURCE,
         )
         .ui(ui, theme);
         ui.add_space(spacing::SPACE_5);
         MetricCard::new(
-            "Senior people, percent",
-            "100",
-            "No juniors on client work. Ever.",
+            copy::METRIC_SENIOR_LABEL,
+            copy::METRIC_SENIOR_FIGURE,
+            copy::METRIC_SENIOR_SOURCE,
         )
-        .unit("%")
+        .unit(copy::METRIC_SENIOR_UNIT)
         .ui(ui, theme);
     });
 }
@@ -823,31 +831,31 @@ fn metrics_group(ui: &mut egui::Ui, theme: ThemeId) {
 /// The editorial row: a case study, a field note and an open role,
 /// image areas as the placeholder tiles until photography exists.
 fn editorial_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
-    ui.label("Editorial · case study, field note, open role");
+    ui.label(copy::EDITORIAL_LABEL);
     ui.add_space(spacing::SPACE_2);
-    ui.horizontal(|ui| {
+    scrolling_row(ui, "editorial-row", |ui| {
         EditorialCard::new(
-            "Case study",
-            "Rebuilding the truck radio in sixteen weeks.",
-            "Three engineers, one designer, one product partner. Shipped to seven hundred thousand cabs by week thirty-one.",
+            copy::EDITORIAL_CASE_EYEBROW,
+            copy::EDITORIAL_CASE_HEADLINE,
+            copy::EDITORIAL_CASE_BODY,
         )
-        .action("Read the case study")
+        .action(copy::EDITORIAL_CASE_ACTION)
         .ui(ui, theme, flags);
         ui.add_space(spacing::SPACE_5);
         EditorialCard::new(
-            "Field notes",
-            "Premium isn't a price point. It's a discipline.",
-            "Why every Vynatix interface starts from a sixty-thirty-ten ratio, even when the brief asks for something louder.",
+            copy::EDITORIAL_FIELD_EYEBROW,
+            copy::EDITORIAL_FIELD_HEADLINE,
+            copy::EDITORIAL_FIELD_BODY,
         )
-        .action("Read the field note")
+        .action(copy::EDITORIAL_FIELD_ACTION)
         .ui(ui, theme, flags);
         ui.add_space(spacing::SPACE_5);
         EditorialCard::new(
-            "Open role",
-            "Senior platform engineer, Gothenburg.",
-            "Android Automotive, Kotlin, OTA pipelines. Permanent. Pay band published. No negotiation theatre.",
+            copy::EDITORIAL_ROLE_EYEBROW,
+            copy::EDITORIAL_ROLE_HEADLINE,
+            copy::EDITORIAL_ROLE_BODY,
         )
-        .action("Read the role")
+        .action(copy::EDITORIAL_ROLE_ACTION)
         .ui(ui, theme, flags);
     });
 }
@@ -871,6 +879,10 @@ struct GlassPaneSpec {
     name: String,
 }
 
+/// The type-specimen glyph the glass scenes set behind their panes:
+/// display-scale letters for the tint to play against.
+const GLASS_SCENE_GLYPH: &str = "Aa";
+
 /// Paint one glass demo tile: the scene, then the pane over its lower
 /// part, chrome radius md, through the recipe so the specular edge and
 /// the L2 shadow ride along.
@@ -892,7 +904,7 @@ fn glass_tile(
     ui.painter().text(
         rect.left_top() + Vec2::new(spacing::SPACE_2, -spacing::SPACE_1),
         Align2::LEFT_TOP,
-        "Aa",
+        GLASS_SCENE_GLYPH,
         egui::FontId {
             size: 128.0,
             family: TypeStyle::Display.family(theme),
@@ -963,9 +975,11 @@ fn glass_tile(
 /// laid out as chrome, and the usage rules in the caption.
 fn glass_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     let colors = theme.colors();
-    ui.label("Liquid glass · five thicknesses · 1px specular edge · shadow-l2");
+    ui.label(copy::GLASS_LABEL);
     ui.add_space(spacing::SPACE_2);
-    ui.horizontal(|ui| {
+    // Five panes with their captions run past the page width; the
+    // row scrolls.
+    scrolling_row(ui, "glass-thicknesses", |ui| {
         for thickness in GlassThickness::ALL {
             glass_tile(
                 ui,
@@ -987,19 +1001,19 @@ fn glass_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     });
 
     ui.add_space(spacing::SPACE_2);
-    ui.label("Tints and the fallback · regular thickness · over the page canvas");
+    ui.label(copy::GLASS_TINTS_LABEL);
     ui.add_space(spacing::SPACE_1);
     let solid_flags = UiKitFlags {
         reduced_transparency: true,
         ..Default::default()
     };
     let tints: &[(GlassTint, &str, &UiKitFlags)] = &[
-        (GlassTint::Surface, ".glass", flags),
-        (GlassTint::Primary, ".glass--primary", flags),
-        (GlassTint::Accent, ".glass--accent", flags),
-        (GlassTint::Surface, "Reduced transparency", &solid_flags),
+        (GlassTint::Surface, copy::GLASS_SURFACE_CLASS, flags),
+        (GlassTint::Primary, copy::GLASS_PRIMARY_CLASS, flags),
+        (GlassTint::Accent, copy::GLASS_ACCENT_CLASS, flags),
+        (GlassTint::Surface, copy::GLASS_FALLBACK_NAME, &solid_flags),
     ];
-    ui.horizontal(|ui| {
+    scrolling_row(ui, "glass-tints", |ui| {
         for (tint, name, pane_flags) in tints {
             glass_tile(
                 ui,
@@ -1027,7 +1041,7 @@ fn glass_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     LiquidGlass::new().ui(ui, theme, flags, |ui| {
         ui.set_width(spacing::SPACE_40 + spacing::SPACE_10);
         ui.add(egui::Label::new(
-            egui::RichText::new("A pane as chrome, its labels in the recipe's colour")
+            egui::RichText::new(copy::GLASS_CHROME_LABEL)
                 .color(recipe.label)
                 .size(14.0)
                 .family(TypeStyle::Headline4.family(theme)),
@@ -1036,7 +1050,7 @@ fn glass_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
 
     ui.add_space(spacing::SPACE_2);
     ui.add(egui::Label::new(specimen_job(
-        "Chrome and overlays only: top app bars, sheets, popovers, modal headers. Never body content, and never two panes of the same thickness stacked. Under reduced transparency every pane turns solid, as the fourth tile shows. egui composites no backdrop blur: the tint and its opacity carry the glass, and the 1px specular edge marks the pane.",
+        copy::GLASS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1050,70 +1064,76 @@ fn glass_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
 /// control (hover, hold, Tab) with the disabled and busy pair.
 fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     let colors = theme.colors();
-    ui.label("Buttons · four emphases · radius-md · the body face at 600");
+    ui.label(copy::BUTTONS_LABEL);
     ui.add_space(spacing::SPACE_2);
     ui.horizontal_wrapped(|ui| {
-        Button::new("Start a project").ui(ui, theme, flags);
-        Button::new("Read the case study")
+        Button::new(copy::START_A_PROJECT).ui(ui, theme, flags);
+        Button::new(copy::BUTTON_READ_CASE_STUDY)
             .emphasis(ButtonEmphasis::Secondary)
             .ui(ui, theme, flags);
-        Button::new("Hire a team")
+        Button::new(copy::BUTTON_HIRE_A_TEAM)
             .emphasis(ButtonEmphasis::Tertiary)
             .icon_trailing(Icon::ArrowForward)
             .ui(ui, theme, flags);
-        Button::new("Cancel")
+        Button::new(copy::BUTTON_CANCEL)
             .emphasis(ButtonEmphasis::Ghost)
             .ui(ui, theme, flags);
-        Button::new("Disabled").disabled().ui(ui, theme, flags);
-        Button::new("Sending…").disabled().ui(ui, theme, flags);
+        Button::new(copy::BUTTON_DISABLED)
+            .disabled()
+            .ui(ui, theme, flags);
+        Button::new(copy::BUTTON_BUSY)
+            .disabled()
+            .ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
-        "Hover for the 8% on-colour overlay, hold for 12% and the 98.5% scale, Tab for the ring. Disabled drops to 38%. While an action runs, the label says what is happening.",
+        copy::BUTTONS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
     )));
 
     ui.add_space(spacing::SPACE_3);
-    ui.label("Sizes · 52, 44, 36 px");
+    ui.label(copy::SIZES_LABEL);
     ui.add_space(spacing::SPACE_2);
     ui.horizontal(|ui| {
-        Button::new("Open the dashboard")
+        Button::new(copy::BUTTON_OPEN_DASHBOARD)
             .large()
             .ui(ui, theme, flags);
-        Button::new("Save changes").ui(ui, theme, flags);
-        Button::new("Filter results").small().ui(ui, theme, flags);
+        Button::new(copy::BUTTON_SAVE_CHANGES).ui(ui, theme, flags);
+        Button::new(copy::BUTTON_FILTER_RESULTS)
+            .small()
+            .ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
-        "Keep touch targets at 44px or more: the default and large sizes clear the floor, the 36px small size stays on pointer-precise surfaces.",
+        copy::SIZES_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
     )));
 
     ui.add_space(spacing::SPACE_3);
-    ui.label("Icons · leading, trailing, icon-only");
+    ui.label(copy::BUTTON_ICONS_LABEL);
     ui.add_space(spacing::SPACE_2);
     ui.horizontal(|ui| {
-        Button::new("Search the archive")
+        Button::new(copy::BUTTON_SEARCH_ARCHIVE)
             .icon_leading(Icon::Search)
             .ui(ui, theme, flags);
-        Button::new("Get the proposal")
+        Button::new(copy::BUTTON_GET_PROPOSAL)
             .icon_trailing(Icon::ArrowForward)
             .ui(ui, theme, flags);
-        Button::new("Visit the studio")
+        Button::new(copy::BUTTON_VISIT_STUDIO)
             .icon_trailing(Icon::ArrowOutward)
             .ui(ui, theme, flags);
         Button::new("")
-            .icon_only(Icon::Search, "Search everything")
+            .icon_only(Icon::Search, copy::BUTTON_SEARCH_EVERYTHING)
             .ui(ui, theme, flags);
         Button::new("")
-            .icon_only(Icon::ArrowOutward, "Open the external site")
+            .icon_only(Icon::ArrowOutward, copy::BUTTON_OPEN_EXTERNAL)
             .emphasis(ButtonEmphasis::Secondary)
             .ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
-        "arrow_forward trails a call to action, arrow_outward a link that leaves the app. An icon-only button carries its action's name for assistive technology.",
+        copy::BUTTON_ICONS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1121,7 +1141,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
 
     ui.add_space(spacing::SPACE_3);
     ui.add(egui::Label::new(specimen_job(
-        "Tertiary is reserved: the one accent moment on a surface, never two of them on the same screen. Its label pair is the lowest in the system at 4.7 to 1, which the spec accepts.",
+        copy::TERTIARY_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1139,23 +1159,17 @@ fn chips_group(
     saved: &mut bool,
 ) {
     let colors = theme.colors();
-    ui.label("Chips · filter pills · radius-full");
+    ui.label(copy::CHIPS_LABEL);
     ui.add_space(spacing::SPACE_2);
     ui.add(TrackedLabel::new(
-        "Practice area",
+        copy::CHIPS_PRACTICE_AREA,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
     ));
     ui.add_space(spacing::SPACE_1);
     ui.horizontal_wrapped(|ui| {
-        let labels = [
-            "All",
-            "Android Automotive",
-            "Platform",
-            "Design-engineering",
-        ];
-        for (label, selected) in labels.iter().zip(filters.iter_mut()) {
+        for (label, selected) in copy::CHIP_FILTERS.iter().zip(filters.iter_mut()) {
             if let Some(ChipEvent::Toggled(now)) = Chip::new(label)
                 .set_selected(*selected)
                 .ui(ui, theme, flags)
@@ -1165,10 +1179,10 @@ fn chips_group(
             }
         }
         ui.add_space(spacing::SPACE_4);
-        Chip::new("Featured").accent().ui(ui, theme, flags);
+        Chip::new(copy::CHIP_FEATURED).accent().ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
-        "A selected filter fills secondary-container and sets the check icon, so the state never rests on colour alone. The accent chip is the featured label.",
+        copy::CHIPS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1177,7 +1191,7 @@ fn chips_group(
     ui.add_space(spacing::SPACE_3);
     ui.horizontal(|ui| {
         if *saved {
-            if let Some(event) = Chip::new("Client work")
+            if let Some(event) = Chip::new(copy::CHIP_CLIENT_WORK)
                 .dismissible()
                 .ui(ui, theme, flags)
                 .event
@@ -1187,7 +1201,7 @@ fn chips_group(
                 }
             }
         } else {
-            if Button::new("Restore the chip")
+            if Button::new(copy::CHIP_RESTORE)
                 .emphasis(ButtonEmphasis::Ghost)
                 .ui(ui, theme, flags)
                 .clicked
@@ -1197,7 +1211,7 @@ fn chips_group(
         }
     });
     ui.add(egui::Label::new(specimen_job(
-        "The dismiss icon reports a typed event and the host drops the chip from its row.",
+        copy::CHIP_DISMISS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1208,34 +1222,27 @@ fn chips_group(
 /// and the count badges on their 44px icon buttons.
 fn badges_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     let colors = theme.colors();
-    ui.label("Badges · states, kinds, counts");
+    ui.label(copy::BADGES_LABEL);
     ui.add_space(spacing::SPACE_2);
     ui.horizontal_wrapped(|ui| {
-        Badge::new("Shipped", BadgeTone::Success).ui(ui, theme);
-        Badge::new("At risk", BadgeTone::Warning).ui(ui, theme);
-        Badge::new("In review", BadgeTone::Info).ui(ui, theme);
-        Badge::new("Blocked", BadgeTone::Error).ui(ui, theme);
-        Badge::new("Draft", BadgeTone::Neutral).ui(ui, theme);
-        Badge::new("Archived", BadgeTone::Neutral).ui(ui, theme);
-        Badge::new("Featured", BadgeTone::Accent).ui(ui, theme);
+        for (label, tone) in copy::BADGES {
+            Badge::new(label, *tone).ui(ui, theme);
+        }
     });
     ui.add_space(spacing::SPACE_2);
     ui.horizontal(|ui| {
-        IconButton::new("Notifications", Icon::Notifications)
+        IconButton::new(copy::BADGE_NOTIFICATIONS, Icon::Notifications)
             .count(3)
             .ui(ui, theme, flags);
-        IconButton::new("Mail", Icon::Mail)
+        IconButton::new(copy::BADGE_MAIL, Icon::Mail)
             .count(120)
             .ui(ui, theme, flags);
-        IconButton::new("Messages", Icon::Chat)
+        IconButton::new(copy::BADGE_MESSAGES, Icon::Chat)
             .activity_dot()
             .ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
-        &format!(
-            "One or two words on a tinted pill; the icon shape and the word carry the state. Counts read {} through 99 and cap at 99+ beyond, pairing error with on-error so the count never competes with the accent.",
-            count_text(3)
-        ),
+        copy::BADGES_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1253,7 +1260,7 @@ fn actions_section(
 ) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Components · Actions and labels",
+        copy::ACTIONS_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
@@ -1272,7 +1279,7 @@ fn actions_section(
 fn components_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Components · Surfaces · Gothenburg · 2026",
+        copy::SURFACES_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
@@ -1299,11 +1306,7 @@ enum Region {
     Global,
 }
 
-const REGION_OPTIONS: &[(Region, &str)] = &[
-    (Region::Nordics, "Nordics"),
-    (Region::Europe, "Europe"),
-    (Region::Global, "Global"),
-];
+const REGION_VALUES: &[Region] = &[Region::Nordics, Region::Europe, Region::Global];
 
 /// The team sizes, the Select preview's own options.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1313,10 +1316,10 @@ enum TeamSize {
     SixOrMore,
 }
 
-const TEAM_SIZE_OPTIONS: &[(TeamSize, &str)] = &[
-    (TeamSize::OneToTwo, "1 to 2 people"),
-    (TeamSize::ThreeToFive, "3 to 5 people"),
-    (TeamSize::SixOrMore, "6 or more"),
+const TEAM_SIZE_VALUES: &[TeamSize] = &[
+    TeamSize::OneToTwo,
+    TeamSize::ThreeToFive,
+    TeamSize::SixOrMore,
 ];
 
 /// The delivery offices: nine of them, so the list scrolls inside the
@@ -1334,16 +1337,16 @@ enum Office {
     Edinburgh,
 }
 
-const OFFICE_OPTIONS: &[(Office, &str)] = &[
-    (Office::Gothenburg, "Gothenburg"),
-    (Office::Stockholm, "Stockholm"),
-    (Office::Copenhagen, "Copenhagen"),
-    (Office::Oslo, "Oslo"),
-    (Office::Helsinki, "Helsinki"),
-    (Office::Berlin, "Berlin"),
-    (Office::Amsterdam, "Amsterdam"),
-    (Office::London, "London"),
-    (Office::Edinburgh, "Edinburgh"),
+const OFFICE_VALUES: &[Office] = &[
+    Office::Gothenburg,
+    Office::Stockholm,
+    Office::Copenhagen,
+    Office::Oslo,
+    Office::Helsinki,
+    Office::Berlin,
+    Office::Amsterdam,
+    Office::London,
+    Office::Edinburgh,
 ];
 
 /// One invoice currency, locked by the contract: the disabled select.
@@ -1351,8 +1354,6 @@ const OFFICE_OPTIONS: &[(Office, &str)] = &[
 enum Currency {
     Sek,
 }
-
-const CURRENCY_OPTIONS: &[(Currency, &str)] = &[(Currency::Sek, "SEK")];
 
 /// The project-details form the section edits, with the email's
 /// touched flag carrying the validate-on-leave rule.
@@ -1374,8 +1375,8 @@ struct ProjectForm {
 impl ProjectForm {
     fn populated() -> Self {
         Self {
-            reference: "A-2026-114".to_owned(),
-            brief: "Replacing the in-cab radio firmware before the autumn launch: Android Automotive, three-screen layout, OTA pipeline.".to_owned(),
+            reference: copy::REFERENCE_DEFAULT.to_owned(),
+            brief: copy::BRIEF_DEFAULT.to_owned(),
             region: Some(Region::Nordics),
             office: Some(Office::Gothenburg),
             ..Default::default()
@@ -1398,58 +1399,54 @@ fn email_is_valid(email: &str) -> bool {
     }
 }
 
-/// The four-part error copy, per the voice guidelines: what is wrong,
-/// why it matters, what to do next, where to get help.
-const EMAIL_ERROR: &str = "That address is missing its @ sign or its domain, so the proposal would not arrive. Type the full address, like name@company.se. If you are unsure which one to use, ask your account manager.";
-
 /// The fields group: the project-details form's text fields, the
 /// preview's own grid of variants as live controls.
 fn fields_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
     let colors = theme.colors();
-    ui.label("Fields · label, control, hint · radius-md · 12 by 14 padding");
+    ui.label(copy::FIELDS_LABEL);
     ui.add_space(spacing::SPACE_2);
     ui.columns(2, |columns| {
         let (left, right) = columns.split_at_mut(1);
 
-        TextField::new("Project name", &mut form.name)
-            .placeholder("In-cab radio, phase two")
-            .hint("As it appears in the proposal.")
+        TextField::new(copy::FIELD_NAME_LABEL, &mut form.name)
+            .placeholder(copy::FIELD_NAME_PLACEHOLDER)
+            .hint(copy::FIELD_NAME_HINT)
             .ui(&mut left[0], theme, flags);
 
         // The email validates when the person leaves the field, not
         // while they type: the first leave arms it, and the error
         // clears as soon as the address is fixed.
         let invalid = form.email_touched && !email_is_valid(&form.email);
-        let mut email = TextField::new("Work email *", &mut form.email)
-            .placeholder("name@company.se")
-            .hint("Required. We will never sell or share your email.");
+        let mut email = TextField::new(copy::FIELD_EMAIL_LABEL, &mut form.email)
+            .placeholder(copy::FIELD_EMAIL_PLACEHOLDER)
+            .hint(copy::FIELD_EMAIL_HINT);
         if invalid {
-            email = email.error(EMAIL_ERROR);
+            email = email.error(copy::EMAIL_ERROR);
         }
         let email_field = email.ui(&mut left[0], theme, flags);
         if email_field.lost_focus {
             form.email_touched = true;
         }
 
-        TextField::new("Search the case studies", &mut form.search)
-            .placeholder("Case, essay or note")
+        TextField::new(copy::FIELD_SEARCH_LABEL, &mut form.search)
+            .placeholder(copy::SEARCH_PLACEHOLDER)
             .leading_icon(Icon::Search)
             .ui(&mut right[0], theme, flags);
 
-        TextField::new("Reference number", &mut form.reference)
+        TextField::new(copy::FIELD_REFERENCE_LABEL, &mut form.reference)
             .disabled()
-            .hint("Set by your contract.")
+            .hint(copy::SET_BY_CONTRACT)
             .ui(&mut right[0], theme, flags);
     });
 
     // The textarea, spanning both columns.
-    TextField::new("What are you trying to ship?", &mut form.brief)
-        .placeholder("Two sentences is plenty.")
+    TextField::new(copy::FIELD_BRIEF_LABEL, &mut form.brief)
+        .placeholder(copy::FIELD_BRIEF_PLACEHOLDER)
         .multiline(3)
         .ui(ui, theme, flags);
 
     ui.add(egui::Label::new(specimen_job(
-        "The label stays visible when the field fills, and the placeholder is a format hint, never a substitute. The hint carries the rule; the error replaces it, says what is wrong and how to fix it, and the icon keeps the state off colour alone. The email checks when you leave the field, not while you type. Tab through the fields to see each ring.",
+        copy::FIELDS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1461,49 +1458,53 @@ fn fields_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mu
 /// currency.
 fn selects_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
     let colors = theme.colors();
-    ui.label("Select · the same box with a chevron · popover list");
+    ui.label(copy::SELECTS_LABEL);
     ui.add_space(spacing::SPACE_2);
+    let regions = pairs(REGION_VALUES, copy::REGIONS);
+    let offices = pairs(OFFICE_VALUES, copy::OFFICES);
+    let teams = pairs(TEAM_SIZE_VALUES, copy::TEAM_SIZES);
+    let currencies = pairs(&[Currency::Sek], copy::CURRENCIES);
     ui.columns(2, |columns| {
         let (left, right) = columns.split_at_mut(1);
 
-        let region = Select::new("Region")
-            .options(REGION_OPTIONS)
+        let region = Select::new(copy::SELECT_REGION_LABEL)
+            .options(&regions)
             .selected(form.region)
-            .hint("Where the team will work from.")
+            .hint(copy::SELECT_REGION_HINT)
             .ui(&mut left[0], theme, flags);
         if let Some(picked) = region.committed {
             form.region = Some(picked);
         }
 
-        let office = Select::new("Delivery office")
-            .options(OFFICE_OPTIONS)
+        let office = Select::new(copy::SELECT_OFFICE_LABEL)
+            .options(&offices)
             .selected(form.office)
-            .hint("Nine offices, so the list scrolls.")
+            .hint(copy::SELECT_OFFICE_HINT)
             .ui(&mut left[0], theme, flags);
         if let Some(picked) = office.committed {
             form.office = Some(picked);
         }
 
-        let team = Select::new("Team size *")
-            .options(TEAM_SIZE_OPTIONS)
+        let team = Select::new(copy::SELECT_TEAM_LABEL)
+            .options(&teams)
             .selected(form.team_size)
-            .placeholder("Choose a team size")
-            .hint("Required. We staff one team per project.")
+            .placeholder(copy::SELECT_TEAM_PLACEHOLDER)
+            .hint(copy::SELECT_TEAM_HINT)
             .ui(&mut right[0], theme, flags);
         if let Some(picked) = team.committed {
             form.team_size = Some(picked);
         }
 
-        Select::new("Invoice currency")
-            .options(CURRENCY_OPTIONS)
+        Select::new(copy::SELECT_CURRENCY_LABEL)
+            .options(&currencies)
             .selected(Some(Currency::Sek))
             .disabled()
-            .hint("Set by your contract.")
+            .hint(copy::SET_BY_CONTRACT)
             .ui(&mut right[0], theme, flags);
     });
 
     ui.add(egui::Label::new(specimen_job(
-        "The select commits on a click or Enter, and Escape or a click outside closes it without changing the choice. The check marks the selected option, never colour alone. The arrow keys move the hover, wrapping; a list longer than eight options scrolls inside eight rows.",
+        copy::SELECTS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1520,7 +1521,7 @@ fn text_inputs_section(
 ) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Components · Text inputs",
+        copy::INPUTS_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
@@ -1534,15 +1535,6 @@ fn text_inputs_section(
 
 // ---- the choice controls (issue 06) ----------------------------------------
 
-/// The region options for the radio group, the Radio preview's own
-/// example domain — the same domain the select above edits, so the two
-/// controls stay in step through `form.region`.
-const RADIO_REGIONS: &[RadioOption<Region>] = &[
-    option(Region::Nordics, "Nordics"),
-    option(Region::Europe, "Europe"),
-    option(Region::Global, "Global"),
-];
-
 /// The start options, the Radio preview's invalid-group specimen. The
 /// group carries no state: the error is the demo.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1552,16 +1544,7 @@ enum Start {
     Undecided,
 }
 
-const START_OPTIONS: &[RadioOption<Start>] = &[
-    option(Start::ThisQuarter, "This quarter"),
-    option(Start::NextQuarter, "Next quarter"),
-    option(Start::Undecided, "Not decided yet"),
-];
-
-/// The practice areas, the Checkbox preview's parent-and-children
-/// specimen: the parent's tri-state derives from the children and a
-/// click on it sets them all.
-const PRACTICE_AREAS: &[&str] = &["Android Automotive", "Platform", "Design-engineering"];
+const START_VALUES: &[Start] = &[Start::ThisQuarter, Start::NextQuarter, Start::Undecided];
 
 /// One nested checkbox row at the preview's 28px indent, its typed
 /// toggle handed back.
@@ -1594,13 +1577,13 @@ fn checkboxes_group(
     flags: &UiKitFlags,
     choices: &mut ChoiceDemos,
 ) {
-    ui.label("Checkboxes · one yes or no, or any number from a group");
+    ui.label(copy::CHECKBOXES_LABEL);
     ui.add_space(spacing::SPACE_2);
 
-    label_row(ui, theme, "Practice areas");
-    hint_row(ui, theme, "Choose all that apply.");
+    label_row(ui, theme, copy::CHECK_AREAS_LABEL);
+    hint_row(ui, theme, copy::CHECK_AREAS_HINT);
     ui.add_space(ui_kit::components::checkbox::ROW_GAP);
-    if let Some(toggled) = Checkbox::new("All practice areas")
+    if let Some(toggled) = Checkbox::new(copy::CHECK_PARENT_LABEL)
         .state(choices.parent())
         .ui(ui, theme, flags)
         .toggled
@@ -1608,7 +1591,7 @@ fn checkboxes_group(
         // The parent's click sets every child, the preview's script.
         choices.areas = [toggled.is_checked(); 3];
     }
-    for (index, area) in PRACTICE_AREAS.iter().enumerate() {
+    for (index, area) in copy::PRACTICE_AREAS.iter().enumerate() {
         ui.add_space(ui_kit::components::checkbox::ROW_GAP);
         if let Some(toggled) = nested_checkbox_row(ui, theme, flags, area, choices.areas[index]) {
             choices.areas[index] = toggled.is_checked();
@@ -1616,52 +1599,54 @@ fn checkboxes_group(
     }
 
     ui.add_space(spacing::SPACE_4);
-    label_row(ui, theme, "Notifications");
+    label_row(ui, theme, copy::CHECK_NOTIFICATIONS_LABEL);
     ui.add_space(ui_kit::components::checkbox::ROW_GAP);
-    if let Some(toggled) = Checkbox::new("Weekly digest")
+    if let Some(toggled) = Checkbox::new(copy::CHECK_DIGEST_LABEL)
         .checked(choices.weekly_digest)
         .ui(ui, theme, flags)
         .toggled
     {
         choices.weekly_digest = toggled.is_checked();
     }
-    hint_row(ui, theme, "Every Monday at 08:00.");
+    hint_row(ui, theme, copy::CHECK_DIGEST_HINT);
     ui.add_space(ui_kit::components::checkbox::ROW_GAP);
-    if let Some(toggled) = Checkbox::new("Blocked builds")
+    if let Some(toggled) = Checkbox::new(copy::CHECK_BUILDS_LABEL)
         .checked(choices.blocked_builds)
         .ui(ui, theme, flags)
         .toggled
     {
         choices.blocked_builds = toggled.is_checked();
     }
-    hint_row(ui, theme, "When a pipeline has failed for over an hour.");
+    hint_row(ui, theme, copy::CHECK_BUILDS_HINT);
     ui.add_space(ui_kit::components::checkbox::ROW_GAP);
-    Checkbox::new("Text messages")
+    Checkbox::new(copy::CHECK_TEXTS_LABEL)
         .disabled()
         .ui(ui, theme, flags);
-    hint_row(ui, theme, "Add a mobile number to your profile first.");
+    hint_row(ui, theme, copy::CHECK_TEXTS_HINT);
 }
 
 /// The radio groups: the region, live against the same field the
 /// select edits, and the invalid start group, the preview's error
 /// specimen.
 fn radios_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
-    ui.label("Radio group · exactly one of a few, side by side");
+    ui.label(copy::RADIOS_LABEL);
     ui.add_space(spacing::SPACE_2);
 
-    let region = RadioGroup::new("Region")
-        .options(RADIO_REGIONS)
+    let regions = radio_options(REGION_VALUES, copy::REGIONS);
+    let region = RadioGroup::new(copy::SELECT_REGION_LABEL)
+        .options(&regions)
         .selected(form.region)
-        .hint("Where the team will work from.")
+        .hint(copy::SELECT_REGION_HINT)
         .ui(ui, theme, flags);
     if let Some(picked) = region.committed {
         form.region = Some(picked);
     }
 
     ui.add_space(spacing::SPACE_4);
-    RadioGroup::new("Start")
-        .options(START_OPTIONS)
-        .error("Choose when the team should start.")
+    let starts = radio_options(START_VALUES, copy::START_OPTIONS);
+    RadioGroup::new(copy::RADIO_START_LABEL)
+        .options(&starts)
+        .error(copy::RADIO_START_ERROR)
         .ui(ui, theme, flags);
 }
 
@@ -1674,10 +1659,10 @@ fn toggles_group(
     flags: &mut UiKitFlags,
     choices: &mut ChoiceDemos,
 ) {
-    ui.label("Toggles · settings that take effect at once");
+    ui.label(copy::TOGGLES_LABEL);
     ui.add_space(spacing::SPACE_2);
 
-    if let Some(on) = Toggle::new("Reduced motion")
+    if let Some(on) = Toggle::new(copy::REDUCED_MOTION)
         .checked(flags.reduced_motion)
         .ui(ui, theme, flags)
         .toggled
@@ -1687,7 +1672,7 @@ fn toggles_group(
         flags.reduced_motion = on;
     }
     ui.add_space(ui_kit::components::checkbox::ROW_GAP);
-    if let Some(on) = Toggle::new("Remember my filters")
+    if let Some(on) = Toggle::new(copy::TOGGLE_FILTERS_LABEL)
         .checked(choices.remember_filters)
         .ui(ui, theme, flags)
         .toggled
@@ -1695,17 +1680,17 @@ fn toggles_group(
         choices.remember_filters = on;
     }
     ui.add_space(ui_kit::components::checkbox::ROW_GAP);
-    Toggle::new("Sync over mobile data")
+    Toggle::new(copy::TOGGLE_SYNC_LABEL)
         .checked(true)
         .disabled()
         .ui(ui, theme, flags);
-    hint_row(ui, theme, "Ask your account lead to switch this on.");
+    hint_row(ui, theme, copy::TOGGLE_SYNC_HINT);
     ui.add_space(ui_kit::components::checkbox::ROW_GAP);
-    Toggle::new("Autofill timesheets")
+    Toggle::new(copy::TOGGLE_TIMESHEETS_LABEL)
         .checked(false)
         .disabled()
         .ui(ui, theme, flags);
-    hint_row(ui, theme, "Needs an approved project code first.");
+    hint_row(ui, theme, copy::TOGGLE_TIMESHEETS_HINT);
 }
 
 /// The choice-controls section: the checkboxes, the radio groups and
@@ -1719,7 +1704,7 @@ fn choice_controls_section(
 ) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Components · Choice controls",
+        copy::CHOICE_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
@@ -1734,7 +1719,7 @@ fn choice_controls_section(
 
     ui.add_space(spacing::SPACE_4);
     ui.add(egui::Label::new(specimen_job(
-        "A checkbox turns an option on or off — one yes or no, or any number from a group, the parent marking partly-chosen children. A radio group picks exactly one of a few that belong side by side. A toggle switches a setting that takes effect at once: the knob slides 200ms on the house curve and snaps under reduced motion. Box and circle are 18px behind a 2px outline, the label rides beside in the body face, and focus draws the shared ring.",
+        copy::CHOICE_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1749,14 +1734,14 @@ fn choice_controls_section(
 /// the panel top, as the spec places them.
 fn banners_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, demos: &mut BannerDemos) {
     let colors = theme.colors();
-    ui.label("Banners · info, success, warning, error · radius-md");
+    ui.label(copy::BANNERS_LABEL);
     ui.add_space(spacing::SPACE_2);
 
     if demos.info {
         let response = Banner::new(
             BannerTone::Info,
-            "Saved automatically.",
-            "We kept your last six edits: refresh to see them.",
+            copy::BANNER_INFO_TITLE,
+            copy::BANNER_INFO_MESSAGE,
         )
         .ui(ui, theme, flags);
         if response.event == Some(BannerEvent::Dismissed) {
@@ -1766,8 +1751,8 @@ fn banners_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, demos: &
     if demos.success {
         let response = Banner::new(
             BannerTone::Success,
-            "Timesheet approved.",
-            "Week 41 is locked and ready for invoicing.",
+            copy::BANNER_SUCCESS_TITLE,
+            copy::BANNER_SUCCESS_MESSAGE,
         )
         .ui(ui, theme, flags);
         if response.event == Some(BannerEvent::Dismissed) {
@@ -1776,20 +1761,20 @@ fn banners_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, demos: &
     }
     Banner::new(
         BannerTone::Warning,
-        "Your assignment ends in 14 days.",
-        "Talk to your account lead about an extension.",
+        copy::BANNER_WARNING_TITLE,
+        copy::BANNER_WARNING_MESSAGE,
     )
     .ui(ui, theme, flags);
     Banner::new(
         BannerTone::Error,
-        "We couldn't save your changes.",
-        "The connection dropped mid-save, so your edits exist only on this machine. Try again from the toolbar; if it keeps failing, ask your account lead to check the sync log.",
+        copy::BANNER_ERROR_TITLE,
+        copy::BANNER_ERROR_MESSAGE,
     )
     .ui(ui, theme, flags);
 
     if !demos.info || !demos.success {
         ui.add_space(spacing::SPACE_2);
-        if Button::new("Restore the banners")
+        if Button::new(copy::BANNERS_RESTORE)
             .emphasis(ButtonEmphasis::Ghost)
             .ui(ui, theme, flags)
             .clicked
@@ -1803,7 +1788,7 @@ fn banners_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, demos: &
 
     ui.add_space(spacing::SPACE_2);
     ui.add(egui::Label::new(specimen_job(
-        "A banner carries important information at the top of a page or section: the icon and the words hold the state, never the colour alone. Info and success dismiss; warnings and errors stay until the state resolves, which is why theirs carry no close button. Error copy leads with what is wrong, then why it matters, what to do next and where to get help.",
+        copy::BANNERS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1815,43 +1800,52 @@ fn banners_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, demos: &
 /// window.
 fn snackbars_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, host: &mut SnackbarHost) {
     let colors = theme.colors();
-    ui.label("Snackbars · inverse surface · one at a time · 6s, 10s with an action");
+    ui.label(copy::SNACKBARS_LABEL);
     ui.add_space(spacing::SPACE_2);
     ui.horizontal_wrapped(|ui| {
-        if Button::new("Save the brief").ui(ui, theme, flags).clicked {
-            host.show(Snackbar::success("Saved."));
-        }
-        if Button::new("Copy the link").ui(ui, theme, flags).clicked {
-            host.show(Snackbar::info("Link copied."));
-        }
-        if Button::new("Submit the timesheet")
+        if Button::new(copy::SNACK_SAVE_TRIGGER)
             .ui(ui, theme, flags)
             .clicked
         {
-            host.show(Snackbar::info("Timesheet submitted for week 41.").action("View"));
+            host.show(Snackbar::success(copy::SNACK_SAVED));
         }
-        if Button::new("Archive the workspace")
+        if Button::new(copy::SNACK_COPY_TRIGGER)
+            .ui(ui, theme, flags)
+            .clicked
+        {
+            host.show(Snackbar::info(copy::SNACK_LINK_COPIED));
+        }
+        if Button::new(copy::SNACK_SUBMIT_TRIGGER)
+            .ui(ui, theme, flags)
+            .clicked
+        {
+            host.show(Snackbar::info(copy::SNACK_SUBMITTED).action(copy::SNACK_VIEW_ACTION));
+        }
+        if Button::new(copy::SNACK_ARCHIVE_TRIGGER)
             .ui(ui, theme, flags)
             .clicked
         {
             host.show(
-                Snackbar::success("Workspace archived")
-                    .title("Workspace archived")
-                    .line("Read-only access for 30 days, then permanent removal.")
-                    .action("Undo"),
+                Snackbar::success(copy::SNACK_ARCHIVED_TITLE)
+                    .title(copy::SNACK_ARCHIVED_TITLE)
+                    .line(copy::SNACK_ARCHIVED_LINE)
+                    .action(copy::SNACK_UNDO_ACTION),
             );
         }
-        if Button::new("Sync now").ui(ui, theme, flags).clicked {
+        if Button::new(copy::SNACK_SYNC_TRIGGER)
+            .ui(ui, theme, flags)
+            .clicked
+        {
             host.show(
-                Snackbar::error("Sync failed")
-                    .title("Sync failed")
-                    .line("Upstream returned 503. Retrying automatically.")
-                    .action("Retry now"),
+                Snackbar::error(copy::SNACK_SYNC_FAILED_TITLE)
+                    .title(copy::SNACK_SYNC_FAILED_TITLE)
+                    .line(copy::SNACK_SYNC_FAILED_LINE)
+                    .action(copy::SNACK_RETRY_ACTION),
             );
         }
     });
     ui.add(egui::Label::new(specimen_job(
-        "One short sentence, outcome first, on the inverse surface at the bottom of the window. Info and success leave after about six seconds, ten with an action; the timer pauses while the pointer or the focus is inside; errors stay until dismissed or resolved. A second message replaces the first — one at a time. Reduced motion shortens the entrance and never the timing.",
+        copy::SNACKBARS_NOTE,
         TypeStyle::Caption,
         theme,
         colors.text_muted(),
@@ -1870,7 +1864,7 @@ fn feedback_section(
 ) {
     let colors = theme.colors();
     ui.add(TrackedLabel::new(
-        "Components · Feedback",
+        copy::FEEDBACK_EYEBROW,
         TypeStyle::Eyebrow.font_id(theme),
         TypeStyle::Eyebrow.tracking(),
         colors.text_accent,
@@ -1913,7 +1907,7 @@ impl Gallery {
 
                 // The primary nav: the panel links, the current one
                 // carrying the indicator underline.
-                for (index, label) in GALLERY_TABS.iter().enumerate() {
+                for (index, label) in copy::TABS.iter().enumerate() {
                     if NavLink::new(label, self.tab == index)
                         .ui(ui, theme, &flags)
                         .clicked()
@@ -1926,13 +1920,18 @@ impl Gallery {
                 // The actions, flush right: the one CTA, the theme
                 // menu, the search affordance.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    Button::new("Start a project")
+                    Button::new(copy::START_A_PROJECT)
                         .small()
                         .emphasis(ButtonEmphasis::Tertiary)
                         .ui(ui, theme, &flags);
                     ui.add_space(ACTIONS_GAP);
 
-                    ui.menu_button("Theme", |ui| {
+                    // The theme menu: all six themes reachable from
+                    // the bar, the reduced flags beside them. The
+                    // choice holds for the session (the Gallery's own
+                    // field), and switching installs the theme's
+                    // faces before applying it.
+                    ui.menu_button(copy::THEME_MENU, |ui| {
                         let mut picked = theme;
                         for id in ThemeId::ALL {
                             ui.selectable_value(&mut picked, *id, id.name());
@@ -1943,15 +1942,18 @@ impl Gallery {
                             picked.apply(ctx);
                         }
                         ui.separator();
-                        ui.checkbox(&mut self.flags.reduced_motion, "Reduced motion");
-                        ui.checkbox(&mut self.flags.reduced_transparency, "Reduced transparency");
+                        ui.checkbox(&mut self.flags.reduced_motion, copy::REDUCED_MOTION);
+                        ui.checkbox(
+                            &mut self.flags.reduced_transparency,
+                            copy::REDUCED_TRANSPARENCY,
+                        );
                     });
                     ui.add_space(ACTIONS_GAP);
 
                     // The search affordance: the 44px icon button
                     // opening the reused TextField in its popover.
-                    let search =
-                        IconButton::new("Search the gallery", Icon::Search).ui(ui, theme, &flags);
+                    let search = IconButton::new(copy::SEARCH_BUTTON_NAME, Icon::Search)
+                        .ui(ui, theme, &flags);
                     if search.clicked() {
                         self.search_open = !self.search_open;
                     }
@@ -1964,10 +1966,10 @@ impl Gallery {
                             .frame(popup_frame(theme))
                             .width(280.0)
                             .show(|ui| {
-                                TextField::new("Search", &mut self.search)
-                                    .placeholder("Case, essay or note")
+                                TextField::new(copy::SEARCH_FIELD_LABEL, &mut self.search)
+                                    .placeholder(copy::SEARCH_PLACEHOLDER)
                                     .leading_icon(Icon::Search)
-                                    .hint("Everything in the gallery.")
+                                    .hint(copy::SEARCH_FIELD_HINT)
                                     .ui(ui, theme, &flags);
                             });
                     } else {
@@ -1983,7 +1985,7 @@ impl Gallery {
     /// colour-role swatches.
     fn foundations_panel(&mut self, ui: &mut egui::Ui) {
         ui.add(egui::Label::new(specimen_job(
-            "Vynatix UI kit",
+            copy::FOUNDATIONS_HEADLINE,
             TypeStyle::Headline2,
             self.theme,
             self.theme.colors().text_display(),
@@ -2001,7 +2003,11 @@ impl Gallery {
         logo_section(ui, self.theme);
 
         ui.add_space(spacing::SPACE_6);
-        ui.label(format!("Colour roles · {}", self.theme.name()));
+        ui.label(format!(
+            "{} · {}",
+            copy::COLOUR_ROLES_LABEL,
+            self.theme.name()
+        ));
         ui.add_space(spacing::SPACE_2);
         let colors = self.theme.colors();
         egui::Grid::new("colour-roles")
@@ -2077,12 +2083,14 @@ impl eframe::App for Gallery {
                     // gallery's panel switcher. It stays above the
                     // scroll, as navigation does.
                     let tabs =
-                        Tabs::new(GALLERY_TABS).selected(self.tab).ui(ui, self.theme, &self.flags);
+                        Tabs::new(copy::TABS)
+                            .selected(self.tab)
+                            .ui(ui, self.theme, &self.flags);
                     if let Some(moved_to) = tabs.changed {
                         self.tab = moved_to;
                     }
                     ui.add(egui::Label::new(specimen_job(
-                        "The tabs switch peer panels: Brand holds the cover and the brand book's themes and voice pages; Foundations the type, states, foundations, icons, logo and colour roles; Components the actions, surfaces, text inputs and choice controls; Feedback the banners and snackbars. Arrow keys move the selection while a tab holds focus.",
+                        copy::TABS_NOTE,
                         TypeStyle::Caption,
                         self.theme,
                         self.theme.colors().text_muted(),
@@ -2111,9 +2119,18 @@ impl eframe::App for Gallery {
         if let Some(event) = self.snackbar.paint(&ctx, self.theme, &self.flags) {
             if event == SnackbarEvent::Action {
                 match action.as_deref() {
-                    Some("Undo") => self.snackbar.show(Snackbar::success("Workspace restored.")),
-                    Some("Retry now") => self.snackbar.show(Snackbar::success("Sync running.")),
-                    Some("View") => self.snackbar.show(Snackbar::info("Opening week 41.")),
+                    Some(copy::SNACK_UNDO_ACTION) => {
+                        self.snackbar
+                            .show(Snackbar::success(copy::SNACK_RESULT_RESTORED));
+                    }
+                    Some(copy::SNACK_RETRY_ACTION) => {
+                        self.snackbar
+                            .show(Snackbar::success(copy::SNACK_RESULT_RUNNING));
+                    }
+                    Some(copy::SNACK_VIEW_ACTION) => {
+                        self.snackbar
+                            .show(Snackbar::info(copy::SNACK_RESULT_OPENING));
+                    }
                     _ => {}
                 }
             }

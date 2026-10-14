@@ -203,6 +203,22 @@ panic hook (Console.app on a device); other log output is stderr via
 - Night mode and font scale: `adb shell cmd uimode night yes|no`,
   `adb shell settings put system font_scale 1.3`; both apply live.
 
+## Vynatix UI kit
+
+`crates/ui-kit/` is the Vynatix design system as pure egui: the
+generated tokens for six themes, the typography stack with self-hosted
+fonts, and the component set — button through snackbar, plus the focus
+ring and interaction states. It has no platform glue; a desktop gallery
+is its demo surface:
+
+```sh
+cargo run -p ui-kit --example gallery
+```
+
+See [crates/ui-kit/README.md](crates/ui-kit/README.md) for applying a
+theme in an egui app, the vendored fonts and licences, and the full
+list of where the port deviates from the brand book.
+
 ## Limitations (v1, by design)
 
 - Text input has no IME composing on either platform (NativeActivity on
@@ -238,6 +254,7 @@ because xbuild reads it from the working directory.
 |---|---|
 | `crates/rustnotes-core/` | The app, pure egui: notes + SQLite, screens, `layout/` (metrics, size classes, palette, scaffold, nav, bottom nav), edge-swipe input filter, unit tests |
 | `crates/rustnotes/` | The eframe host: `src/lib.rs` (shared, `android_main` lives in `android.rs`), `src/main.rs` (iOS + desktop entry), `android.rs` (JNI), `ios.rs` (objc2/CoreText), `manifest.yaml` (xbuild) |
+| `crates/ui-kit/` | The Vynatix design system as pure egui: tokens, themes, typography, components; the gallery example is its demo (see its README) |
 | `resources/AndroidManifest.xml` | Single NativeActivity, no code, extractNativeLibs (+ `.game.xml` GameActivity variant for the opt-in) |
 | `resources/Info.plist` | App bundle manifest (hand-assembled .app) |
 | `tools/ios-profile-helper/` | Throwaway Xcode project that mints 7-day provisioning profiles |
