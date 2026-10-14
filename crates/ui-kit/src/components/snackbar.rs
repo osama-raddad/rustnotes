@@ -18,12 +18,15 @@
 //! time — a new one replaces the current, it never queues — with a
 //! timed auto-dismiss the spec pins (about 6s for info and success,
 //! 10s with an action; errors stay until dismissed or resolved). The
-//! timer pauses while the pointer or the focus is inside, and
+//! timer pauses while the pointer or the focus is inside — the
+//! entrance runs on regardless, so a pointer resting where the
+//! snackbar appears cannot hold it part-faded — and
 //! [`UiKitFlags::reduced_motion`] touches the entrance only — the
 //! fade clamps to 100ms and the slide-up goes — never the timing.
 //! Placement: centred at the bottom, 24px above the edge, up to 600px
 //! wide; the host paints it over the page (an anchored [`egui::Area`]
-//! in the foreground order), never moving focus to it, and the
+//! in the foreground order, with egui's own fade-in off so the
+//! entrance is the only fade), never moving focus to it, and the
 //! snackbar's action stays available elsewhere in the page.
 //!
 //! Copy voice: one short sentence, outcome first; the action is a
@@ -182,11 +185,17 @@ pub enum SnackbarEvent {
     TimedOut,
 }
 
-/// The host's one visible snackbar with its timer.
+/// The host's one visible snackbar with its two clocks.
 #[derive(Clone, Debug)]
 struct Visible {
     snackbar: Snackbar,
+    /// The dismissal clock: how long the snackbar has been up, held
+    /// while the pointer or the focus is inside.
     elapsed_ms: f32,
+    /// How long it has been on screen, which nothing holds: the entrance
+    /// runs on it, so a pointer resting where the snackbar appears
+    /// cannot freeze the fade part-way.
+    age_ms: f32,
 }
 
 /// The snackbar host: the one-at-a-time rule, the timed
@@ -216,6 +225,7 @@ impl SnackbarHost {
         self.visible = Some(Visible {
             snackbar,
             elapsed_ms: 0.0,
+            age_ms: 0.0,
         });
         self.paused = false;
     }
@@ -231,17 +241,21 @@ impl SnackbarHost {
     }
 
     /// Hold or release the timer: the spec pauses it while the
-    /// pointer or the focus is inside the snackbar.
+    /// pointer or the focus is inside the snackbar. The pause holds
+    /// the dismissal clock alone; the entrance runs on regardless.
     pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
     }
 
-    /// Advance the clock by `dt_ms` and report the timeout when it
+    /// Advance the clocks by `dt_ms` and report the timeout when it
     /// fires: info and success leave at their duration, errors never
     /// time out. Never consults the flags — reduced motion touches
-    /// the entrance only, never this timing.
+    /// the entrance only, never this timing. The snackbar's age, which
+    /// the entrance runs on, always advances; a pause holds only the
+    /// dismissal clock.
     pub fn tick(&mut self, dt_ms: f32) -> Option<SnackbarEvent> {
         let visible = self.visible.as_mut()?;
+        visible.age_ms += dt_ms.max(0.0);
         if self.paused {
             return None;
         }
@@ -282,7 +296,7 @@ impl SnackbarHost {
     pub fn entrance_fraction(&self, flags: &UiKitFlags) -> f32 {
         match &self.visible {
             None => 0.0,
-            Some(visible) => (visible.elapsed_ms / entrance_ms(flags)).clamp(0.0, 1.0),
+            Some(visible) => (visible.age_ms / entrance_ms(flags)).clamp(0.0, 1.0),
         }
     }
 
@@ -318,6 +332,10 @@ impl SnackbarHost {
             )
             .order(egui::Order::Foreground)
             .interactable(true)
+            // The snackbar fades itself in, and reduced motion shortens
+            // that fade. egui's own area fade-in would stack a second one
+            // on top that no flag governs.
+            .fade_in(false)
             .show(ctx, |ui| {
                 let snackbar = self.current().unwrap().clone();
                 let colors = theme.colors();
@@ -649,7 +667,7 @@ mod tests {
     use egui::Color32;
 
     use crate::icons::Icon;
-    use crate::states::UiKitFlags;
+    use crate::states::{UiKitFlags, REDUCED_FADE_MAX_MS};
     use crate::theme::ThemeId;
     use crate::tokens::{radii, spacing};
     use crate::typography::{assert_painted_inside, paint_pass};
@@ -828,6 +846,37 @@ mod tests {
             host.entrance_fraction(&full) < 1.0,
             "the full entrance takes 200ms"
         );
+    }
+
+    /// The pause holds the dismissal timer and nothing else: a pointer
+    /// resting where the snackbar appears must not freeze its entrance
+    /// part-faded. The entrance runs on the snackbar's age, which keeps
+    /// counting through a pause, while the paused time stays off the
+    /// dismissal clock.
+    #[test]
+    fn a_pause_holds_the_timer_but_not_the_entrance() {
+        let flags = UiKitFlags::default();
+        let mut host = SnackbarHost::new();
+        host.show(Snackbar::info("Saved."));
+        host.set_paused(true);
+        assert_eq!(host.tick(100.0), None, "a paused host never times out");
+        assert_eq!(
+            host.entrance_fraction(&flags),
+            0.5,
+            "the entrance runs on: 100ms of 200"
+        );
+        host.tick(100.0);
+        assert_eq!(
+            host.entrance_fraction(&flags),
+            1.0,
+            "and completes under the pointer"
+        );
+
+        // The paused 200ms never ran off the dismissal clock: the full
+        // six seconds are still due once the pause lifts.
+        host.set_paused(false);
+        assert_eq!(host.tick(INFO_DURATION_MS - 1.0), None);
+        assert_eq!(host.tick(1.0), Some(SnackbarEvent::TimedOut));
     }
 
     /// The placement and shape constants: centred at the bottom, 24px
@@ -1086,10 +1135,6 @@ mod tests {
         for theme in ThemeId::ALL {
             let name = theme.name();
             let ctx = egui::Context::default();
-            // egui fades a new area in by itself, over its style's
-            // animation time, on top of the snackbar's own entrance. That
-            // second fade is not what is under test, so it is switched off.
-            ctx.all_styles_mut(|style| style.animation_time = 0.0);
             let out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 crate::icon::install(ui.ctx());
                 crate::typography::install(*theme, ui.ctx());
@@ -1135,6 +1180,60 @@ mod tests {
                         "{name}: {text:?} at entrance fraction {fraction}"
                     );
                 }
+            }
+        }
+    }
+
+    /// The kit's entrance is the only fade on the text. Reduced motion
+    /// clamps it to 100ms, so once those 100ms have run the first visible
+    /// pass shows the text at full strength; without the flag the same
+    /// pass is still part-way through the 200ms fade. Nothing stacks on
+    /// either: egui fades a new area in by itself unless told not to,
+    /// which dimmed the first frames whatever the flag said. egui's own
+    /// animation time stays at its default here, so that fade would show.
+    #[test]
+    fn the_entrance_is_the_only_fade_on_the_text() {
+        let theme = ThemeId::Light;
+        let look = snackbar_look(SnackbarStatus::Info, theme);
+        for reduced in [false, true] {
+            let ctx = egui::Context::default();
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                crate::icon::install(ui.ctx());
+                crate::typography::install(theme, ui.ctx());
+            });
+            out.drop_without_applying_deltas();
+            let flags = UiKitFlags {
+                reduced_motion: reduced,
+                ..Default::default()
+            };
+            let mut host = SnackbarHost::new();
+            host.show(Snackbar::info("Timesheet submitted for week 41.").action("Undo"));
+            // The whole of the reduced-motion fade, run before the first
+            // frame; the anchored area then needs one pass to be sized.
+            host.tick(REDUCED_FADE_MAX_MS);
+            paint_pass(&ctx, |ui| {
+                host.paint(ui.ctx(), theme, &flags);
+            });
+            let (fraction, shapes) = paint_pass(&ctx, |ui| {
+                let fraction = host.entrance_fraction(&flags);
+                host.paint(ui.ctx(), theme, &flags);
+                fraction
+            });
+
+            assert_eq!(
+                fraction == 1.0,
+                reduced,
+                "reduced motion {reduced}: entrance fraction {fraction}"
+            );
+            for (text, colour) in [
+                ("Timesheet submitted for week 41.", look.text),
+                ("Undo", look.action),
+            ] {
+                assert_eq!(
+                    shown_colour(&text_shape(&shapes, text)),
+                    colour.gamma_multiply(fraction),
+                    "reduced motion {reduced}: {text:?} at entrance fraction {fraction}"
+                );
             }
         }
     }
