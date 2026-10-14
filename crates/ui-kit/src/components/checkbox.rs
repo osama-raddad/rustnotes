@@ -332,8 +332,11 @@ impl<'a> Checkbox<'a> {
                 color,
             );
         }
-        let label_pos =
-            Pos2::new(rect.left() + BOX_SIZE + LABEL_GAP, rect.center().y) - galley.size() / 2.0;
+        let label_pos = crate::typography::left_center(
+            rect.left() + BOX_SIZE + LABEL_GAP,
+            rect.center().y,
+            galley.size(),
+        );
         painter.galley(label_pos, galley, look.label);
 
         // The checkbox semantics; indeterminate reports unchecked
@@ -380,11 +383,23 @@ mod tests {
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
     use crate::tokens::{radii, type_scale};
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         box_rect, checkbox_look, row_min_width, Checkbox, CheckboxState, BOX_BORDER, BOX_RADIUS,
         BOX_SIZE, LABEL_GAP, LABEL_SIZE, ROW_GAP, ROW_HEIGHT,
     };
+
+    /// Install the faces the checkbox paints with: the icon families and
+    /// the theme's type faces bind at the pass boundary, so a warm-up
+    /// pass makes them resolvable for the widget passes that follow.
+    fn install_faces(ctx: &egui::Context, theme: ThemeId) {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            crate::typography::install(theme, ui.ctx());
+        });
+        out.drop_without_applying_deltas();
+    }
 
     /// A state with only one flag set, or the plain rest state.
     fn state(flag: &str) -> WidgetState {
@@ -657,6 +672,31 @@ mod tests {
             digest.toggled
         });
         assert_eq!(off, None);
+    }
+
+    /// The label starts after the 18px box and its 10px gap. The paint
+    /// once also subtracted half the label's width from that left
+    /// anchor, so the label ran back over its own box.
+    #[test]
+    fn the_label_starts_after_the_box_and_its_gap() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        let (row, shapes) = paint_pass(&ctx, |ui| {
+            Checkbox::new("Weekly digest")
+                .ui(ui, theme, &flags)
+                .response
+                .rect
+        });
+        let pos = assert_painted_inside(&shapes, "Weekly digest", row);
+        let after_box = row.left() + BOX_SIZE + LABEL_GAP;
+        assert!(
+            (pos.x - after_box).abs() < 0.01,
+            "starts at x {} but after the box and its gap is {after_box}",
+            pos.x
+        );
     }
 
     /// Run a press then a release at `pos`, returning what `widget`

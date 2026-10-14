@@ -244,8 +244,11 @@ impl<'a> Tabs<'a> {
 
                         let painter = ui.painter().clone().with_layer_id(response.layer_id);
                         painter.galley(
-                            Pos2::new(rect.left() + TAB_PAD_X, rect.center().y)
-                                - galley.size() / 2.0,
+                            crate::typography::left_center(
+                                rect.left() + TAB_PAD_X,
+                                rect.center().y,
+                                galley.size(),
+                            ),
                             galley,
                             look.label,
                         );
@@ -308,6 +311,7 @@ mod tests {
     use crate::states::UiKitFlags;
     use crate::theme::ThemeId;
     use crate::tokens::{radii, spacing, type_scale};
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         clamp_index, indicator_rect, rule_rect, tab_look, Tabs, INDICATOR_HEIGHT, RULE_HEIGHT,
@@ -555,5 +559,43 @@ mod tests {
         }
         assert_eq!(spacing::SPACE_3, 12.0);
         assert_eq!(radii::RADIUS_XS, 2.0, "the focus outline's radius");
+    }
+
+    /// Each label starts one tab padding in from its own tab's left edge
+    /// and stays inside the tab. The paint once also subtracted half the
+    /// label's width from that left anchor, so the first tab "Brand" read
+    /// "and" with its text running out of the row's left edge, and every
+    /// later label ran back over the 28px gap before its tab.
+    #[test]
+    fn tab_labels_start_a_padding_in_from_their_tab() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+        let labels = ["Brand", "Components", "Motion"];
+
+        // Each tab's rect through the ids the widget gives its tabs.
+        let (tab_rects, shapes) = paint_pass(&ctx, |ui| {
+            let base = ui.next_auto_id();
+            Tabs::new(&labels).selected(0).ui(ui, theme, &flags);
+            (0..labels.len())
+                .filter_map(|index| {
+                    ui.ctx()
+                        .read_response(base.with("vynatix-tabs").with(index))
+                })
+                .map(|response| response.rect)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(tab_rects.len(), labels.len(), "one response per tab");
+
+        for (label, tab) in labels.iter().zip(&tab_rects) {
+            let pos = assert_painted_inside(&shapes, label, *tab);
+            assert!(
+                (pos.x - (tab.left() + TAB_PAD_X)).abs() < 0.01,
+                "{label}: starts at x {} but a tab padding in is {}",
+                pos.x,
+                tab.left() + TAB_PAD_X
+            );
+        }
     }
 }

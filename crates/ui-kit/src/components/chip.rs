@@ -305,7 +305,7 @@ impl<'a> Chip<'a> {
             cursor += icon_px + CHIP_GAP;
         }
         painter.galley(
-            egui::Pos2::new(cursor, rect.center().y) - galley.size() / 2.0,
+            crate::typography::left_center(cursor, rect.center().y, galley.size()),
             galley,
             look.label,
         );
@@ -380,14 +380,27 @@ pub struct ChipResponse {
 mod tests {
     use egui::Color32;
 
+    use crate::icon::IconSize;
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
     use crate::tokens::{radii, type_scale};
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         chip_height, chip_look, chip_min_width, chip_radius, Chip, ChipEvent, CHIP_GAP,
         CHIP_LEADING, CHIP_PAD_X, CHIP_PAD_Y,
     };
+
+    /// Install the faces the chip paints with: the icon families and the
+    /// theme's type faces bind at the pass boundary, so a warm-up pass
+    /// makes them resolvable for the widget passes that follow.
+    fn install_faces(ctx: &egui::Context, theme: ThemeId) {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            crate::typography::install(theme, ui.ctx());
+        });
+        out.drop_without_applying_deltas();
+    }
 
     /// A state with only one flag set, or the plain rest state.
     fn state(flag: &str) -> WidgetState {
@@ -645,6 +658,45 @@ mod tests {
                 .event
         });
         assert_eq!(on_label, Some(ChipEvent::Toggled(true)));
+    }
+
+    /// The label starts one chip padding in from the pill's left edge,
+    /// or after the leading icon and its gap when one rides ahead of it
+    /// (the selected look's check). The paint once also subtracted half
+    /// the label's width from that left anchor, so the label ran out of
+    /// the pill's left edge.
+    #[test]
+    fn labels_start_a_padding_in_from_the_pill_edge() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Chip::new("Platform").ui(ui, theme, &flags).response.rect
+        });
+        let pos = assert_painted_inside(&shapes, "Platform", rect);
+        assert!(
+            (pos.x - (rect.left() + CHIP_PAD_X)).abs() < 0.01,
+            "bare label: starts at x {} but one padding in is {}",
+            pos.x,
+            rect.left() + CHIP_PAD_X
+        );
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Chip::new("Android Automotive")
+                .selected()
+                .ui(ui, theme, &flags)
+                .response
+                .rect
+        });
+        let pos = assert_painted_inside(&shapes, "Android Automotive", rect);
+        let after_icon = rect.left() + CHIP_PAD_X + IconSize::Sm.px() + CHIP_GAP;
+        assert!(
+            (pos.x - after_icon).abs() < 0.01,
+            "leading check: starts at x {} but after the icon and its gap is {after_icon}",
+            pos.x
+        );
     }
 
     /// Run a press then a release at `pos`, returning what `chip`

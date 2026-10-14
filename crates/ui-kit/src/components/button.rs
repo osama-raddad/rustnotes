@@ -519,7 +519,7 @@ impl<'a> Button<'a> {
         }
         if let Some(galley) = galley {
             painter.galley(
-                egui::Pos2::new(label_x.unwrap(), body.center().y) - galley.size() / 2.0,
+                crate::typography::left_center(label_x.unwrap(), body.center().y, galley.size()),
                 galley,
                 look.label,
             );
@@ -564,9 +564,12 @@ pub struct ButtonResponse {
 mod tests {
     use egui::Color32;
 
+    use crate::icon::IconSize;
+    use crate::icons::Icon;
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
     use crate::tokens::{radii, spacing, type_scale};
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         emphasis_look, label_job, min_width, Button, ButtonEmphasis, ButtonSize, LABEL_TRACKING_EM,
@@ -968,5 +971,48 @@ mod tests {
         })
         .drop_without_applying_deltas();
         assert!(sizes.iter().all(|size| size.x == size.y), "square");
+    }
+
+    /// The label stays inside the button, and a button with a leading
+    /// icon starts it after the 20px icon and its space-2 gap, one
+    /// padding in from the left edge. The paint once also subtracted
+    /// half the label's width from that left anchor, so "Start a
+    /// project" read "a project" with its text running out of the
+    /// button's left edge, and "Read the case study" read "e case
+    /// study" over the button before it. The label-only case pins
+    /// containment alone: its content width still counts the 20px icon
+    /// slot when no icon rides (a separate slip in `Button::ui` that
+    /// leaves the label 10px left of centre), so its exact edge is not
+    /// asserted here.
+    #[test]
+    fn labels_start_inside_the_button() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Button::new("Start a project")
+                .ui(ui, theme, &flags)
+                .response
+                .rect
+        });
+        assert_painted_inside(&shapes, "Start a project", rect);
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Button::new("Read the case study")
+                .icon_leading(Icon::ArrowForward)
+                .ui(ui, theme, &flags)
+                .response
+                .rect
+        });
+        let pos = assert_painted_inside(&shapes, "Read the case study", rect);
+        let after_icon =
+            rect.left() + ButtonSize::Default.padding_x() + IconSize::Md.px() + spacing::SPACE_2;
+        assert!(
+            (pos.x - after_icon).abs() < 0.01,
+            "leading icon: starts at x {} but after the icon and its gap is {after_icon}",
+            pos.x
+        );
     }
 }

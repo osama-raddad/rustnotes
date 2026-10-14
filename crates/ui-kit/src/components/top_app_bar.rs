@@ -237,7 +237,7 @@ impl<'a> NavLink<'a> {
         let look = link_look(self.current, response.hovered(), theme);
         let painter = ui.painter().clone().with_layer_id(response.layer_id);
         painter.galley(
-            Pos2::new(rect.left(), rect.center().y) - galley.size() / 2.0,
+            crate::typography::left_center(rect.left(), rect.center().y, galley.size()),
             galley,
             look.label,
         );
@@ -265,6 +265,7 @@ mod tests {
     use crate::states::UiKitFlags;
     use crate::theme::ThemeId;
     use crate::tokens::{radii, spacing};
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         bar_border, bar_height, bar_recipe, link_look, link_underline_rect, NavLink, TopAppBar,
@@ -448,6 +449,33 @@ mod tests {
                 assert_eq!(clicked, vec![true], "the release fires the link");
             }
         }
+    }
+
+    /// The link's label starts at the link's own left edge and fills its
+    /// rect. The paint once subtracted half the label's width from that
+    /// left anchor, so the text ran back into the link before it.
+    #[test]
+    fn nav_link_labels_start_at_their_left_edge() {
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            crate::typography::install(ThemeId::Light, ui.ctx());
+        });
+        out.drop_without_applying_deltas();
+        let flags = UiKitFlags::default();
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            NavLink::new("Case studies", false)
+                .ui(ui, ThemeId::Light, &flags)
+                .rect
+        });
+        let pos = assert_painted_inside(&shapes, "Case studies", rect);
+        assert!(
+            (pos.x - rect.left()).abs() < 0.01,
+            "starts at x {} but the link's left edge is {}",
+            pos.x,
+            rect.left()
+        );
     }
 
     /// The stroke the border carries: kept here so the widget and the

@@ -361,7 +361,11 @@ impl<'a, T: Copy + Eq> Select<'a, T> {
         let galley = ui
             .ctx()
             .fonts_mut(|fonts| fonts.layout_delayed_color(shown, font, value_max_width(rect)));
-        let value_pos = Pos2::new(rect.left() + FIELD_PAD_X, rect.center().y) - galley.size() / 2.0;
+        let value_pos = crate::typography::left_center(
+            rect.left() + FIELD_PAD_X,
+            rect.center().y,
+            galley.size(),
+        );
         painter.galley(value_pos, galley, value_color);
 
         // The chevron: 24px expand_more, 12px from the right edge, in
@@ -516,7 +520,11 @@ impl<'a, T: Copy + Eq> Select<'a, T> {
                                 + IconSize::Md.px()
                                 + spacing::SPACE_2;
                             ui.painter().galley(
-                                Pos2::new(label_x, row_rect.center().y) - galley.size() / 2.0,
+                                crate::typography::left_center(
+                                    label_x,
+                                    row_rect.center().y,
+                                    galley.size(),
+                                ),
                                 galley,
                                 colors.text_body(),
                             );
@@ -581,10 +589,13 @@ mod tests {
     use crate::icon::IconSize;
     use crate::states::{UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
+    use crate::tokens::spacing;
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         chevron_center, popup_list_height, select_look, value_max_width, Select, SelectInteraction,
-        MAX_VISIBLE_OPTIONS, OPTION_HEIGHT, SELECT_ICON_INSET, SELECT_TEXT_INSET_RIGHT,
+        FIELD_PAD_X, MAX_VISIBLE_OPTIONS, OPTION_HEIGHT, SELECT_ICON_INSET,
+        SELECT_TEXT_INSET_RIGHT,
     };
 
     /// The Radio preview's example domain: the region.
@@ -945,6 +956,95 @@ mod tests {
                 assert_eq!(picked.committed, None);
             })
             .drop_without_applying_deltas();
+        }
+    }
+
+    /// The closed box's value starts one field padding in from the box's
+    /// left edge. The paint once also subtracted half the value's width
+    /// from that left anchor, so a chosen "Europe" ran out of the box's
+    /// left edge.
+    #[test]
+    fn the_shown_value_starts_a_field_padding_in() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Select::new("Region")
+                .options(REGIONS)
+                .selected(Some(Region::Europe))
+                .ui(ui, theme, &flags)
+                .response
+                .rect
+        });
+        let pos = assert_painted_inside(&shapes, "Europe", rect);
+        assert!(
+            (pos.x - (rect.left() + FIELD_PAD_X)).abs() < 0.01,
+            "starts at x {} but one field padding in is {}",
+            pos.x,
+            rect.left() + FIELD_PAD_X
+        );
+    }
+
+    /// Each option row's label starts after the row's field padding and
+    /// the check column: the 20px check the chosen row carries and its
+    /// space-2 gap. The paint once also subtracted half the label's width
+    /// from that left anchor, so the labels ran back over the check
+    /// column. The list is opened by the click a user makes, and each
+    /// row's rect is read back through the ids the widget gives its rows.
+    #[test]
+    fn option_labels_start_after_the_check_column() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+        let select = |ui: &mut egui::Ui| {
+            Select::new("Region")
+                .options(REGIONS)
+                .selected(None)
+                .placeholder("Choose a region")
+                .ui(ui, theme, &flags)
+        };
+
+        // The closed box first, to find where to click; then a press and
+        // a release on it open the list.
+        let (center, _) = paint_pass(&ctx, |ui| select(ui).response.rect.center());
+        for pressed in [true, false] {
+            let mut input = RawInput::default();
+            input.events.push(egui::Event::PointerMoved(center));
+            input.events.push(egui::Event::PointerButton {
+                pos: center,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            });
+            ctx.run_ui(input, |ui| {
+                select(ui);
+            })
+            .drop_without_applying_deltas();
+        }
+
+        // An idle pass with the list open: the rows are painted now.
+        let (rows, shapes) = paint_pass(&ctx, |ui| {
+            let picked = select(ui);
+            assert!(picked.open, "the click opened the list");
+            let popup_id = picked.response.id.with("popup");
+            (0..REGIONS.len())
+                .filter_map(|index| ui.ctx().read_response(popup_id.with("option").with(index)))
+                .map(|response| response.rect)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(rows.len(), REGIONS.len(), "one rect per option row");
+
+        for ((_, name), row) in REGIONS.iter().zip(&rows) {
+            let pos = assert_painted_inside(&shapes, name, *row);
+            let after_check = row.left() + FIELD_PAD_X + IconSize::Md.px() + spacing::SPACE_2;
+            assert!(
+                (pos.x - after_check).abs() < 0.01,
+                "{name}: starts at x {} but after the check column is {after_check}",
+                pos.x
+            );
         }
     }
 }

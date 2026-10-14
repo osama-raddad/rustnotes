@@ -277,7 +277,7 @@ impl<'a> Badge<'a> {
             cursor += icon_px + BADGE_GAP;
         }
         painter.galley(
-            egui::Pos2::new(cursor, rect.center().y) - galley.size() / 2.0,
+            crate::typography::left_center(cursor, rect.center().y, galley.size()),
             galley,
             look.label,
         );
@@ -451,10 +451,12 @@ impl<'a> IconButton<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::icon::IconSize;
     use crate::icons::Icon;
     use crate::states::UiKitFlags;
     use crate::theme::ThemeId;
     use crate::tokens::type_scale;
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         badge_height, badge_look, badge_radius, count_accessibility_label, count_min_width,
@@ -600,6 +602,41 @@ mod tests {
         .drop_without_applying_deltas();
         assert_eq!(heights, vec![24.0]);
         assert_eq!(clicked, vec![false], "a badge is not a control");
+    }
+
+    /// The word starts one badge padding in from the pill's left edge,
+    /// or after the leading mark and its gap when the tone carries an
+    /// icon. The paint once also subtracted half the word's width from
+    /// that left anchor, so the word ran out of the pill's left edge.
+    /// (The count figures centre on their pill, where the whole
+    /// half-size subtraction is right.)
+    #[test]
+    fn words_start_a_padding_in_from_the_pill_edge() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Badge::new("Featured", BadgeTone::Accent).ui(ui, theme).rect
+        });
+        let pos = assert_painted_inside(&shapes, "Featured", rect);
+        assert!(
+            (pos.x - (rect.left() + BADGE_PAD_X)).abs() < 0.01,
+            "bare word: starts at x {} but one padding in is {}",
+            pos.x,
+            rect.left() + BADGE_PAD_X
+        );
+
+        let (rect, shapes) = paint_pass(&ctx, |ui| {
+            Badge::new("Shipped", BadgeTone::Success).ui(ui, theme).rect
+        });
+        let pos = assert_painted_inside(&shapes, "Shipped", rect);
+        let after_icon = rect.left() + BADGE_PAD_X + IconSize::Sm.px() + BADGE_GAP;
+        assert!(
+            (pos.x - after_icon).abs() < 0.01,
+            "leading icon: starts at x {} but after the icon and its gap is {after_icon}",
+            pos.x
+        );
     }
 
     /// The icon button is the preview's 44px square: it takes focus

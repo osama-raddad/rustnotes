@@ -213,7 +213,7 @@ pub fn error_row(ui: &mut Ui, theme: ThemeId, message: &str) -> Rect {
         },
         colors.error,
     );
-    let text = Pos2::new(rect.left() + icon_px + gap, rect.center().y) - galley.size() / 2.0;
+    let text = typography::left_center(rect.left() + icon_px + gap, rect.center().y, galley.size());
     ui.painter().galley(text, galley, colors.error);
     rect
 }
@@ -459,7 +459,8 @@ mod tests {
     use crate::icon::IconSize;
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
-    use crate::tokens::{radii, type_scale};
+    use crate::tokens::{radii, spacing, type_scale};
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         field_look, leading_icon_center, multiline_height, TextField, CONTROL_HEIGHT, FIELD_GAP,
@@ -702,6 +703,54 @@ mod tests {
         assert!(
             textarea.height() > CONTROL_HEIGHT + 2.0 * FIELD_PAD_Y,
             "three rows grow well past one"
+        );
+    }
+
+    /// The message rows start where their rect says: the hint's text at
+    /// the row's left edge, and the error's after the 16px error icon
+    /// and its 4px gap. The error row once subtracted half the message's
+    /// width from that left anchor, so the text ran back over its icon
+    /// and out of the field's left edge (the Select and Radio error
+    /// rows are this row).
+    #[test]
+    fn message_rows_start_where_their_rect_says() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        let hint = "As it appears in the proposal.";
+        let mut name = String::new();
+        let (row, shapes) = paint_pass(&ctx, |ui| {
+            TextField::new("Project name", &mut name)
+                .hint(hint)
+                .ui(ui, theme, &flags)
+                .message_rect
+                .expect("the hint row is laid out")
+        });
+        let pos = assert_painted_inside(&shapes, hint, row);
+        assert!(
+            (pos.x - row.left()).abs() < 0.01,
+            "hint: starts at x {} but the row's left edge is {}",
+            pos.x,
+            row.left()
+        );
+
+        let message = "That address is missing its @ sign.";
+        let mut email = String::new();
+        let (row, shapes) = paint_pass(&ctx, |ui| {
+            TextField::new("Work email", &mut email)
+                .error(message)
+                .ui(ui, theme, &flags)
+                .message_rect
+                .expect("the error row is laid out")
+        });
+        let pos = assert_painted_inside(&shapes, message, row);
+        let after_icon = row.left() + IconSize::Sm.px() + spacing::SPACE_1;
+        assert!(
+            (pos.x - after_icon).abs() < 0.01,
+            "error: starts at x {} but after the icon and its gap is {after_icon}",
+            pos.x
         );
     }
 

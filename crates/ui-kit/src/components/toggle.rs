@@ -386,8 +386,11 @@ impl<'a> Toggle<'a> {
             }
         }
         painter.circle_filled(center, KNOB_SIZE / 2.0, look.knob);
-        let label_pos =
-            Pos2::new(rect.left() + TRACK_W + LABEL_GAP, rect.center().y) - galley.size() / 2.0;
+        let label_pos = crate::typography::left_center(
+            rect.left() + TRACK_W + LABEL_GAP,
+            rect.center().y,
+            galley.size(),
+        );
         painter.galley(label_pos, galley, look.label);
 
         // The switch semantics; egui's accessibility slots carry no
@@ -430,11 +433,23 @@ pub struct ToggleResponse {
 mod tests {
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
+    use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
         ease_vynatix, knob_left, toggle_look, track_rect, travel_fraction, Toggle, KNOB_INSET,
         KNOB_SIZE, KNOB_TRAVEL, LABEL_GAP, TRACK_H, TRACK_W, TRAVEL_MS,
     };
+
+    /// Install the faces the toggle paints with: the icon families and
+    /// the theme's type faces bind at the pass boundary, so a warm-up
+    /// pass makes them resolvable for the widget passes that follow.
+    fn install_faces(ctx: &egui::Context, theme: ThemeId) {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            crate::typography::install(theme, ui.ctx());
+        });
+        out.drop_without_applying_deltas();
+    }
 
     /// A state with only one flag set, or the plain rest state.
     fn state(flag: &str) -> WidgetState {
@@ -689,6 +704,31 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(position_at(&ctx, true, 0.1, &reduced), 1.0);
+    }
+
+    /// The label starts after the 44px track and its 12px gap. The paint
+    /// once also subtracted half the label's width from that left
+    /// anchor, so the label ran back under its own track.
+    #[test]
+    fn the_label_starts_after_the_track_and_its_gap() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        let (row, shapes) = paint_pass(&ctx, |ui| {
+            Toggle::new("Reduced motion")
+                .ui(ui, theme, &flags)
+                .response
+                .rect
+        });
+        let pos = assert_painted_inside(&shapes, "Reduced motion", row);
+        let after_track = row.left() + TRACK_W + LABEL_GAP;
+        assert!(
+            (pos.x - after_track).abs() < 0.01,
+            "starts at x {} but after the track and its gap is {after_track}",
+            pos.x
+        );
     }
 
     /// Run a press then a release at `pos`, returning what `widget`
