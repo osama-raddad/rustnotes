@@ -2243,7 +2243,6 @@ impl Gallery {
                     });
             });
 
-        // The snackbar host
         // The snackbar host: the one visible message floats near the
         // window's bottom, centred, 24px above the edge. Its action
         // runs here, where the host knows what it enqueued.

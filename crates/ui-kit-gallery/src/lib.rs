@@ -113,16 +113,6 @@ impl rustnotes::App for GalleryApp {
         let canvas = self.gallery.theme.colors().background;
         root.painter().rect_filled(viewport, 0.0, canvas);
         self.gallery.chrome(root);
-        // TEMP-DEBUG
-        std::fs::write(
-            std::env::temp_dir().join("vynatix-offset-debug.log"),
-            format!(
-                "offset {:?}
-",
-                self.gallery.last_scroll_offset
-            ),
-        )
-        .ok();
     }
 }
 
@@ -140,9 +130,11 @@ impl GalleryApp {
     pub(crate) fn filter_input_shim(&mut self, raw: &mut egui::RawInput) {
         let mut drag: Option<egui::Vec2> = None;
         let mut rest: Vec<egui::Event> = Vec::new();
-        // iOS (and the tests) swallow the touches after tracking; every
-        // other platform passes them through untouched.
-        let keep_touches = !cfg!(any(target_os = "ios", test));
+        // The touches are swallowed after tracking: egui-winit
+        // delivers a parallel pointer stream (taps, drags and focus keep
+        // working), and egui's own touch-to-scroll is disabled by the
+        // swallow — no fighting the shim, no flaky native drag.
+        let keep_touches = false;
         for event in std::mem::take(&mut raw.events) {
             if let egui::Event::Touch { phase, pos, .. } = &event {
                 match phase {
@@ -172,11 +164,63 @@ impl GalleryApp {
             }
         }
         raw.events = rest;
+        // Android's winit backend never delivers Event::Touch — the
+        // finger arrives as plain pointer events — so egui's
+        // touch-gated drag-to-scroll never engages there either. The
+        // shim tracks the pointer drag instead (press anchors, moves
+        // drive, release lands). Desktop keeps its wheel and is left
+        // alone: a mouse drag there is selection, not scrolling.
+        #[cfg(target_os = "android")]
+        if drag.is_none() {
+            let mut pointer_drag: Option<egui::Vec2> = None;
+            let events = std::mem::take(&mut raw.events);
+            for event in &events {
+                match event {
+                    egui::Event::PointerButton {
+                        pos,
+                        pressed: true,
+                        button: egui::PointerButton::Primary,
+                        ..
+                    } => {
+                        SCROLL_TOUCH.with(|c| *c.borrow_mut() = Some(*pos));
+                    }
+                    egui::Event::PointerMoved(pos) => {
+                        let last = SCROLL_TOUCH.with(|c| c.borrow_mut().replace(*pos));
+                        if let Some(last) = last {
+                            let delta = *pos - last;
+                            pointer_drag =
+                                Some(pointer_drag.map_or(delta, |so_far| so_far + delta));
+                        }
+                    }
+                    egui::Event::PointerButton {
+                        pressed: false,
+                        button: egui::PointerButton::Primary,
+                        ..
+                    } => {
+                        if SCROLL_TOUCH.with(|c| c.borrow_mut().is_some()) {
+                            SCROLL_TOUCH.with(|c| *c.borrow_mut() = None);
+                            // The release frame keeps the explicit
+                            // offset path alive once more so the final
+                            // position lands and is read back.
+                            self.gallery.touch_scrolling = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            raw.events = events;
+            if let Some(delta) = pointer_drag {
+                self.gallery.scroll_offset -= delta.y;
+                self.gallery.touch_scrolling = true;
+            }
+        }
         // Natural direction: the content follows the finger (a finger
         // moving up, negative dy, grows the offset and shows the later
         // content). The next frame's ScrollArea takes the offset via
         // `vertical_scroll_offset` (see `chrome`), and feeds the live
         // value back so the wheel path and clamping keep working.
+        // iOS only (and the tests): on Android the pointer path above
+        // drives instead.
         if let Some(delta) = drag {
             self.gallery.scroll_offset -= delta.y;
             self.gallery.touch_scrolling = true;

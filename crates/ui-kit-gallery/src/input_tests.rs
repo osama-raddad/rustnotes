@@ -185,3 +185,32 @@ fn touch(phase: egui::TouchPhase, y: f32) -> egui::Event {
         force: None,
     }
 }
+
+/// After a real touch has been seen (touch states exist), taps must
+/// still click: egui 0.36's drag-to-scroll background interact must
+/// not eat them (the regression that killed all taps on Android).
+#[test]
+fn taps_still_work_after_touches_have_been_seen() {
+    let mut h = Harness::new();
+    // A first touch (Start + End) creates the touch state.
+    h.frame(vec![touch(egui::TouchPhase::Start, 400.0)]);
+    h.frame(vec![touch(egui::TouchPhase::End, 400.0)]);
+    // Now a plain tap through the pointer path.
+    let mut worked = false;
+    for y in [90.0, 110.0, 130.0, 150.0, 170.0, 190.0, 210.0, 230.0] {
+        let mut h2 = Harness::new();
+        // recreate the touch state on the fresh context
+        h2.frame(vec![touch(egui::TouchPhase::Start, 400.0)]);
+        h2.frame(vec![touch(egui::TouchPhase::End, 400.0)]);
+        h2.tap((120.0, y));
+        if h2.gallery.tab == 1 {
+            worked = true;
+            break;
+        }
+    }
+    assert!(
+        worked,
+        "the Foundations tab must still respond once touches exist"
+    );
+    let _ = &mut h;
+}
