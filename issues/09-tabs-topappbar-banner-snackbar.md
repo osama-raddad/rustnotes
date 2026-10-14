@@ -6,6 +6,9 @@ priority: high
 blocked-by: [05, 07, 08]
 blocks: [11]
 estimate: medium
+status: done
+completed: 2026-10-14T02:06:45+0200
+commit: fe73cadefeb2817856dc39c8aeef36516e680c4d
 modules:
   - crates/ui-kit/src/components/tabs.rs
   - crates/ui-kit/src/components/top_app_bar.rs
