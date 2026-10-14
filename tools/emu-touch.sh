@@ -10,7 +10,33 @@
 #    dead space and look like dead input.
 # 2. Screenshot pixel-diffs are the oracle: a tap that works changes
 #    >5% of pixels (panel switch); a scroll changes >10%; a no-op is
-#    <1%.
+#    <1%. A changed-pixel count alone cannot tell a scroll from a text
+#    selection (a selection highlight changes plenty of pixels too), so
+#    every gesture that should come back is also diffed against the
+#    screenshot from before it: a return to within 2% is the proof.
+#
+# The checks, in order (each one counts toward the exit status):
+#   tap      the Foundations tab switches panels               (>5%)
+#   scroll   a swipe up scrolls the page                       (>10%)
+#   hold     the scrolled page stays put for 3s, no snap-back  (<1%)
+#   return   swiping back down lands on the panel's first
+#            screenshot exactly (a leftover selection fails)    (<2%)
+#   rest     the returned page stays put for 3s                (<1%)
+#   sideways a sideways swipe over a specimen row scrolls it    (>3%)
+#   unswipe  the reverse swipe restores the row                 (<2%)
+#
+# The tap comes first on purpose: egui arms its drag-to-scroll once it
+# has seen a touch, so on a fresh launch the very first swipe lands on
+# nothing; the tab tap is that first touch.
+#
+# The sideways row: the Brand tab has none (its theme cards sit in a
+# row the page clips rather than scrolls, below the fold at launch),
+# so the check scrolls the Foundations
+# tab until the state tiles (the first row that scrolls sideways) sit
+# mid-screen, with slow swipes so egui's fling adds little, then
+# swipes sideways at a few heights around where the row should be: a
+# swipe that misses the row changes nothing, the first one that hits
+# it is the check. Retarget with the SIDEWAYS_* values below.
 #
 # Usage: tools/emu-touch.sh [serial]     # defaults to the first device
 
@@ -21,6 +47,18 @@ SERIAL="${1:-$(adb devices | awk 'NR>1 && $2=="device"{print $1; exit}')}
 "
 SERIAL=$(echo $SERIAL | tr -d '[:space:]')
 OUT="$(mktemp -d)"
+
+# The sideways row, in device px (egui pt * 3). Measured headlessly at
+# 448x997 pt with no status bar: unscrolled, the Foundations state
+# tiles' band would sit at y 2038..2140 pt, so three slow 510 pt
+# swipes (each adding ~15 pt of fling) bring it to about 463..565 pt.
+# The device's status bar inset moves it down by its own height, hence
+# the spread of heights to try, every 30 pt from 460 to 610 pt.
+SIDEWAYS_SCROLLS=3
+SIDEWAYS_SCROLL_FROM=2400
+SIDEWAYS_SCROLL_TO=870
+SIDEWAYS_SCROLL_MS=3000
+SIDEWAYS_YS=(1380 1470 1560 1650 1740 1830)
 
 shot() { adb -s "$SERIAL" exec-out screencap -p > "$OUT/$1.png"; }
 
@@ -38,47 +76,105 @@ print(f"{100 * d / t:.1f}")
 PY
 }
 
+swipe() { adb -s "$SERIAL" shell input swipe "$@"; }
+
+# check NAME VALUE OP LIMIT: record a PASS or FAIL for VALUE OP LIMIT
+# (OP is > or <) and print it.
+summary=()
+fail=0
+check() {
+  local name=$1 value=$2 op=$3 limit=$4 ok
+  if [[ $op == ">" ]]; then
+    (( value > limit )) && ok=1 || ok=0
+  else
+    (( value < limit )) && ok=1 || ok=0
+  fi
+  if (( ok )); then
+    summary+=("$name=${value}%:PASS")
+    echo "   ${value}% (want $op$limit) PASS"
+  else
+    summary+=("$name=${value}%:FAIL")
+    echo "   ${value}% (want $op$limit) FAIL"
+    fail=1
+  fi
+}
+
 adb -s "$SERIAL" shell am force-stop $PKG 2>/dev/null || true
 adb -s "$SERIAL" shell am start -n $PKG/android.app.NativeActivity >/dev/null 2>&1
 sleep 3
 
 # device px = egui pt * 3 (the emulator's pixels_per_point)
-fail=0
 
 echo "-- tap the Foundations tab"
-shot a
+shot launch
 adb -s "$SERIAL" shell input tap 370 600
 sleep 1.2
-shot b
-TAP=$(diff_pct a b)
-echo "   changed: ${TAP}% (want >5)"
-(( ${TAP%.*} > 5 )) || fail=1
+shot top
+check tap "$(diff_pct launch top)" ">" 5
 
 echo "-- swipe up (scroll down the page)"
-shot a
-adb -s "$SERIAL" shell input swipe 540 2100 540 700 400
-sleep 1.2
-shot b
-DOWN=$(diff_pct a b)
-echo "   changed: ${DOWN}% (want >10)"
-(( ${DOWN%.*} > 10 )) || fail=1
+swipe 540 2100 540 700 400
+sleep 2
+shot down
+check scroll "$(diff_pct top down)" ">" 10
 
-echo "-- swipe back down (return to origin)"
-shot a
-adb -s "$SERIAL" shell input swipe 540 700 540 2100 400
-sleep 1.2
-shot b
-BACK=$(diff_pct a b)
-echo "   changed: ${BACK}% (want ~0: exact return)"
-
-echo "-- hold: no snap-back"
-shot a
+echo "-- hold: the scrolled page stays put (no snap-back)"
 sleep 3
-shot b
-HOLD=$(diff_pct a b)
-echo "   changed: ${HOLD}% (want ~0)"
+shot held
+check hold "$(diff_pct down held)" "<" 1
+
+echo "-- swipe back down (twice, so the page lands on its top edge)"
+swipe 540 700 540 2100 400
+sleep 1
+swipe 540 700 540 2100 400
+sleep 2
+shot back
+check return "$(diff_pct top back)" "<" 2
+
+echo "-- hold: the returned page stays put"
+sleep 3
+shot rested
+check rest "$(diff_pct back rested)" "<" 1
+
+echo "-- sideways: the state tiles scroll under the finger"
+repeat $SIDEWAYS_SCROLLS; do
+  swipe 540 $SIDEWAYS_SCROLL_FROM 540 $SIDEWAYS_SCROLL_TO $SIDEWAYS_SCROLL_MS
+  sleep 1
+done
+sleep 1
+SIDE=0
+SIDE_Y=
+for y in $SIDEWAYS_YS; do
+  shot row
+  swipe 1100 $y 300 $y 300
+  sleep 1.5
+  shot moved
+  SIDE=$(diff_pct row moved)
+  echo "   at y=$y: ${SIDE}%"
+  if (( SIDE > 3 )); then
+    SIDE_Y=$y
+    break
+  fi
+done
+check sideways "$SIDE" ">" 3
+
+echo "-- unswipe: the reverse swipe restores the row"
+if [[ -n $SIDE_Y ]]; then
+  swipe 300 $SIDE_Y 1100 $SIDE_Y 300
+  sleep 1.5
+  shot restored
+  check unswipe "$(diff_pct row restored)" "<" 2
+else
+  echo "   no row found to restore FAIL"
+  summary+=("unswipe=n/a:FAIL")
+  fail=1
+fi
 
 echo
-echo "tap=$TAP% scroll-down=$DOWN% scroll-back=$BACK% hold=$HOLD%"
+if (( fail )); then
+  echo "FAIL ${summary[*]}"
+else
+  echo "PASS ${summary[*]}"
+fi
 echo "screenshots in $OUT"
 exit $fail

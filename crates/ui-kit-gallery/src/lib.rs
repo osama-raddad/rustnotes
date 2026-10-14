@@ -9,8 +9,16 @@
 //! Nothing of Rust Notes leaks across the seam (no `rustnotes-core`
 //! dependency here), and nothing of the host leaks into the kit: the kit
 //! stays pure egui, and this crate is the only place the two meet.
+//!
+//! Input reaches egui untouched. egui-winit turns every finger into an
+//! `Event::Touch` (plus a parallel pointer stream for the first finger,
+//! which is what taps and focus ride on), and the touches are what tell
+//! egui the screen is a touch screen: from then on its own
+//! drag-to-scroll moves the page and the sideways specimen rows under
+//! the finger, with the kinetic fling on release. The gallery's labels
+//! are not selectable (a gallery is not a document), so a drag that
+//! starts on text scrolls instead of selecting it.
 
-use std::cell::RefCell;
 use std::path::PathBuf;
 
 use egui::Context;
@@ -21,32 +29,12 @@ mod input_tests;
 
 pub use gallery::Gallery;
 
-#[cfg(test)]
-/// A `GalleryApp` for the input tests: a gallery state plus a live
-/// context, the pieces `filter_input` needs.
-pub(crate) fn test_app(gallery: Gallery, ctx: egui::Context) -> GalleryApp {
-    GalleryApp {
-        gallery,
-        ctx: Some(ctx),
-    }
-}
-
-thread_local! {
-    /// The last touch position while a finger is down, the scroll
-    /// shim's drag anchor.
-    static SCROLL_TOUCH: RefCell<Option<egui::Pos2>> = const { RefCell::new(None) };
-}
-
 /// The gallery as a `rustnotes::App`: identity consts for the platform
 /// glue, the kit's fonts and default theme installed at creation, the
 /// host's OS-level preferences mapped onto the kit's flags, and the
 /// gallery's chrome as the root UI.
 pub struct GalleryApp {
     gallery: Gallery,
-    /// The live egui context, captured each frame so the touch-scroll
-    /// shim in `filter_input` (which has no context argument) can
-    /// reach the scroll state between frames.
-    ctx: Option<egui::Context>,
 }
 
 impl rustnotes::App for GalleryApp {
@@ -58,16 +46,16 @@ impl rustnotes::App for GalleryApp {
 
     /// Install every theme's faces (the Brand tab's theme cards set their
     /// own themes' display faces; the installs are additive by design),
-    /// the icon subsets, and apply the default theme.
+    /// the icon subsets, and apply the default theme with the gallery's
+    /// own style on top (see `gallery::apply_theme`).
     fn new(_data_dir: PathBuf, ctx: &Context, _platform_font: Option<(Vec<u8>, String)>) -> Self {
         for id in ui_kit::theme::ThemeId::ALL {
             ui_kit::typography::install(*id, ctx);
         }
         ui_kit::icon::install(ctx);
-        ui_kit::theme::ThemeId::Light.apply(ctx);
+        gallery::apply_theme(ui_kit::theme::ThemeId::Light, ctx);
         Self {
             gallery: Gallery::new(),
-            ctx: None,
         }
     }
 
@@ -89,10 +77,9 @@ impl rustnotes::App for GalleryApp {
     /// No dates are rendered from the OS clock.
     fn set_utc_offset_secs(&mut self, _offset_secs: i32) {}
 
-    /// Touch filtering: the scroll shim (see `filter_input_shim`).
-    fn filter_input(&mut self, raw: &mut egui::RawInput) {
-        self.filter_input_shim(raw);
-    }
+    /// Nothing is filtered: the touches reach egui as egui-winit
+    /// delivers them, and egui's own drag-to-scroll does the scrolling.
+    fn filter_input(&mut self, _raw: &mut egui::RawInput) {}
 
     /// Nothing persists; every save moment is a no-op.
     fn save_current(&mut self) {}
@@ -108,123 +95,10 @@ impl rustnotes::App for GalleryApp {
     /// gallery's chrome: the app bar panel, the tabbed content panel and
     /// the floating snackbar.
     fn ui(&mut self, root: &mut egui::Ui) {
-        self.ctx = Some(root.ctx().clone());
         let viewport = root.ctx().input(|i| i.viewport_rect());
         let canvas = self.gallery.theme.colors().background;
         root.painter().rect_filled(viewport, 0.0, canvas);
         self.gallery.chrome(root);
-    }
-}
-
-impl GalleryApp {
-    /// Touch-scroll shim: finger drags drive the page's scroll offset
-    /// directly. egui's wheel path is pointer-hover-gated (dead during
-    /// a touch drag), and its own touch-to-scroll fights these writes
-    /// to a standstill — the exact "scrolling does not work" symptom —
-    /// so on iOS (and in the tests) the touches are tracked and then
-    /// swallowed; egui-winit still delivers its parallel pointer
-    /// stream, so taps, drags on widgets and focus keep working. On
-    /// Android the touches pass through untouched: its injected input
-    /// reaches egui as one stream, and egui's native touch scroll
-    /// works there.
-    pub(crate) fn filter_input_shim(&mut self, raw: &mut egui::RawInput) {
-        let mut drag: Option<egui::Vec2> = None;
-        let mut rest: Vec<egui::Event> = Vec::new();
-        // The touches are swallowed after tracking: egui-winit
-        // delivers a parallel pointer stream (taps, drags and focus keep
-        // working), and egui's own touch-to-scroll is disabled by the
-        // swallow — no fighting the shim, no flaky native drag.
-        let keep_touches = false;
-        for event in std::mem::take(&mut raw.events) {
-            if let egui::Event::Touch { phase, pos, .. } = &event {
-                match phase {
-                    egui::TouchPhase::Start => {
-                        SCROLL_TOUCH.with(|c| *c.borrow_mut() = Some(*pos));
-                    }
-                    egui::TouchPhase::Move => {
-                        let last = SCROLL_TOUCH.with(|c| c.borrow_mut().replace(*pos));
-                        if let Some(last) = last {
-                            let delta = *pos - last;
-                            drag = Some(drag.map_or(delta, |so_far| so_far + delta));
-                        }
-                    }
-                    _ => {
-                        SCROLL_TOUCH.with(|c| *c.borrow_mut() = None);
-                        // The release frame keeps the explicit offset
-                        // path alive once more so the final position
-                        // lands and is read back.
-                        self.gallery.touch_scrolling = true;
-                    }
-                }
-                if keep_touches {
-                    rest.push(event);
-                }
-            } else {
-                rest.push(event);
-            }
-        }
-        raw.events = rest;
-        // Android's winit backend never delivers Event::Touch — the
-        // finger arrives as plain pointer events — so egui's
-        // touch-gated drag-to-scroll never engages there either. The
-        // shim tracks the pointer drag instead (press anchors, moves
-        // drive, release lands). Desktop keeps its wheel and is left
-        // alone: a mouse drag there is selection, not scrolling.
-        #[cfg(target_os = "android")]
-        if drag.is_none() {
-            let mut pointer_drag: Option<egui::Vec2> = None;
-            let events = std::mem::take(&mut raw.events);
-            for event in &events {
-                match event {
-                    egui::Event::PointerButton {
-                        pos,
-                        pressed: true,
-                        button: egui::PointerButton::Primary,
-                        ..
-                    } => {
-                        SCROLL_TOUCH.with(|c| *c.borrow_mut() = Some(*pos));
-                    }
-                    egui::Event::PointerMoved(pos) => {
-                        let last = SCROLL_TOUCH.with(|c| c.borrow_mut().replace(*pos));
-                        if let Some(last) = last {
-                            let delta = *pos - last;
-                            pointer_drag =
-                                Some(pointer_drag.map_or(delta, |so_far| so_far + delta));
-                        }
-                    }
-                    egui::Event::PointerButton {
-                        pressed: false,
-                        button: egui::PointerButton::Primary,
-                        ..
-                    } => {
-                        if SCROLL_TOUCH.with(|c| c.borrow_mut().is_some()) {
-                            SCROLL_TOUCH.with(|c| *c.borrow_mut() = None);
-                            // The release frame keeps the explicit
-                            // offset path alive once more so the final
-                            // position lands and is read back.
-                            self.gallery.touch_scrolling = true;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            raw.events = events;
-            if let Some(delta) = pointer_drag {
-                self.gallery.scroll_offset -= delta.y;
-                self.gallery.touch_scrolling = true;
-            }
-        }
-        // Natural direction: the content follows the finger (a finger
-        // moving up, negative dy, grows the offset and shows the later
-        // content). The next frame's ScrollArea takes the offset via
-        // `vertical_scroll_offset` (see `chrome`), and feeds the live
-        // value back so the wheel path and clamping keep working.
-        // iOS only (and the tests): on Android the pointer path above
-        // drives instead.
-        if let Some(delta) = drag {
-            self.gallery.scroll_offset -= delta.y;
-            self.gallery.touch_scrolling = true;
-        }
     }
 }
 

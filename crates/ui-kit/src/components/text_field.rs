@@ -400,7 +400,9 @@ impl<'a> TextField<'a> {
         let response = ui.put(rect, edit);
 
         // The ring: the live response, the box's own rect.
-        FocusRing::new().text_input().paint(ui, &response, theme, flags);
+        FocusRing::new()
+            .text_input()
+            .paint(ui, &response, theme, flags);
 
         // The message row: the error replaces the hint, the preview
         // pointing the field at one or the other.

@@ -5,7 +5,6 @@
 //! real demo — over a scrolling page; and, on the Feedback tab, the
 //! Banner demos at the panel top and the Snackbar host's trigger
 //! buttons, the snackbar itself floating in near the window's bottom.
-//! Run with `cargo run -p ui-kit --example gallery`.
 //!
 //! The panel grouping (the judgment issue 09 documented, extended by
 //! issue 10): the Foundations tab holds the type specimen, the
@@ -19,8 +18,9 @@
 //! and the tab strip drive the same panel state — the link's
 //! `aria-current`-style underline and the tab's indicator are the two
 //! accents the specs give them. Themes and the reduced-motion and
-//! reduced-transparency flags live in the bar's theme menu, all six
-//! reachable.
+//! reduced-transparency flags live in the bar's theme menu (a kit
+//! button opening a kit popover: a radio group and two toggles), all
+//! six themes reachable.
 //!
 //! The Brand tab and the cover (issue 10's judgment, documented): the
 //! issue wants the Cover as the gallery's first screen, and the
@@ -45,6 +45,16 @@
 //! window (the state tiles, the radii, the metrics, the editorial
 //! trio, the glass panes) scroll horizontally instead of clipping
 //! their tails, the way the web previews scroll the same rows.
+//!
+//! The phone pass: under the design system's 600pt compact
+//! breakpoint the bar keeps the wordmark, the theme menu (on its bare
+//! label) and the search affordance; the caption under the tab strip
+//! steps aside; the button rows and the Foundations specimens wrap
+//! (the specimens through `wrapping_row`, since egui's
+//! `horizontal_wrapped` never wraps a plain group); the card grid and
+//! the form grids stack. The page and the sideways rows scroll under
+//! the finger through egui's own drag-to-scroll (lib.rs tells the
+//! input story).
 //!
 //! This module is the app's whole UI, hosted by the `rustnotes` host
 //! through `GalleryApp` (lib.rs): the host supplies the platform glue
@@ -90,6 +100,30 @@ use ui_kit::typography::{install, specimen_job, TrackedLabel, TypeStyle};
 /// the design system's own compact breakpoint (`breakpoint-compact`).
 const NARROW_WIDTH: f32 = 600.0;
 
+/// The page scroll area's id salt. The kit's Tabs strip, laid out just
+/// above the page in the same `Ui`, is itself an unsalted horizontal
+/// `ScrollArea`, so an unsalted page would resolve to the same id and
+/// the two would share one `scroll_area::State`: the strip clamps the
+/// shared vertical offset back to zero every frame, and neither the
+/// wheel nor a finger could move the page for longer than a frame. The
+/// salt gives the page a state of its own.
+const PAGE_SCROLL: &str = "gallery-page";
+
+/// The theme menu's popover width: the longest toggle row ("Reduced
+/// transparency" beside its 44px track) and the frame's insets.
+const THEME_MENU_WIDTH: f32 = 248.0;
+
+/// Apply `theme` with the gallery's own style on top: labels are not
+/// selectable. A gallery is not a document, and a drag that starts on
+/// selectable text selects it instead of scrolling the page.
+/// `ThemeId::apply` replaces the visuals alone, so the setting would
+/// survive a switch anyway; every theme change goes through here all
+/// the same, so the two never drift apart.
+pub(crate) fn apply_theme(theme: ThemeId, ctx: &egui::Context) {
+    theme.apply(ctx);
+    ctx.all_styles_mut(|style| style.interaction.selectable_labels = false);
+}
+
 impl Gallery {
     /// The gallery's starting state: the Brand tab, every demo
     /// populated.
@@ -102,13 +136,12 @@ impl Gallery {
             form: ProjectForm::populated(),
             choices: ChoiceDemos::populated(),
             tab: 0,
-            scroll_offset: 0.0,
-            touch_scrolling: false,
-            last_scroll_offset: egui::Vec2::ZERO,
-            banners: BannerDemos::default(),
+            page_scroll_id: None,
+            banners: BannerDemos::populated(),
             snackbar: SnackbarHost::new(),
             search: String::new(),
             search_open: false,
+            theme_open: false,
         }
     }
 }
@@ -121,6 +154,51 @@ fn scrolling_row(ui: &mut egui::Ui, id: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::ScrollArea::horizontal()
         .id_salt(id)
         .show(ui, |ui| ui.horizontal(add));
+}
+
+/// A row of captioned specimens (each one a [`wrapping_specimen`]) that
+/// wraps onto new lines when the window is narrow. The gaps ride the
+/// row's item spacing, never `add_space`: a space added after a line's
+/// last tile pushes the row's extent past the window's edge, and every
+/// later row then wraps that much wider.
+fn wrapping_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(spacing::SPACE_4, spacing::SPACE_3);
+        add(ui);
+    });
+}
+
+/// One captioned specimen in a [`wrapping_row`]: `art` above its
+/// caption, in a top-down tile as wide as the wider of `art_width` and
+/// the caption's line. egui's `horizontal_wrapped` moves a widget to
+/// the next line only when it knows its size before it is laid out,
+/// which a plain `ui.vertical` group never does (the row then runs on
+/// past the window's edge); the tile allocates its width up front, so
+/// the row wraps on a phone.
+fn wrapping_specimen(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    art_width: f32,
+    caption: &str,
+    art: impl FnOnce(&mut egui::Ui),
+) {
+    let job = specimen_job(
+        caption,
+        TypeStyle::Caption,
+        theme,
+        theme.colors().text_muted(),
+        None,
+    );
+    let caption = ui.ctx().fonts_mut(|fonts| fonts.layout_job(job));
+    let width = art_width.max(caption.size().x);
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, 0.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            art(ui);
+            ui.add(egui::Label::new(caption));
+        },
+    );
 }
 
 /// Pair the option enums with their labels from `gallery_copy`: the
@@ -166,13 +244,10 @@ pub struct Gallery {
     /// The active gallery panel, driven by the tab strip and the
     /// bar's nav links alike.
     pub(crate) tab: usize,
-    /// The page's scroll offset: driven by the touch-scroll shim while
-    /// a finger drags (`touch_scrolling`), and fed back from the
-    /// ScrollArea every frame so the wheel path and clamping hold.
-    pub(crate) scroll_offset: f32,
-    pub(crate) touch_scrolling: bool,
-    /// The main scroll area's offset after the last frame (tests).
-    pub(crate) last_scroll_offset: egui::Vec2,
+    /// The page scroll area's id as of the last frame. egui keeps the
+    /// page's live offset in that area's `scroll_area::State`, which is
+    /// where the input tests read it back.
+    pub(crate) page_scroll_id: Option<egui::Id>,
     /// Which of the dismissible banner demos still hold their
     /// banners; the warning and the error stay until resolved.
     banners: BannerDemos,
@@ -182,15 +257,27 @@ pub struct Gallery {
     search: String,
     /// Whether the bar's search popover is open.
     search_open: bool,
+    /// Whether the bar's theme menu is open.
+    theme_open: bool,
 }
 
 /// The dismissible banner demos' state: the info and success banners
 /// come back on demand; the warning and the error never leave on
 /// their own.
-#[derive(Default)]
 struct BannerDemos {
     info: bool,
     success: bool,
+}
+
+impl BannerDemos {
+    /// Both dismissible banners showing: the Feedback tab opens on all
+    /// four tones, and the restore button waits for a dismissal.
+    fn populated() -> Self {
+        Self {
+            info: true,
+            success: true,
+        }
+    }
 }
 
 /// The choice-controls demos' state: the notification checkboxes, the
@@ -470,27 +557,21 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
 
     ui.label(copy::SPACING_LABEL);
     ui.add_space(spacing::SPACE_2);
-    ui.horizontal_wrapped(|ui| {
+    wrapping_row(ui, |ui| {
         for (name, value) in spacing::ALL {
-            ui.vertical(|ui| {
-                let (rect, _) = ui.allocate_exact_size(
-                    Vec2::new(spacing::SPACE_24, spacing::SPACE_2),
-                    Sense::hover(),
-                );
+            // The bar runs the step's own length; the widest steps
+            // widen their tile to hold it.
+            let width = spacing::SPACE_24.max(*value);
+            let caption = format!("{name} · {}", trim_float(*value));
+            wrapping_specimen(ui, theme, width, &caption, |ui| {
+                let (rect, _) =
+                    ui.allocate_exact_size(Vec2::new(width, spacing::SPACE_2), Sense::hover());
                 if *value > 0.0 {
                     let bar = Rect::from_min_size(rect.min, Vec2::new(*value, rect.height()));
                     ui.painter()
                         .rect_filled(bar, CornerRadius::same(0), colors.primary);
                 }
-                ui.add(egui::Label::new(specimen_job(
-                    &format!("{name} · {}", trim_float(*value)),
-                    TypeStyle::Caption,
-                    theme,
-                    colors.text_muted(),
-                    Some(ui.available_width()),
-                )));
             });
-            ui.add_space(spacing::SPACE_2);
         }
     });
 
@@ -535,9 +616,23 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
         ("L4", shadows.l4),
         ("L5", shadows.l5),
     ];
-    ui.horizontal(|ui| {
+    // Five 96px tiles run past a phone's width; they wrap.
+    wrapping_row(ui, |ui| {
         for (level, layers) in levels {
-            ui.vertical(|ui| {
+            let caption = layers
+                .first()
+                .map(|layer| {
+                    format!(
+                        "{} · {} {} {} · {:.0}%",
+                        level,
+                        trim_float(layer.x),
+                        trim_float(layer.y),
+                        trim_float(layer.blur),
+                        layer.color.a() as f32 * 100.0 / 255.0,
+                    )
+                })
+                .unwrap_or_else(|| level.to_owned());
+            wrapping_specimen(ui, theme, spacing::SPACE_24, &caption, |ui| {
                 let (rect, _) = ui.allocate_exact_size(
                     Vec2::new(spacing::SPACE_24, spacing::SPACE_24),
                     Sense::hover(),
@@ -550,28 +645,7 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
                 ui.painter().add(egui_shadow(layers).as_shape(card, radius));
                 ui.painter()
                     .rect_filled(card, radius, colors.surface_container_low);
-                let caption = layers
-                    .first()
-                    .map(|layer| {
-                        format!(
-                            "{} · {} {} {} · {:.0}%",
-                            level,
-                            trim_float(layer.x),
-                            trim_float(layer.y),
-                            trim_float(layer.blur),
-                            layer.color.a() as f32 * 100.0 / 255.0,
-                        )
-                    })
-                    .unwrap_or_else(|| level.to_owned());
-                ui.add(egui::Label::new(specimen_job(
-                    &caption,
-                    TypeStyle::Caption,
-                    theme,
-                    colors.text_muted(),
-                    Some(ui.available_width()),
-                )));
             });
-            ui.add_space(spacing::SPACE_2);
         }
     });
 }
@@ -590,23 +664,16 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
     ));
     ui.add_space(spacing::SPACE_4);
 
-    ui.horizontal(|ui| {
+    wrapping_row(ui, |ui| {
         for size in IconSize::ALL {
-            ui.vertical(|ui| {
+            let caption = format!(
+                "{} · {}",
+                trim_float(size.px()),
+                size.name().trim_start_matches("icon-size-")
+            );
+            wrapping_specimen(ui, theme, size.px(), &caption, |ui| {
                 icon(ui, Icon::Search, *size, colors.primary);
-                ui.add(egui::Label::new(specimen_job(
-                    &format!(
-                        "{} · {}",
-                        trim_float(size.px()),
-                        size.name().trim_start_matches("icon-size-")
-                    ),
-                    TypeStyle::Caption,
-                    theme,
-                    colors.text_muted(),
-                    Some(ui.available_width()),
-                )));
             });
-            ui.add_space(spacing::SPACE_2);
         }
     });
     ui.add(egui::Label::new(specimen_job(
@@ -621,28 +688,20 @@ fn icons_section(ui: &mut egui::Ui, theme: ThemeId) {
         ui.add_space(spacing::SPACE_4);
         ui.label(format!("{category} · {}", icons.len()));
         ui.add_space(spacing::SPACE_1);
-        ui.horizontal_wrapped(|ui| {
+        wrapping_row(ui, |ui| {
             for one in *icons {
-                ui.vertical(|ui| {
+                let caption = if one.has_fill() {
+                    format!("{} · fills", one.name())
+                } else {
+                    one.name().to_owned()
+                };
+                wrapping_specimen(ui, theme, IconSize::Lg.px(), &caption, |ui| {
                     if one.has_fill() {
                         icon_active(ui, *one, IconSize::Lg, colors.primary);
                     } else {
                         icon(ui, *one, IconSize::Lg, colors.primary);
                     }
-                    let caption = if one.has_fill() {
-                        format!("{} · fills", one.name())
-                    } else {
-                        one.name().to_owned()
-                    };
-                    ui.add(egui::Label::new(specimen_job(
-                        &caption,
-                        TypeStyle::Caption,
-                        theme,
-                        colors.text_muted(),
-                        Some(ui.available_width()),
-                    )));
                 });
-                ui.add_space(spacing::SPACE_2);
             }
         });
     }
@@ -752,7 +811,9 @@ fn card_specimen(
 ) {
     let colors = theme.colors();
     card.ui(ui, theme, flags, |ui| {
-        ui.set_width(spacing::SPACE_40 + spacing::SPACE_24);
+        // The preview's 256px content, narrower when the window is: the
+        // large card's 32px padding would push it past a 360pt phone.
+        ui.set_width((spacing::SPACE_40 + spacing::SPACE_24).min(ui.available_width()));
         ui.add(egui::Label::new(specimen_job(
             class,
             TypeStyle::Mono,
@@ -771,61 +832,62 @@ fn card_specimen(
     });
 }
 
-/// The four card variants in the Card preview's two-column grid:
-/// elevated (the default), outlined, filled and interactive, the last
-/// one a real control to hover and tab to.
+/// The card variants in the Card preview's two-column grid: elevated
+/// (the default), outlined, filled and interactive, the interactive
+/// one a real control to hover and tab to, and the large padding step.
+/// Phone widths stack them one to a row, as the form grids stack.
 fn cards_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     ui.label(copy::CARDS_LABEL);
     ui.add_space(spacing::SPACE_2);
-    egui::Grid::new("surfaces-cards")
-        .num_columns(2)
-        .spacing([spacing::SPACE_5, spacing::SPACE_5])
-        .show(ui, |ui| {
-            card_specimen(
-                ui,
-                theme,
-                flags,
-                copy::CARD_DEFAULT_CLASS,
-                copy::CARD_DEFAULT_DESC,
-                Card::new(),
-            );
-            ui.end_row();
-            card_specimen(
-                ui,
-                theme,
-                flags,
-                copy::CARD_OUTLINED_CLASS,
-                copy::CARD_OUTLINED_DESC,
-                Card::new().outlined(),
-            );
-            card_specimen(
-                ui,
-                theme,
-                flags,
-                copy::CARD_FILLED_CLASS,
-                copy::CARD_FILLED_DESC,
-                Card::new().filled().compact(),
-            );
-            ui.end_row();
-            card_specimen(
-                ui,
-                theme,
-                flags,
-                copy::CARD_INTERACTIVE_CLASS,
-                copy::CARD_INTERACTIVE_DESC,
-                Card::new().interactive(),
-            );
-            ui.end_row();
-            card_specimen(
-                ui,
-                theme,
-                flags,
-                copy::CARD_LARGE_CLASS,
-                copy::CARD_LARGE_DESC,
-                Card::new().large(),
-            );
-            ui.end_row();
-        });
+    let cards = [
+        (
+            copy::CARD_DEFAULT_CLASS,
+            copy::CARD_DEFAULT_DESC,
+            Card::new(),
+        ),
+        (
+            copy::CARD_OUTLINED_CLASS,
+            copy::CARD_OUTLINED_DESC,
+            Card::new().outlined(),
+        ),
+        (
+            copy::CARD_FILLED_CLASS,
+            copy::CARD_FILLED_DESC,
+            Card::new().filled().compact(),
+        ),
+        (
+            copy::CARD_INTERACTIVE_CLASS,
+            copy::CARD_INTERACTIVE_DESC,
+            Card::new().interactive(),
+        ),
+        (
+            copy::CARD_LARGE_CLASS,
+            copy::CARD_LARGE_DESC,
+            Card::new().large(),
+        ),
+    ];
+    if ui.available_width() < NARROW_WIDTH {
+        for (index, (class, description, card)) in cards.into_iter().enumerate() {
+            if index > 0 {
+                ui.add_space(spacing::SPACE_5);
+            }
+            card_specimen(ui, theme, flags, class, description, card);
+        }
+    } else {
+        // The preview's rows: the default alone, the outlined and the
+        // filled side by side, then the interactive and the large.
+        egui::Grid::new("surfaces-cards")
+            .num_columns(2)
+            .spacing([spacing::SPACE_5, spacing::SPACE_5])
+            .show(ui, |ui| {
+                for row in [&cards[..1], &cards[1..3], &cards[3..4], &cards[4..]] {
+                    for (class, description, card) in row {
+                        card_specimen(ui, theme, flags, class, description, *card);
+                    }
+                    ui.end_row();
+                }
+            });
+    }
 }
 
 /// The metric trio: one specific, sourced number per card, per the
@@ -1129,7 +1191,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     ui.add_space(spacing::SPACE_3);
     ui.label(copy::SIZES_LABEL);
     ui.add_space(spacing::SPACE_2);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         Button::new(copy::BUTTON_OPEN_DASHBOARD)
             .large()
             .ui(ui, theme, flags);
@@ -1149,7 +1211,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
     ui.add_space(spacing::SPACE_3);
     ui.label(copy::BUTTON_ICONS_LABEL);
     ui.add_space(spacing::SPACE_2);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         Button::new(copy::BUTTON_SEARCH_ARCHIVE)
             .icon_leading(Icon::Search)
             .ui(ui, theme, flags);
@@ -1854,10 +1916,7 @@ fn banners_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, demos: &
             .ui(ui, theme, flags)
             .clicked
         {
-            *demos = BannerDemos {
-                info: true,
-                success: true,
-            };
+            *demos = BannerDemos::populated();
         }
     }
 
@@ -2009,36 +2068,17 @@ impl Gallery {
                         ui.add_space(ACTIONS_GAP);
                     }
 
-                    // The theme menu: all six themes reachable from
-                    // the bar, the reduced flags beside them. The
-                    // choice holds for the session (the Gallery's own
-                    // field), and switching installs the theme's
-                    // faces before applying it.
-                    ui.menu_button(copy::THEME_MENU, |ui| {
-                        let mut picked = theme;
-                        for id in ThemeId::ALL {
-                            ui.selectable_value(&mut picked, *id, id.name());
-                        }
-                        if picked != theme {
-                            self.theme = picked;
-                            install(picked, ctx);
-                            picked.apply(ctx);
-                        }
-                        ui.separator();
-                        ui.checkbox(&mut self.flags.reduced_motion, copy::REDUCED_MOTION);
-                        ui.checkbox(
-                            &mut self.flags.reduced_transparency,
-                            copy::REDUCED_TRANSPARENCY,
-                        );
-                    });
+                    self.theme_menu(ui, ctx, narrow);
                     ui.add_space(ACTIONS_GAP);
 
                     // The search affordance: the 44px icon button
-                    // opening the reused TextField in its popover.
+                    // opening the reused TextField in its popover (one
+                    // of the bar's popovers open at a time).
                     let search = IconButton::new(copy::SEARCH_BUTTON_NAME, Icon::Search)
                         .ui(ui, theme, &flags);
                     if search.clicked() {
                         self.search_open = !self.search_open;
+                        self.theme_open = false;
                     }
                     let popup_id = search.id.with("search");
                     if self.search_open {
@@ -2061,6 +2101,79 @@ impl Gallery {
                 });
             });
         });
+    }
+
+    /// The theme menu: a kit button opening a kit popover, all six
+    /// themes in a radio group and the reduced-motion and
+    /// reduced-transparency toggles beneath them. The trigger is a
+    /// default-size ghost button (the 44px touch floor, as quiet as the
+    /// search icon beside it) naming the live theme where the bar has
+    /// room; a phone's bar keeps the bare label. The popover closes on
+    /// a tap outside it, and opening it closes the search popover.
+    fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, narrow: bool) {
+        let theme = self.theme;
+        let flags = self.flags;
+        let label = if narrow {
+            copy::THEME_MENU.to_owned()
+        } else {
+            format!("{} · {}", copy::THEME_MENU, theme.name())
+        };
+        let trigger = Button::new(&label)
+            .emphasis(ButtonEmphasis::Ghost)
+            .icon_trailing(Icon::ExpandMore)
+            .ui(ui, theme, &flags);
+        if trigger.clicked {
+            self.theme_open = !self.theme_open;
+            self.search_open = false;
+        }
+        // The open state is the Gallery's own: the popover clears it
+        // when a tap lands outside it (or on Escape).
+        let mut open = self.theme_open;
+        egui::Popup::from_response(&trigger.response)
+            .open_bool(&mut open)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .frame(popup_frame(theme).inner_margin(spacing::SPACE_4))
+            .width(THEME_MENU_WIDTH)
+            .show(|ui| self.theme_menu_content(ui, ctx));
+        self.theme_open = open;
+    }
+
+    /// The theme menu's popover: the six themes, then the two flags.
+    /// The theme choice holds for the session (the Gallery's own
+    /// field), and switching installs the theme's faces before applying
+    /// it. The reduced-motion toggle shares its flag with the host,
+    /// which sets it from the OS preference whenever that changes.
+    fn theme_menu_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let theme = self.theme;
+        let flags = self.flags;
+        let names: Vec<&'static str> = ThemeId::ALL.iter().map(|id| id.name()).collect();
+        let themes = radio_options(ThemeId::ALL, &names);
+        let choice = RadioGroup::new(copy::THEME_MENU)
+            .options(&themes)
+            .selected(Some(theme))
+            .ui(ui, theme, &flags);
+        if let Some(picked) = choice.committed {
+            self.theme = picked;
+            install(picked, ctx);
+            apply_theme(picked, ctx);
+        }
+
+        ui.add_space(spacing::SPACE_5);
+        if let Some(on) = Toggle::new(copy::REDUCED_MOTION)
+            .checked(flags.reduced_motion)
+            .ui(ui, theme, &flags)
+            .toggled
+        {
+            self.flags.reduced_motion = on;
+        }
+        ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+        if let Some(on) = Toggle::new(copy::REDUCED_TRANSPARENCY)
+            .checked(flags.reduced_transparency)
+            .ui(ui, theme, &flags)
+            .toggled
+        {
+            self.flags.reduced_transparency = on;
+        }
     }
 
     /// The Foundations panel: the type specimen, the interaction
@@ -2152,6 +2265,28 @@ impl Gallery {
 }
 
 impl Gallery {
+    /// The page under the tab strip: the active panel in the page's
+    /// vertical scroll area. The area keeps egui's default scroll
+    /// source: the wheel and the scroll bar everywhere, and on a touch
+    /// screen egui's own drag-to-scroll, the page following the finger
+    /// with the kinetic fling on release. (egui arms the drag only once
+    /// it has seen a touch, so on a fresh launch the very first swipe
+    /// lands on nothing; every later one scrolls.) The output's
+    /// `content_size` is the panel's laid-out extent.
+    fn page(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
+        egui::ScrollArea::vertical()
+            .id_salt(PAGE_SCROLL)
+            .show(ui, |ui| {
+                match self.tab {
+                    0 => self.brand_panel(ui),
+                    1 => self.foundations_panel(ui),
+                    2 => self.components_panel(ui),
+                    _ => self.feedback_panel(ui),
+                }
+                ui.add_space(spacing::SPACE_6);
+            })
+    }
+
     /// The window's chrome for one frame: the TopAppBar on Liquid Glass
     /// in a top panel, so it stays put while the page scrolls beneath
     /// (the web bar's sticky behaviour; the stylesheet's 96px
@@ -2208,38 +2343,22 @@ impl Gallery {
                         if let Some(moved_to) = tabs.changed {
                             self.tab = moved_to;
                         }
-                        ui.add(egui::Label::new(specimen_job(
-                            copy::TABS_NOTE,
-                            TypeStyle::Caption,
-                            self.theme,
-                            self.theme.colors().text_muted(),
-                            Some(ui.available_width()),
-                        )));
+                        // The caption explains the panels and the arrow
+                        // keys: on a phone it is noise above the content,
+                        // and it names keys the phone does not have.
+                        if !narrow {
+                            ui.add(egui::Label::new(specimen_job(
+                                copy::TABS_NOTE,
+                                TypeStyle::Caption,
+                                self.theme,
+                                self.theme.colors().text_muted(),
+                                Some(ui.available_width()),
+                            )));
+                        }
 
                         ui.add_space(spacing::SPACE_4);
-                        // The default scroll source: touch drags arrive as
-                        // Event::Scroll through the app's scroll shim
-                        // (GalleryApp::filter_input), so the ScrollArea
-                        // needs neither egui's drag-to-scroll (unreliable
-                        // on the mobile backends) nor DragScroll::Always
-                        // (which eats clicks in egui 0.36).
-                        let scroll = if self.touch_scrolling {
-                            egui::ScrollArea::vertical().vertical_scroll_offset(self.scroll_offset)
-                        } else {
-                            egui::ScrollArea::vertical()
-                        };
-                        let out = scroll.show(ui, |ui| {
-                            match self.tab {
-                                0 => self.brand_panel(ui),
-                                1 => self.foundations_panel(ui),
-                                2 => self.components_panel(ui),
-                                _ => self.feedback_panel(ui),
-                            }
-                            ui.add_space(spacing::SPACE_6);
-                        });
-                        self.scroll_offset = out.state.offset.y;
-                        self.touch_scrolling = false;
-                        self.last_scroll_offset = out.state.offset;
+                        let page = self.page(ui);
+                        self.page_scroll_id = Some(page.id);
                     });
             });
 
@@ -2268,6 +2387,98 @@ impl Gallery {
                     _ => {}
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The narrowest phone the layout guard holds the panels to: 360pt,
+    /// the common small Android width.
+    const PHONE_WIDTH: f32 = 360.0;
+
+    /// A desktop window, wide enough for every two-column layout.
+    const DESKTOP_WIDTH: f32 = 1200.0;
+
+    /// The panels the guard holds to the window's width. (The Brand
+    /// panel is the known exception: the kit's showcase pages still lay
+    /// their cards out in rows that do not wrap.)
+    const PANELS: [(usize, &str); 3] = [(1, "Foundations"), (2, "Components"), (3, "Feedback")];
+
+    /// Lay `tab`'s panel out on a window `width` wide inside the
+    /// chrome's own page margins (the content panel's frame, then the
+    /// page's `space-6` inset), and return how far the panel's content
+    /// reaches past the width the page gives it: zero or less when it
+    /// fits. The measure is the page area's `content_size`, the panel
+    /// `Ui`'s own extent; the sideways specimen rows are wider inside
+    /// their scroll areas by design, but their footprint in the panel
+    /// is the panel's width.
+    fn panel_overflow(tab: usize, width: f32) -> f32 {
+        let ctx = egui::Context::default();
+        ui_kit::icon::install(&ctx);
+        for id in ThemeId::ALL {
+            install(*id, &ctx);
+        }
+        apply_theme(ThemeId::Light, &ctx);
+        let mut gallery = Gallery::new();
+        gallery.tab = tab;
+        let mut overflow = f32::NAN;
+        // A few passes, so the sizing passes and the wrapped rows settle.
+        for _ in 0..3 {
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(width, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::default())
+                        .show(ui, |ui| {
+                            egui::Frame::default()
+                                .inner_margin(spacing::SPACE_6)
+                                .show(ui, |ui| {
+                                    let available = ui.available_width();
+                                    let page = gallery.page(ui);
+                                    overflow = page.content_size.x - available;
+                                });
+                        });
+                },
+            );
+            out.drop_without_applying_deltas();
+        }
+        overflow
+    }
+
+    /// The Foundations, Components and Feedback panels fit a 360pt
+    /// phone: every row of fixed-width widgets wraps or scrolls, the
+    /// card grid stacks, and nothing runs past the right edge to be
+    /// clipped.
+    #[test]
+    fn phone_panels_fit_a_360pt_window() {
+        for (tab, name) in PANELS {
+            let overflow = panel_overflow(tab, PHONE_WIDTH);
+            assert!(
+                overflow <= 0.5,
+                "{name} runs {overflow}pt past a {PHONE_WIDTH}pt window"
+            );
+        }
+    }
+
+    /// The same panels in their wide layouts (the card grid's two
+    /// columns, the paired form columns) fit a desktop window.
+    #[test]
+    fn wide_panels_fit_a_desktop_window() {
+        for (tab, name) in PANELS {
+            let overflow = panel_overflow(tab, DESKTOP_WIDTH);
+            assert!(
+                overflow <= 0.5,
+                "{name} runs {overflow}pt past a {DESKTOP_WIDTH}pt window"
+            );
         }
     }
 }

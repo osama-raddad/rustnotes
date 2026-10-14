@@ -19,9 +19,9 @@ just run-android app=ui-kit-gallery       # Android device or emulator
 
 The gallery is the kit's demo surface and its QA: the bar-plus-tabs
 chrome, four panels (Brand, Foundations, Components, Feedback), every
-component live in the active theme. The bar's Theme menu switches all
-six themes and the reduced-motion and reduced-transparency flags; the
-choice holds for the session.
+component live in the active theme. The bar's Theme menu (a kit button
+opening a kit popover) switches all six themes and the reduced-motion
+and reduced-transparency flags; the choice holds for the session.
 
 ## The gallery app and mobile input
 
@@ -31,24 +31,44 @@ platform glue (iOS safe-area and keyboard observers, wgpu limits;
 Android window insets, night mode, font scale) and the app implements
 the host's `App` seam. The kit stays pure egui.
 
-Two mobile-input facts live in the app crate:
+The mobile-input facts live in the app crate:
 
 - The chrome honours the safe-area insets itself (egui hands the app a
   root that covers the whole viewport); the margins behind the insets
   are painted with the live theme's canvas.
-- Touch scrolling runs through a small shim in `GalleryApp`'s
-  `filter_input`: on iOS the finger's drag drives the page's scroll
-  offset directly (egui's own touch-to-scroll fights itself to a
-  standstill there, and its wheel path is pointer-hover-gated during a
-  drag); on Android the touches pass through to egui untouched. The
-  shim is covered by headless input tests (`src/input_tests.rs`) that
-  also pin the tap and wheel paths.
+- Touch scrolling is egui's own. `GalleryApp::filter_input` filters
+  nothing: egui-winit's touches reach egui, egui then knows the screen
+  is a touch screen, and its drag-to-scroll moves the page under the
+  finger, with the kinetic fling on release. The page's scroll area
+  carries its own id salt, because the kit's Tabs strip above it is an
+  unsalted scroll area in the same `Ui`; sharing one id, the strip
+  clamped the page's offset back to zero every frame.
+- The gallery's labels are not selectable (a gallery is not a
+  document), so a drag that starts on text scrolls the page instead of
+  selecting it.
+- The sideways specimen rows scroll under the finger too. A drag that
+  starts on one belongs to that row: sideways it scrolls the row, but
+  up or down it does not reach the page (handing vertical drags on to
+  the page is a follow-up).
+
+Headless input tests (`src/input_tests.rs`) drive the real app the way
+egui-winit delivers a finger and pin all of it: the page following a
+swipe and flinging on, a row scrolling sideways, taps landing once
+touches have been seen, the wheel, and the theme menu. One egui
+behaviour to know: the drag-to-scroll arms on the first touch, so on a
+fresh launch the very first swipe lands on nothing and every later one
+scrolls.
 
 On a phone-width window the bar drops its nav links and call to action
-(the Tabs strip switches panels) and the form grids stack; the
-specimen rows scroll sideways as the web previews do. The Brand tab's
-showcase pages still lay their cards out in wide rows — phone-tight
-rows are a follow-up.
+(the Tabs strip switches panels) and its theme menu keeps the bare
+label; the caption under the tab strip steps aside; the button rows and
+the Foundations specimens wrap, the card grid and the form grids stack,
+and the specimen rows scroll sideways as the web previews do. Layout
+tests hold the Foundations, Components and Feedback panels to a 360pt
+phone and to a 1200pt desktop window. The Brand tab's showcase pages
+still lay their cards out in wide rows (egui's `horizontal_wrapped`
+does not wrap a card, which is a child `Ui`); phone-tight rows there
+are a follow-up.
 
 ## Using the kit in an egui app
 
