@@ -23,13 +23,14 @@
 //! snackbar appears cannot hold it part-faded — and
 //! [`UiKitFlags::reduced_motion`] touches the entrance only — the
 //! fade clamps to 100ms and the slide-up goes — never the timing.
-//! Placement: centred at the bottom, 24px above the edge, up to 600px
-//! wide and, on a phone, no wider than the window less a 16px margin on
-//! each side; the host paints it over the page (an anchored
-//! [`egui::Area`] in the foreground order, with egui's own fade-in off
-//! so the entrance is the only fade), never moving focus to it, and the
-//! snackbar's action stays available elsewhere in the page. The row
-//! inside follows the preview: `padding: 8 8 8 16`, `gap: space-3`.
+//! Placement: centred at the bottom, 24px above the edge, hugging its
+//! text up to 600px wide and, on a phone (under the 600px tablet
+//! breakpoint), spanning the window less a 16px margin on each side; the
+//! host paints it over the page (an anchored [`egui::Area`] in the
+//! foreground order, with egui's own fade-in off so the entrance is the
+//! only fade), never moving focus to it, and the snackbar's action
+//! stays available elsewhere in the page. The row inside follows the
+//! preview: `padding: 8 8 8 16`, `gap: space-3`.
 //!
 //! Copy voice: one short sentence, outcome first; the action is a
 //! verb — "Undo", "Retry now", "Saved.", "Link copied."
@@ -40,7 +41,7 @@ use crate::components::focus_ring::FocusRing;
 use crate::icon::IconSize;
 use crate::states::{self, UiKitFlags};
 use crate::theme::ThemeId;
-use crate::tokens::{radii, spacing, type_scale};
+use crate::tokens::{breakpoints, radii, spacing, type_scale};
 
 /// How long an info or success snackbar stays: about 6 seconds.
 pub const INFO_DURATION_MS: f32 = 6000.0;
@@ -50,8 +51,9 @@ pub const ACTION_DURATION_MS: f32 = 10000.0;
 pub const ENTRANCE_MS: f32 = 200.0;
 /// The entrance's slide-up, in px, dropped under reduced motion.
 pub const ENTRANCE_SLIDE_PX: f32 = 8.0;
-/// The widest a snackbar may be; on a phone the window less a space-4
-/// margin on each side is the narrower cap.
+/// The widest a snackbar may be. It hugs its text up to this cap; under
+/// the tablet breakpoint (a phone) it spans the window less a space-4
+/// margin on each side instead.
 pub const MAX_WIDTH: f32 = 600.0;
 /// The clearance above the screen's bottom edge (or any bottom bar).
 pub const BOTTOM_MARGIN: f32 = spacing::SPACE_6;
@@ -383,10 +385,11 @@ impl SnackbarHost {
                     }
                     + DISMISS_SIZE
                     + ROW_PAD_END;
-                // Up to the 600px cap, and on a phone no wider than the
-                // window less a space-4 margin on each side.
+                // Up to the 600px cap, and never wider than the window
+                // less a space-4 margin on each side.
+                let content_width = ctx.content_rect().width();
                 let max_width = MAX_WIDTH
-                    .min(ctx.content_rect().width() - 2.0 * spacing::SPACE_4)
+                    .min(content_width - 2.0 * spacing::SPACE_4)
                     .max(0.0);
                 let wrap = (max_width - before_text - after_text).max(120.0);
 
@@ -439,7 +442,15 @@ impl SnackbarHost {
                 } else {
                     0.0
                 });
-                let width = (before_text + text_width + after_text).min(max_width);
+                // On a phone, under the tablet breakpoint, the pane spans
+                // the window less its margins, the text taking the room the
+                // controls leave; from the breakpoint up it hugs its text,
+                // up to the cap.
+                let width = if content_width < breakpoints::BREAKPOINT_TABLET {
+                    max_width
+                } else {
+                    (before_text + text_width + after_text).min(max_width)
+                };
 
                 let (rect, _) =
                     ui.allocate_exact_size(egui::Vec2::new(width, height), Sense::hover());
@@ -1337,6 +1348,56 @@ mod tests {
             "the message ends at x {text_end}, inside the gap before the pill at {}",
             action.left()
         );
+    }
+
+    /// On a phone, under the tablet breakpoint, the snackbar spans the
+    /// window less a space-4 margin on each side ("full width less 16px
+    /// margins"), whatever its message; from the breakpoint up it hugs
+    /// its text. At 390pt, and at 599pt just under the breakpoint, a short
+    /// message still gets a pane exactly the content rect less the
+    /// margins, its controls on the right; at 600pt the same message
+    /// hugs its text. The pane used to hug at every width.
+    #[test]
+    fn on_a_phone_the_snackbar_spans_the_window_less_its_margins() {
+        let theme = ThemeId::Light;
+        let flags = UiKitFlags::default();
+        for (window, spans) in [(390.0, true), (599.0, true), (600.0, false)] {
+            let (ctx, mut host) = settled(
+                theme,
+                &flags,
+                Some(egui::vec2(window, 844.0)),
+                Snackbar::info("Link copied.").action("Undo"),
+            );
+            let ((surface, dismiss), _) = paint_pass(&ctx, |ui| {
+                host.paint(ui.ctx(), theme, &flags);
+                (rect_of(ui, "surface"), rect_of(ui, "dismiss"))
+            });
+            let content = ctx.content_rect();
+            let spanning = content.width() - 2.0 * spacing::SPACE_4;
+            if spans {
+                assert_close(
+                    surface.width(),
+                    spanning,
+                    &format!("{window}pt: the pane spans the window less its margins"),
+                );
+                assert_close(
+                    surface.left(),
+                    content.left() + spacing::SPACE_4,
+                    &format!("{window}pt: the pane starts a space-4 margin in"),
+                );
+                assert_close(
+                    dismiss.right(),
+                    surface.right() - spacing::SPACE_2,
+                    &format!("{window}pt: the controls stay on the pane's right"),
+                );
+            } else {
+                assert!(
+                    surface.width() < spanning,
+                    "{window}pt: a short message hugs its text ({}) instead of spanning ({spanning})",
+                    surface.width()
+                );
+            }
+        }
     }
 
     /// The title sets the text width and wraps like the line. A title
