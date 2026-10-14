@@ -1,25 +1,41 @@
-//! The Vynatix gallery in its final shape (issue 09): a Liquid Glass
-//! TopAppBar carrying the wordmark, the primary nav, the search
-//! affordance, the theme menu and the one call to action; a Tabs
-//! strip switching the gallery's panels — the Tabs widget's own real
-//! demo — over a scrolling page; and, on the Feedback tab, the Banner
-//! demos at the panel top and the Snackbar host's trigger buttons,
-//! the snackbar itself floating in near the window's bottom. Run with
-//! `cargo run -p ui-kit --example gallery`.
+//! The Vynatix gallery in its final shape (issues 09 and 10): a
+//! Liquid Glass TopAppBar carrying the wordmark, the primary nav, the
+//! search affordance, the theme menu and the one call to action; a
+//! Tabs strip switching the gallery's panels — the Tabs widget's own
+//! real demo — over a scrolling page; and, on the Feedback tab, the
+//! Banner demos at the panel top and the Snackbar host's trigger
+//! buttons, the snackbar itself floating in near the window's bottom.
+//! Run with `cargo run -p ui-kit --example gallery`.
 //!
-//! The panel grouping (the judgment this issue documents): the
-//! Foundations tab holds the type specimen, the interaction states,
-//! the foundation specimens (spacing, radii, elevation), the icons,
-//! the logo and the colour-role swatches; the Components tab holds
-//! the actions (buttons, chips, badges), the surfaces (cards,
-//! metrics, editorial, glass), the text inputs and the choice
-//! controls (checkboxes, radio groups, toggles); the Feedback tab
-//! holds the banners and the snackbars. The bar's nav links and the
-//! tab strip drive the same panel state — the link's
+//! The panel grouping (the judgment issue 09 documented, extended by
+//! issue 10): the Foundations tab holds the type specimen, the
+//! interaction states, the foundation specimens (spacing, radii,
+//! elevation), the icons, the logo and the colour-role swatches; the
+//! Components tab holds the actions (buttons, chips, badges), the
+//! surfaces (cards, metrics, editorial, glass), the text inputs and
+//! the choice controls (checkboxes, radio groups, toggles); the
+//! Feedback tab holds the banners and the snackbars; the Brand tab
+//! holds the gallery's three brand-book pages. The bar's nav links
+//! and the tab strip drive the same panel state — the link's
 //! `aria-current`-style underline and the tab's indicator are the two
 //! accents the specs give them. Themes and the reduced-motion and
 //! reduced-transparency flags live in the bar's theme menu, all six
 //! reachable.
+//!
+//! The Brand tab and the cover (issue 10's judgment, documented): the
+//! issue wants the Cover as the gallery's first screen, and the
+//! gallery's chrome is the bar-plus-tabs of issue 09. The
+//! reconciliation is a Cover panel as the FIRST tab, named Brand: the
+//! gallery opens on the cover composition (eyebrow, display
+//! headline, standfirst, the mark, the band), and the Themes and
+//! Brand showcases follow it on the same panel. The cover is a panel
+//! rather than an intro overlay so the final chrome stays put (the
+//! bar and the tab strip never disappear), and it is the first tab
+//! rather than folded under Foundations so the brand book opens the
+//! gallery the way the source system's brand book opens on its cover.
+//! The theme cards on that panel need every theme's faces, so
+//! startup installs all six themes' fonts (the installs are additive
+//! by design); the theme menu's per-switch install stays as it was.
 
 use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
@@ -38,7 +54,9 @@ use ui_kit::components::toggle::Toggle;
 use ui_kit::components::top_app_bar::{
     NavLink, TopAppBar, ACTIONS_GAP, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
 };
-use ui_kit::components::{Card, EditorialCard, FocusRing, LiquidGlass, MetricCard};
+use ui_kit::components::{
+    BrandShowcase, Card, Cover, EditorialCard, FocusRing, LiquidGlass, MetricCard, ThemesShowcase,
+};
 use ui_kit::icon::{icon, icon_active, install as install_icons, IconSize};
 use ui_kit::icons::{Icon, CATEGORY_GROUPS};
 use ui_kit::logo::Logo;
@@ -59,7 +77,12 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             let theme = ThemeId::Light;
-            install(theme, &cc.egui_ctx);
+            // Every theme's faces, not just the live one: the Brand
+            // tab's theme cards set their own themes' display faces,
+            // and the installs are additive by design.
+            for id in ThemeId::ALL {
+                install(*id, &cc.egui_ctx);
+            }
             install_icons(&cc.egui_ctx);
             theme.apply(&cc.egui_ctx);
             Ok(Box::new(Gallery {
@@ -79,8 +102,9 @@ fn main() -> eframe::Result {
     )
 }
 
-/// The gallery's three panels, in tab order.
-const GALLERY_TABS: &[&str] = &["Foundations", "Components", "Feedback"];
+/// The gallery's four panels, in tab order: the brand book opens the
+/// gallery, the cover its first screen.
+const GALLERY_TABS: &[&str] = &["Brand", "Foundations", "Components", "Feedback"];
 
 struct Gallery {
     theme: ThemeId,
@@ -1859,6 +1883,18 @@ fn feedback_section(
 }
 
 impl Gallery {
+    /// The Brand panel (issue 10): the cover composition as the
+    /// gallery's opening screen, then the Themes showcase and the
+    /// Brand showcase, the brand book's three pages on one panel. The
+    /// cover leads, so the panel needs no headline of its own.
+    fn brand_panel(&mut self, ui: &mut egui::Ui) {
+        Cover::new().ui(ui, self.theme);
+        ui.add_space(spacing::SPACE_6);
+        ThemesShowcase::new().ui(ui, self.theme, &self.flags);
+        ui.add_space(spacing::SPACE_6);
+        BrandShowcase::new().ui(ui, self.theme, &self.flags);
+    }
+
     /// The window's chrome: the TopAppBar on Liquid Glass in a top
     /// panel, so it stays put while the page scrolls beneath (the
     /// web bar's sticky behaviour; the stylesheet's 96px
@@ -2046,7 +2082,7 @@ impl eframe::App for Gallery {
                         self.tab = moved_to;
                     }
                     ui.add(egui::Label::new(specimen_job(
-                        "The tabs switch peer panels: Foundations holds the type, states, foundations, icons, logo and colour roles; Components the actions, surfaces, text inputs and choice controls; Feedback the banners and snackbars. Arrow keys move the selection while a tab holds focus.",
+                        "The tabs switch peer panels: Brand holds the cover and the brand book's themes and voice pages; Foundations the type, states, foundations, icons, logo and colour roles; Components the actions, surfaces, text inputs and choice controls; Feedback the banners and snackbars. Arrow keys move the selection while a tab holds focus.",
                         TypeStyle::Caption,
                         self.theme,
                         self.theme.colors().text_muted(),
@@ -2055,8 +2091,9 @@ impl eframe::App for Gallery {
                     ui.add_space(spacing::SPACE_4);
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         match self.tab {
-                            0 => self.foundations_panel(ui),
-                            1 => self.components_panel(ui),
+                            0 => self.brand_panel(ui),
+                            1 => self.foundations_panel(ui),
+                            2 => self.components_panel(ui),
                             _ => self.feedback_panel(ui),
                         }
                         ui.add_space(spacing::SPACE_6);

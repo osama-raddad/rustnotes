@@ -474,6 +474,20 @@ impl TypeStyle {
 
 // ---- the pairing rule -----------------------------------------------------
 
+/// The display-to-body floor the README's pairing rule states: display
+/// type must sit at least 2.5x the body type beside it on the same
+/// surface, or hierarchy collapses.
+pub const DISPLAY_TO_BODY_MIN: f32 = 2.5;
+
+/// Whether a display size pairs with a body size under the README's
+/// 2.5x rule. The specimen's own display and body go through
+/// [`display_pairing_holds`]; components that set their own sizes (the
+/// cover's 64px headline over its 14px standfirst) check through here,
+/// so every pairing answers to the one floor.
+pub fn pairing_holds(display_size: f32, body_size: f32) -> bool {
+    display_size / body_size >= DISPLAY_TO_BODY_MIN
+}
+
 /// The display-to-body ratio the README's pairing rule states: Fraunces
 /// display must sit at least 2.5x the Aptos body beside it, or hierarchy
 /// collapses.
@@ -483,7 +497,7 @@ pub fn display_to_body_ratio() -> f32 {
 
 /// Whether the specimen's display and body clear the 2.5x pairing rule.
 pub fn display_pairing_holds() -> bool {
-    display_to_body_ratio() >= 2.5
+    pairing_holds(TypeStyle::Display.size(), TypeStyle::Body.size())
 }
 
 // ---- tracked text ---------------------------------------------------------
@@ -983,6 +997,22 @@ mod tests {
         assert!((display_to_body_ratio() - 96.0 / 17.0).abs() < 1e-4);
         assert!(display_to_body_ratio() >= 2.5);
         assert!(display_pairing_holds());
+    }
+
+    /// The pairing rule generalises beyond the specimen: any display
+    /// size over any body size checks against the same 2.5x floor. The
+    /// cover's 64 over 14 clears it; a 34 over 17 does not; equal sizes
+    /// never do.
+    #[test]
+    fn pairing_helper_checks_any_display_body_pair() {
+        assert_eq!(super::DISPLAY_TO_BODY_MIN, 2.5);
+        assert!(super::pairing_holds(
+            TypeStyle::Display.size(),
+            TypeStyle::Body.size()
+        ));
+        assert!(super::pairing_holds(64.0, 14.0));
+        assert!(!super::pairing_holds(34.0, 17.0));
+        assert!(!super::pairing_holds(17.0, 17.0));
     }
 
     /// `install` registers the theme's named families on a live context:
