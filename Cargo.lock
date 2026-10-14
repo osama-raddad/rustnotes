@@ -804,6 +804,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "demo-mobile"
+version = "0.1.0"
+dependencies = [
+ "android-activity",
+ "eframe",
+ "egui",
+ "env_logger",
+ "log",
+ "rustnotes",
+]
+
+[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
