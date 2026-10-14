@@ -17,7 +17,7 @@
 //! and a host that wants the ring on an egui built-in wraps it the
 //! same way.
 
-use egui::{CornerRadius, Response, Ui};
+use egui::{CornerRadius, Rect, Response, Ui};
 
 use crate::states::{self, UiKitFlags};
 use crate::theme::ThemeId;
@@ -78,6 +78,22 @@ impl FocusRing {
     /// Paint the treatment around `response`, keyboard focus only.
     /// Returns true when the ring went down this frame.
     pub fn paint(self, ui: &Ui, response: &Response, theme: ThemeId, flags: &UiKitFlags) -> bool {
+        self.paint_at(ui, response, response.rect, theme, flags)
+    }
+
+    /// [`paint`] around an explicit `rect`, reading the focus (and the
+    /// fade stamp) off `response`: for the widgets whose ring belongs
+    /// to one part of a larger hit area — the choice controls' 18px
+    /// box and circle, the toggle's track, each inside a row whose
+    /// label is part of the click target.
+    pub fn paint_at(
+        self,
+        ui: &Ui,
+        response: &Response,
+        rect: Rect,
+        theme: ThemeId,
+        flags: &UiKitFlags,
+    ) -> bool {
         let Some(started) = focus_since(ui, response) else {
             return false;
         };
@@ -90,8 +106,8 @@ impl FocusRing {
             ui.ctx()
                 .request_repaint_after_secs(remaining as f32 + 0.004);
         }
-        let geometry = states::focus_ring_geometry(response.rect, self.radius, &theme.colors())
-            .faded(fraction);
+        let geometry =
+            states::focus_ring_geometry(rect, self.radius, &theme.colors()).faded(fraction);
         let painter = ui.painter().clone().with_layer_id(response.layer_id);
         painter.add(geometry.halo);
         painter.add(geometry.ring);

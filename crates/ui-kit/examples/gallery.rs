@@ -12,7 +12,8 @@
 //! the foundation specimens (spacing, radii, elevation), the icons,
 //! the logo and the colour-role swatches; the Components tab holds
 //! the actions (buttons, chips, badges), the surfaces (cards,
-//! metrics, editorial, glass) and the text inputs; the Feedback tab
+//! metrics, editorial, glass), the text inputs and the choice
+//! controls (checkboxes, radio groups, toggles); the Feedback tab
 //! holds the banners and the snackbars. The bar's nav links and the
 //! tab strip drive the same panel state — the link's
 //! `aria-current`-style underline and the tab's indicator are the two
@@ -25,12 +26,15 @@ use eframe::egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 use ui_kit::components::badge::{count_text, Badge, BadgeTone, IconButton};
 use ui_kit::components::banner::{Banner, BannerEvent, BannerTone};
 use ui_kit::components::button::{Button, ButtonEmphasis};
+use ui_kit::components::checkbox::{Checkbox, CheckboxState};
 use ui_kit::components::chip::{Chip, ChipEvent};
 use ui_kit::components::liquid_glass::{glass_recipe, paint_glass, GlassThickness, GlassTint};
+use ui_kit::components::radio::{option, RadioGroup, RadioOption};
 use ui_kit::components::select::{popup_frame, Select};
 use ui_kit::components::snackbar::{Snackbar, SnackbarEvent, SnackbarHost};
 use ui_kit::components::tabs::Tabs;
-use ui_kit::components::text_field::TextField;
+use ui_kit::components::text_field::{hint_row, label_row, TextField};
+use ui_kit::components::toggle::Toggle;
 use ui_kit::components::top_app_bar::{
     NavLink, TopAppBar, ACTIONS_GAP, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
 };
@@ -64,6 +68,7 @@ fn main() -> eframe::Result {
                 filters: [false; 4],
                 saved_chip: true,
                 form: ProjectForm::populated(),
+                choices: ChoiceDemos::populated(),
                 tab: 0,
                 banners: BannerDemos::default(),
                 snackbar: SnackbarHost::new(),
@@ -89,6 +94,10 @@ struct Gallery {
     saved_chip: bool,
     /// The project-details form the text inputs section edits.
     form: ProjectForm,
+    /// The choice-controls demos' state (issue 06): the notification
+    /// checkboxes, the practice-area children whose parent derives,
+    /// and the local toggle's held value.
+    choices: ChoiceDemos,
     /// The active gallery panel, driven by the tab strip and the
     /// bar's nav links alike.
     tab: usize,
@@ -110,6 +119,39 @@ struct Gallery {
 struct BannerDemos {
     info: bool,
     success: bool,
+}
+
+/// The choice-controls demos' state: the notification checkboxes, the
+/// practice-area children (their parent's tri-state derives from
+/// them), and the one local toggle's held value.
+struct ChoiceDemos {
+    weekly_digest: bool,
+    blocked_builds: bool,
+    areas: [bool; 3],
+    remember_filters: bool,
+}
+
+impl ChoiceDemos {
+    /// The Checkbox preview's own starting states: the digest on, the
+    /// practice areas partly chosen, so the parent opens
+    /// indeterminate.
+    fn populated() -> Self {
+        Self {
+            weekly_digest: true,
+            blocked_builds: false,
+            areas: [true, false, true],
+            remember_filters: false,
+        }
+    }
+
+    /// The practice-area parent's state over its children, the
+    /// preview's sync script.
+    fn parent(&self) -> CheckboxState {
+        CheckboxState::from_children(
+            self.areas.len(),
+            self.areas.iter().filter(|checked| **checked).count(),
+        )
+    }
 }
 
 /// A role name for display: strip the `md-sys-color-` prefix and set the
@@ -1466,6 +1508,215 @@ fn text_inputs_section(
     selects_group(ui, theme, flags, form);
 }
 
+// ---- the choice controls (issue 06) ----------------------------------------
+
+/// The region options for the radio group, the Radio preview's own
+/// example domain — the same domain the select above edits, so the two
+/// controls stay in step through `form.region`.
+const RADIO_REGIONS: &[RadioOption<Region>] = &[
+    option(Region::Nordics, "Nordics"),
+    option(Region::Europe, "Europe"),
+    option(Region::Global, "Global"),
+];
+
+/// The start options, the Radio preview's invalid-group specimen. The
+/// group carries no state: the error is the demo.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Start {
+    ThisQuarter,
+    NextQuarter,
+    Undecided,
+}
+
+const START_OPTIONS: &[RadioOption<Start>] = &[
+    option(Start::ThisQuarter, "This quarter"),
+    option(Start::NextQuarter, "Next quarter"),
+    option(Start::Undecided, "Not decided yet"),
+];
+
+/// The practice areas, the Checkbox preview's parent-and-children
+/// specimen: the parent's tri-state derives from the children and a
+/// click on it sets them all.
+const PRACTICE_AREAS: &[&str] = &["Android Automotive", "Platform", "Design-engineering"];
+
+/// One nested checkbox row at the preview's 28px indent, its typed
+/// toggle handed back.
+fn nested_checkbox_row(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &UiKitFlags,
+    label: &str,
+    checked: bool,
+) -> Option<CheckboxState> {
+    let mut toggled = None;
+    ui.horizontal(|ui| {
+        ui.add_space(
+            ui_kit::components::checkbox::BOX_SIZE + ui_kit::components::checkbox::LABEL_GAP,
+        );
+        toggled = Checkbox::new(label)
+            .checked(checked)
+            .ui(ui, theme, flags)
+            .toggled;
+    });
+    toggled
+}
+
+/// The checkboxes group: the practice areas with their tri-state
+/// parent, and the notifications with the hint and disabled
+/// specimens — the Checkbox preview's own two columns.
+fn checkboxes_group(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &UiKitFlags,
+    choices: &mut ChoiceDemos,
+) {
+    ui.label("Checkboxes · one yes or no, or any number from a group");
+    ui.add_space(spacing::SPACE_2);
+
+    label_row(ui, theme, "Practice areas");
+    hint_row(ui, theme, "Choose all that apply.");
+    ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+    if let Some(toggled) = Checkbox::new("All practice areas")
+        .state(choices.parent())
+        .ui(ui, theme, flags)
+        .toggled
+    {
+        // The parent's click sets every child, the preview's script.
+        choices.areas = [toggled.is_checked(); 3];
+    }
+    for (index, area) in PRACTICE_AREAS.iter().enumerate() {
+        ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+        if let Some(toggled) = nested_checkbox_row(ui, theme, flags, area, choices.areas[index]) {
+            choices.areas[index] = toggled.is_checked();
+        }
+    }
+
+    ui.add_space(spacing::SPACE_4);
+    label_row(ui, theme, "Notifications");
+    ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+    if let Some(toggled) = Checkbox::new("Weekly digest")
+        .checked(choices.weekly_digest)
+        .ui(ui, theme, flags)
+        .toggled
+    {
+        choices.weekly_digest = toggled.is_checked();
+    }
+    hint_row(ui, theme, "Every Monday at 08:00.");
+    ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+    if let Some(toggled) = Checkbox::new("Blocked builds")
+        .checked(choices.blocked_builds)
+        .ui(ui, theme, flags)
+        .toggled
+    {
+        choices.blocked_builds = toggled.is_checked();
+    }
+    hint_row(ui, theme, "When a pipeline has failed for over an hour.");
+    ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+    Checkbox::new("Text messages")
+        .disabled()
+        .ui(ui, theme, flags);
+    hint_row(ui, theme, "Add a mobile number to your profile first.");
+}
+
+/// The radio groups: the region, live against the same field the
+/// select edits, and the invalid start group, the preview's error
+/// specimen.
+fn radios_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags, form: &mut ProjectForm) {
+    ui.label("Radio group · exactly one of a few, side by side");
+    ui.add_space(spacing::SPACE_2);
+
+    let region = RadioGroup::new("Region")
+        .options(RADIO_REGIONS)
+        .selected(form.region)
+        .hint("Where the team will work from.")
+        .ui(ui, theme, flags);
+    if let Some(picked) = region.committed {
+        form.region = Some(picked);
+    }
+
+    ui.add_space(spacing::SPACE_4);
+    RadioGroup::new("Start")
+        .options(START_OPTIONS)
+        .error("Choose when the team should start.")
+        .ui(ui, theme, flags);
+}
+
+/// The toggles: the spec's own example use, reduced motion, wired to
+/// the gallery's flags so flipping it changes every component at once;
+/// a local setting; and the disabled pair at both positions.
+fn toggles_group(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &mut UiKitFlags,
+    choices: &mut ChoiceDemos,
+) {
+    ui.label("Toggles · settings that take effect at once");
+    ui.add_space(spacing::SPACE_2);
+
+    if let Some(on) = Toggle::new("Reduced motion")
+        .checked(flags.reduced_motion)
+        .ui(ui, theme, flags)
+        .toggled
+    {
+        // The switch that is its own example: the flag the theme menu
+        // also sets, honoured across the kit.
+        flags.reduced_motion = on;
+    }
+    ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+    if let Some(on) = Toggle::new("Remember my filters")
+        .checked(choices.remember_filters)
+        .ui(ui, theme, flags)
+        .toggled
+    {
+        choices.remember_filters = on;
+    }
+    ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+    Toggle::new("Sync over mobile data")
+        .checked(true)
+        .disabled()
+        .ui(ui, theme, flags);
+    hint_row(ui, theme, "Ask your account lead to switch this on.");
+    ui.add_space(ui_kit::components::checkbox::ROW_GAP);
+    Toggle::new("Autofill timesheets")
+        .checked(false)
+        .disabled()
+        .ui(ui, theme, flags);
+    hint_row(ui, theme, "Needs an approved project code first.");
+}
+
+/// The choice-controls section: the checkboxes, the radio groups and
+/// the toggles, every control live in the active theme.
+fn choice_controls_section(
+    ui: &mut egui::Ui,
+    theme: ThemeId,
+    flags: &mut UiKitFlags,
+    form: &mut ProjectForm,
+    choices: &mut ChoiceDemos,
+) {
+    let colors = theme.colors();
+    ui.add(TrackedLabel::new(
+        "Components · Choice controls",
+        TypeStyle::Eyebrow.font_id(theme),
+        TypeStyle::Eyebrow.tracking(),
+        colors.text_accent,
+    ));
+    ui.add_space(spacing::SPACE_4);
+
+    checkboxes_group(ui, theme, flags, choices);
+    ui.add_space(spacing::SPACE_4);
+    radios_group(ui, theme, flags, form);
+    ui.add_space(spacing::SPACE_4);
+    toggles_group(ui, theme, flags, choices);
+
+    ui.add_space(spacing::SPACE_4);
+    ui.add(egui::Label::new(specimen_job(
+        "A checkbox turns an option on or off — one yes or no, or any number from a group, the parent marking partly-chosen children. A radio group picks exactly one of a few that belong side by side. A toggle switches a setting that takes effect at once: the knob slides 200ms on the house curve and snaps under reduced motion. Box and circle are 18px behind a 2px outline, the label rides beside in the body face, and focus draws the shared ring.",
+        TypeStyle::Caption,
+        theme,
+        colors.text_muted(),
+    )));
+}
+
 // ---- the feedback components (issue 09) ------------------------------------
 
 /// The banner demos: the four tones in the Banner preview's own copy,
@@ -1737,8 +1988,8 @@ impl Gallery {
             });
     }
 
-    /// The Components panel: the actions, the surfaces and the text
-    /// inputs.
+    /// The Components panel: the actions, the surfaces, the text
+    /// inputs and the choice controls.
     fn components_panel(&mut self, ui: &mut egui::Ui) {
         actions_section(
             ui,
@@ -1751,6 +2002,14 @@ impl Gallery {
         components_section(ui, self.theme, &self.flags);
         ui.add_space(spacing::SPACE_6);
         text_inputs_section(ui, self.theme, &self.flags, &mut self.form);
+        ui.add_space(spacing::SPACE_6);
+        choice_controls_section(
+            ui,
+            self.theme,
+            &mut self.flags,
+            &mut self.form,
+            &mut self.choices,
+        );
     }
 
     /// The Feedback panel: the banner demos at the panel top, the
@@ -1787,7 +2046,7 @@ impl eframe::App for Gallery {
                         self.tab = moved_to;
                     }
                     ui.add(egui::Label::new(specimen_job(
-                        "The tabs switch peer panels: Foundations holds the type, states, foundations, icons, logo and colour roles; Components the actions, surfaces and text inputs; Feedback the banners and snackbars. Arrow keys move the selection while a tab holds focus.",
+                        "The tabs switch peer panels: Foundations holds the type, states, foundations, icons, logo and colour roles; Components the actions, surfaces, text inputs and choice controls; Feedback the banners and snackbars. Arrow keys move the selection while a tab holds focus.",
                         TypeStyle::Caption,
                         self.theme,
                         self.theme.colors().text_muted(),
