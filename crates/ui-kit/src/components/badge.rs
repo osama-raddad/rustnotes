@@ -293,7 +293,8 @@ impl<'a> Badge<'a> {
 /// top right, ringed in the surface it sits on.
 ///
 /// The name is the accessibility label the spec requires of an
-/// icon-only control; the count rides it the preview's way.
+/// icon-only control; the count, or the dot's "new activity", rides it
+/// the preview's way, and a button showing neither keeps its bare name.
 ///
 /// ```
 /// use ui_kit::components::badge::IconButton;
@@ -434,12 +435,16 @@ impl<'a> IconButton<'a> {
             painter.circle_stroke(center, 5.0, Stroke::new(2.0, colors.surface));
         }
 
+        // The name a screen reader is told: what the button shows rides
+        // it, the count or else the dot's "new activity", and with
+        // neither it is the bare name.
+        let name = if self.count.is_some() || self.dot {
+            count_accessibility_label(self.name, self.count)
+        } else {
+            self.name.to_owned()
+        };
         response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                self.enabled,
-                count_accessibility_label(self.name, self.count),
-            )
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, self.enabled, &name)
         });
 
         FocusRing::new()
@@ -654,5 +659,53 @@ mod tests {
             .drop_without_applying_deltas();
         }
         assert!(clicked, "press then release fires");
+    }
+
+    /// The icon button's name as a screen reader is told it: the bare
+    /// name with neither a count nor the dot, "new activity" when the
+    /// dot shows, and the count spelled out when there is one (a count
+    /// shows in place of the dot, so it names the button even with
+    /// the dot set).
+    #[test]
+    fn icon_button_names_its_count_its_dot_or_nothing_more() {
+        let flags = UiKitFlags::default();
+        let announced = |button: IconButton<'_>| {
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            install_faces(&ctx, ThemeId::Light);
+            let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                button.ui(ui, ThemeId::Light, &flags);
+            });
+            let names: Vec<String> = out
+                .platform_output
+                .accesskit_update
+                .iter()
+                .flat_map(|update| &update.nodes)
+                .filter(|(_, node)| node.role() == egui::accesskit::Role::Button)
+                .filter_map(|(_, node)| node.label().map(str::to_owned))
+                .collect();
+            out.drop_without_applying_deltas();
+            names
+        };
+        assert_eq!(
+            announced(IconButton::new("Search", Icon::Search)),
+            ["Search"]
+        );
+        assert_eq!(
+            announced(IconButton::new("Messages", Icon::Chat).activity_dot()),
+            ["Messages, new activity"]
+        );
+        assert_eq!(
+            announced(IconButton::new("Notifications", Icon::Notifications).count(3)),
+            ["Notifications, 3 unread"]
+        );
+        assert_eq!(
+            announced(
+                IconButton::new("Notifications", Icon::Notifications)
+                    .count(3)
+                    .activity_dot()
+            ),
+            ["Notifications, 3 unread"]
+        );
     }
 }

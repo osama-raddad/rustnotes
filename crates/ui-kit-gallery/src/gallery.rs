@@ -48,7 +48,8 @@
 //!
 //! The phone pass: under the design system's 600pt compact
 //! breakpoint the bar keeps the wordmark, the theme menu (on its bare
-//! label) and the search affordance; the caption under the tab strip
+//! label, or its icon alone on the narrowest phones) and the search
+//! affordance; the caption under the tab strip
 //! steps aside; the button rows and the Foundations specimens wrap
 //! (the specimens through `wrapping_row`, since egui's
 //! `horizontal_wrapped` never wraps a plain group); the card grid and
@@ -2043,8 +2044,8 @@ enum ThemeTrigger {
     Named,
     /// The menu's label alone.
     Bare,
-    /// The tune icon alone, named for a screen reader by the menu's
-    /// label.
+    /// The kit's icon button with the tune icon, named for a screen
+    /// reader by the menu's label.
     Icon,
 }
 
@@ -2271,41 +2272,40 @@ impl Gallery {
 
     /// The theme menu: a kit button opening a kit popover, all six
     /// themes in a radio group and the reduced-motion and
-    /// reduced-transparency toggles beneath them. The trigger is a
-    /// default-size ghost button (the 44px touch floor, as quiet as the
-    /// search icon beside it) that reads as the bar's `BarFit` decides
-    /// (`kind`): naming the live theme where the bar has room for the
-    /// name, on the bare label where it has room for that, and as the
-    /// tune icon alone on the narrowest phones. The popover closes on a
-    /// tap outside it, and opening it closes the search popover.
+    /// reduced-transparency toggles beneath them. The trigger reads as
+    /// the bar's `BarFit` decides (`kind`): a default-size ghost button
+    /// (the 44px touch floor, as quiet as the search icon beside it)
+    /// naming the live theme where the bar has room for the name, or on
+    /// the bare label where it has room for that, and on the narrowest
+    /// phones the kit's 44px icon button with the tune icon, the search
+    /// button's twin. The popover closes on a tap outside it, and
+    /// opening it closes the search popover.
     fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, kind: ThemeTrigger) {
         let theme = self.theme;
         let flags = self.flags;
         let trigger = match kind {
-            // The same ghost button with its label shed, named for a
-            // screen reader by the menu's label alone (the kit's
-            // `IconButton` would add "new activity" to the name: it
-            // reports activity whenever it has no count).
-            ThemeTrigger::Icon => Button::new("")
-                .emphasis(ButtonEmphasis::Ghost)
-                .icon_only(Icon::Tune, copy::THEME_MENU)
-                .ui(ui, theme, &flags),
+            // The kit's icon button, the search button's twin, named for
+            // a screen reader by the menu's label alone.
+            ThemeTrigger::Icon => {
+                IconButton::new(copy::THEME_MENU, Icon::Tune).ui(ui, theme, &flags)
+            }
             labelled => {
                 let label = theme_trigger_label(theme, labelled == ThemeTrigger::Named);
                 Button::new(&label)
                     .emphasis(ButtonEmphasis::Ghost)
                     .icon_trailing(Icon::ExpandMore)
                     .ui(ui, theme, &flags)
+                    .response
             }
         };
-        if trigger.clicked {
+        if trigger.clicked() {
             self.theme_open = !self.theme_open;
             self.search_open = false;
         }
         // The open state is the Gallery's own: the popover clears it
         // when a tap lands outside it (or on Escape).
         let mut open = self.theme_open;
-        egui::Popup::from_response(&trigger.response)
+        egui::Popup::from_response(&trigger)
             .open_bool(&mut open)
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .frame(popup_frame(theme).inner_margin(spacing::SPACE_4))

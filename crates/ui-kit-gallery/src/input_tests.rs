@@ -160,9 +160,9 @@ impl Harness {
 
     /// The rect of the topmost `role` node in the last frame's
     /// accessibility tree whose label starts with `label` (a name can
-    /// run on: the search button's carries its activity after it), if
-    /// there is one. The rect is the widget's own, whatever its label
-    /// paints.
+    /// run on: the theme trigger's carries the live theme after the
+    /// menu's label), if there is one. The rect is the widget's own,
+    /// whatever its label paints.
     fn node(&self, role: Role, label: &str) -> Option<egui::Rect> {
         self.nodes
             .iter()

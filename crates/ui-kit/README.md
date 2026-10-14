@@ -61,7 +61,8 @@ scrolls.
 
 On a phone-width window the bar drops its nav links and call to action
 (the Tabs strip switches panels) and its theme menu keeps the bare
-label; the caption under the tab strip steps aside; the button rows and
+label, or its icon alone on the narrowest phones; the caption under the
+tab strip steps aside; the button rows and
 the Foundations specimens wrap, the card grid and the form grids stack,
 and the specimen rows scroll sideways as the web previews do. Layout
 tests hold the Foundations, Components and Feedback panels to a 360pt
