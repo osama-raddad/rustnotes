@@ -8,8 +8,11 @@
 //! tolerance) and triangulates them with their holes (the counters of
 //! the serif "a"), emitting normalized triangle constants to the
 //! generated `paths` submodule: `src/logo/paths.rs`. Nothing parses at
-//! runtime; the widget maps the triangles through a scale and hands
-//! them to `epaint` as one [`egui::Shape::Mesh`] per logo.
+//! runtime. The first paint of each art derives its ink outline from
+//! those triangles (see Anti-aliasing below), once and cached; the
+//! widget maps the outline's points through a scale and hands the ink
+//! and its feather ring to `epaint` as one [`egui::Shape::Mesh`] per
+//! logo.
 //!
 //! Inks. The shapes never bake a colour: they take a role at paint
 //! time. [`LogoInk`] carries the three approved placements plus the
@@ -36,19 +39,22 @@
 //! pulled in by half the feather along the boundary's miter, and a
 //! ring of the same colour fading to transparent is added over the
 //! boundary, out to half the feather beyond it, all in the one mesh.
-//! The feather is the
-//! context's own (`TessellationOptions::feathering_size_in_pixels`, one
-//! physical pixel by default, and off when the context turns feathering
-//! off), so the logo's edge matches the text's at every scale factor.
-//! The ring spills half a feather past the laid-out rect, as any
-//! feathered shape does.
+//! The feather is the context's own
+//! (`TessellationOptions::feathering_size_in_pixels`, one physical
+//! pixel by default, and off when the context turns feathering off),
+//! so the logo's edge matches the text's at every scale factor. The
+//! ring spills past the laid-out rect: half a feather where the edge
+//! meets the rect square on (0.5pt at 1x on the wordmark's left,
+//! right and top at 24pt high), up to a full feather where a sharp
+//! corner's miter reaches its cap (the wordmark's bottom).
 //!
 //! Documented deviations: the feather is a vertex-alpha ramp, not
 //! coverage, so a stroke thinner than a pixel paints a little heavier
 //! than the art (the whole wordmark at its 96px minimum stays within
-//! 3% of the art's area, which a test pins); the flattening tolerance is 1/1000 of the art box (the script asserts
-//! the triangulated area against the shoelace area of the contours,
-//! holes subtracted, before emitting).
+//! 3% of the art's area, which a test pins); the flattening tolerance
+//! is 1/1000 of the art box (the script asserts the triangulated area
+//! against the shoelace area of the contours, holes subtracted, before
+//! emitting).
 
 mod outline;
 mod paths;
@@ -109,11 +115,12 @@ impl LogoArt {
         }
     }
 
-    /// The ink's outline, derived from the triangles on first use.
+    /// The ink's outline, derived from [`LogoArt::triangles`] on first
+    /// use (the one table the art's triangles are read through).
     fn outline(self) -> &'static Outline {
-        static MARK: LazyLock<Outline> = LazyLock::new(|| Outline::new(paths::MARK_TRIANGLES));
+        static MARK: LazyLock<Outline> = LazyLock::new(|| Outline::new(LogoArt::Mark.triangles()));
         static WORDMARK: LazyLock<Outline> =
-            LazyLock::new(|| Outline::new(paths::WORDMARK_TRIANGLES));
+            LazyLock::new(|| Outline::new(LogoArt::Wordmark.triangles()));
         match self {
             LogoArt::Mark => &MARK,
             LogoArt::Wordmark => &WORDMARK,
@@ -257,9 +264,14 @@ impl Logo {
         let scale = Vec2::new(rect.width() / w, rect.height() / h);
         let half = 0.5 * feather;
         let stride = if feather > 0.0 { 2 } else { 1 };
+        let ring = if feather > 0.0 {
+            2 * outline.edges.len()
+        } else {
+            0
+        };
         let mut mesh = Mesh::default();
         mesh.reserve_vertices(stride * outline.points.len());
-        mesh.reserve_triangles(outline.triangles.len() + stride * outline.edges.len());
+        mesh.reserve_triangles(outline.triangles.len() + ring);
         for (point, miter) in outline.points.iter().zip(&outline.miters) {
             let at = rect.left_top() + Vec2::new(point[0] * scale.x, point[1] * scale.y);
             let offset = Vec2::new(miter[0], miter[1]) * half;
@@ -645,14 +657,17 @@ mod tests {
         }
     }
 
-    /// The ramp is epaint's: as wide as the tessellator's feather
-    /// (`feathering_size_in_pixels` physical pixels, so a pixel at 1x
-    /// and half a point at 2x) and gone with its switch. Each point of
-    /// the art is an opaque vertex and a transparent one, offset along
-    /// the miter: never closer than the feather (that is the ramp's
-    /// width) and never further than the miter limit allows.
+    /// The ring follows the tessellator's feather
+    /// (`feathering_size_in_pixels` physical pixels, so a point at 1x
+    /// and half a point at 2x) and is gone with its switch. Each point
+    /// of the art is an opaque vertex and a transparent one, offset
+    /// along the miter, so the pair stands one to two feathers apart
+    /// (the miter's length runs from 1 to its cap of 2). That is the
+    /// distance between the two vertices, not a width measured across
+    /// the edge. The ink stays in the laid-out rect and the ring within
+    /// a feather of it.
     #[test]
-    fn the_feather_is_a_pixel_wide_and_follows_the_tessellation_option() {
+    fn the_feather_ring_spans_one_to_two_feathers_and_follows_the_tessellation_option() {
         for art in [Logo::mark(), Logo::wordmark()] {
             for pixels_per_point in [1.0, 2.0, 3.0] {
                 let (hard, _) = painted_logo(art, pixels_per_point, false);
@@ -698,7 +713,7 @@ mod tests {
                     ramps += 1;
                     assert!(
                         width >= feather * 0.999 && width <= feather * 2.001,
-                        "{:?} at {pixels_per_point}x: a ramp {width} wide, the feather {feather}",
+                        "{:?} at {pixels_per_point}x: a pair {width} apart, the feather {feather}",
                         art.art()
                     );
                 }
@@ -707,6 +722,53 @@ mod tests {
                     "{ramps} ramps, {flat} flat"
                 );
             }
+        }
+    }
+
+    /// The outline the widget paints is the art's own: its points are
+    /// corners of `LogoArt::triangles` (the one table both read) and
+    /// span the same box, so a second dispatch that went stale, or
+    /// swapped the two arts, would fail here.
+    #[test]
+    fn each_arts_outline_is_built_from_its_own_triangles() {
+        use std::collections::HashSet;
+
+        for art in [LogoArt::Mark, LogoArt::Wordmark] {
+            let outline = art.outline();
+            let corners: HashSet<[u32; 2]> = art
+                .triangles()
+                .iter()
+                .flat_map(|t| t.as_chunks::<2>().0.iter().copied())
+                .map(|[x, y]| [x.to_bits(), y.to_bits()])
+                .collect();
+            assert!(
+                outline
+                    .points
+                    .iter()
+                    .all(|[x, y]| corners.contains(&[x.to_bits(), y.to_bits()])),
+                "{art:?}: an outline point is not a corner of its triangles"
+            );
+            let extent = |axis: usize, pick: fn(f32, f32) -> f32, from: f32| {
+                outline.points.iter().map(|p| p[axis]).fold(from, pick)
+            };
+            let (w, h) = art.box_units();
+            for (axis, size) in [(0, w), (1, h)] {
+                let (lo, hi) = (
+                    extent(axis, f32::min, f32::INFINITY),
+                    extent(axis, f32::max, f32::NEG_INFINITY),
+                );
+                assert!(
+                    lo < 1.0 && (size - hi).abs() < 1.0,
+                    "{art:?}: the outline spans {lo}..{hi} on axis {axis}, the art box {size}"
+                );
+            }
+            assert!(
+                // Snapping drops the slivers it collapses (a fifth of
+                // the mark's); the rest are the art's.
+                outline.triangles.len() * 4 >= art.triangles().len() * 3
+                    && outline.triangles.len() <= art.triangles().len(),
+                "{art:?}: the outline keeps the art's triangles"
+            );
         }
     }
 }
