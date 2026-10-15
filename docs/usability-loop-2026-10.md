@@ -939,12 +939,29 @@ drops everything after the first space on this keyboard. "Iterationabcdefgh" typ
 without a space arrives whole, so the saved "Iteration" was the input, not the
 autosave. Testers should type without spaces, or send the spaces another way.
 
+Later in the pass:
+- **7-A1, major, swipe-to-delete bypassed the two-tap rule.** A left swipe past 40%
+  of the card deleted the note on release, with no confirmation and no undo. The
+  cross needs two taps. **Fixed in `beeec62`**: a swipe past the threshold arms the
+  row with the same "Tap again to delete" hint, and a second swipe or a second cross
+  tap within the 2-second window deletes it. A red test failed before the fix. The
+  reviewer passed it.
+- **Device, Pixel, after `beeec62`:** one swipe armed "alpha" and showed the red
+  hint, and it stayed. Two swipes inside the window deleted it. The window is
+  2 seconds, so the two swipes were sent in one command with a 0.5-second gap.
+- **Pull-to-refresh works.** Held mid-pull, the spinner shows above the list and the
+  list moves down with it. A quick swipe that releases before the threshold does
+  nothing, which is correct.
+- **7-A2, major, the editor in landscape.** The keyboard covers everything below
+  the first line, leaving about one and a half lines above it (4-A4, still open).
+  The text also starts about 87pt in from the left margin, under the title's
+  left edge. It was seen in landscape only, and it is not yet tested in portrait.
+  Not fixed.
+
 Not checked yet, so iteration 7 is open:
-- Swipe-to-delete, pull-to-refresh, the editor's hold-to-select, and autosave
-  timing with the note open.
-- The keyboard covering the editor in landscape (4-A4).
+- The editor's hold-to-select, and autosave timing with the note open.
 - The size of the delete cross and the "+" button (1-A13), and the date's alignment
-  in the note row (1-I9).
+  in the note row (1-I9). Both look aligned on the screenshots; neither was measured.
 
 ## Status and handoff
 
