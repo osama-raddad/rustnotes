@@ -1,7 +1,7 @@
 # Framework usability loop — October 2026
 
-Status: iteration 5 in progress. Task 20 (5-A1) is closed in `b47473f`; task 21
-is next. Iterations 1 to 4 are closed and pushed. The "Status and handoff"
+Status: iteration 5 in progress. Tasks 20 (5-A1, `b47473f`) and 21 (5-A2,
+`7f8ed7c` to `53a291b`) are closed; task 22 is next. Iterations 1 to 4 are closed and pushed. The "Status and handoff"
 section at the end is the handoff as of the pause, and it is now out of date
 for iteration 5 onward.
 
@@ -764,6 +764,32 @@ which never widens the region; the gap is the same at every width.
   rows below the fold are not painted in the 855pt window; and the chips row has
   no guard against `CHIP_FILTERS` drifting from the filter array, which the gutter
   tests would catch.
+
+**Task 21 closed (5-A2), `7f8ed7c`, `b6f2477`, `53a291b`.** The strip was a
+sideways scroll area that nothing asked to move, so a tab the edge cut stayed cut
+when tapped, and a selection moved by the host or the arrow keys could stay out of
+sight. `Tabs::ui` now asks the scroll area to bring a tapped tab, or the tab shown
+when the shown index moves, into view. The scroll area does not centre it: it
+keeps the row's item spacing as a margin, so a cut tab can land short of the
+edge unless the offset stops at the row's end. A wholly visible tab moves nothing.
+A drag still moves the strip, because only a tap or a move makes it follow.
+
+- Red, first commit: at font scale 1.3 on the 345pt device screen, a tap on the
+  cut tab left it cut. A follow-up showed that centring moved a whole tab out of
+  view: at 345pt, tapping Components pushed Brand out of the strip. `b6f2477`
+  changed it to least movement and pinned that case red-first.
+- Green: the tap, host-select, arrow-key, drag-away and fits-the-strip tests pass
+  at `53a291b`. `just test` and `just lint` are green there.
+- Device, Pixel 10 Pro XL emulator, portrait, font scale 1.3: before the tap,
+  Feedback is cut at the strip's edge. The tap on its sliver leaves Feedback
+  whole, selected, and under the strip's right edge. Screenshots
+  `build/usability-audit/iter-5-verify/task21-scale13-*.png`. Font scale was
+  restored to 1.0 and read back.
+- **Known gaps, left open.** A resize, a rotation or a font-scale change that
+  pushes the selected tab out of view does not scroll the strip, because only a
+  tap or a move follows. Not tested. The harness warms up at zoom 1.0 before it
+  sets the zoom, while Android applies it from the first frame. The item-spacing
+  margin is read from egui's source, not measured.
 
 ## Status and handoff
 
