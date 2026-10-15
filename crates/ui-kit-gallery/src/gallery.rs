@@ -871,7 +871,21 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
 
     ui.add_space(spacing::SPACE_2);
     FocusRing::new().wrap(ui, theme, flags, |ui| {
-        ui.add(egui::Button::new(copy::STATES_TAB_BUTTON))
+        // A compact pill rather than egui's 18pt default, which leaves
+        // the label touching its outline: at least SPACE_6 tall, with
+        // SPACE_1 of air between the label and the outline's inner edge
+        // above and below, and SPACE_2 beside it. The padding counts
+        // the outline, which egui draws inside the button's rect.
+        ui.scope(|ui| {
+            let outline = ui.visuals().widgets.inactive.bg_stroke.width;
+            ui.spacing_mut().button_padding =
+                Vec2::new(spacing::SPACE_2, spacing::SPACE_1 + outline);
+            ui.add(
+                egui::Button::new(copy::STATES_TAB_BUTTON)
+                    .min_size(Vec2::new(0.0, spacing::SPACE_6)),
+            )
+        })
+        .inner
     });
     ui.add(egui::Label::new(specimen_job(
         copy::STATES_NOTE,
@@ -3420,6 +3434,106 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Lay the Foundations STATES row out in `theme` on a desktop window
+    /// and return the "Tab to me" button as painted: the rect of its
+    /// outlined frame (the 1pt outline is drawn inside that rect), the
+    /// outline's width, and the label's glyph box (the galley's rect).
+    fn tab_to_me_pill(theme: ThemeId) -> (Rect, f32, Rect) {
+        let ctx = egui::Context::default();
+        install(theme, &ctx);
+        apply_theme(theme, &ctx);
+        let flags = UiKitFlags::default();
+        let mut found = None;
+        // The first pass binds the installed faces; the next let the
+        // scroll row settle.
+        for _ in 0..3 {
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(DESKTOP_WIDTH, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        states_section(ui, theme, &flags);
+                    });
+                },
+            );
+            let mut frames: Vec<(Rect, f32)> = Vec::new();
+            found = None;
+            for clipped in &out.shapes {
+                match &clipped.shape {
+                    egui::Shape::Rect(rect) if rect.stroke.width > 0.0 => {
+                        frames.push((rect.rect, rect.stroke.width));
+                    }
+                    egui::Shape::Text(text) if text.galley.text() == copy::STATES_TAB_BUTTON => {
+                        let label = Rect::from_min_size(text.pos, text.galley.size());
+                        let (pill, outline) = frames
+                            .iter()
+                            .rev()
+                            .find(|(frame, _)| frame.contains(label.center()))
+                            .copied()
+                            .expect("the label sits in an outlined frame");
+                        found = Some((pill, outline, label));
+                    }
+                    _ => {}
+                }
+            }
+            out.drop_without_applying_deltas();
+        }
+        found.expect("the states row paints the Tab-to-me label")
+    }
+
+    /// The least a compact label's pill stands tall: 24pt, room for the
+    /// outline and the label with air around it.
+    const MIN_PILL_HEIGHT: f32 = spacing::SPACE_6;
+
+    /// The least air between the label's glyph box and the pill's
+    /// outline, on each side.
+    const MIN_PILL_AIR: f32 = spacing::SPACE_1;
+
+    /// The "Tab to me" pill is at least 24pt tall, and its label keeps
+    /// at least 4pt from the outline's inner edge on every side, in every
+    /// theme: a pill at egui's 18pt default leaves the label touching it.
+    #[test]
+    fn the_tab_to_me_pill_has_room_for_its_label() {
+        let mut short = Vec::new();
+        for theme in ThemeId::ALL {
+            let (pill, outline, label) = tab_to_me_pill(*theme);
+            let size = format!(
+                "pill {}x{}pt, outline {outline}pt, label {}x{}pt",
+                pill.width(),
+                pill.height(),
+                label.width(),
+                label.height(),
+            );
+            if pill.height() < MIN_PILL_HEIGHT - 0.01 {
+                short.push(format!(
+                    "{theme:?}: the pill is {}pt tall, under {MIN_PILL_HEIGHT}pt ({size})",
+                    pill.height(),
+                ));
+            }
+            let inner = pill.shrink(outline);
+            let air = [
+                ("left", label.left() - inner.left()),
+                ("right", inner.right() - label.right()),
+                ("top", label.top() - inner.top()),
+                ("bottom", inner.bottom() - label.bottom()),
+            ];
+            for (side, gap) in air {
+                if gap < MIN_PILL_AIR - 0.01 {
+                    short.push(format!(
+                        "{theme:?}: the {side} gap from the label to the outline is {gap}pt, \
+                         under {MIN_PILL_AIR}pt ({size})"
+                    ));
+                }
+            }
+        }
+        assert!(short.is_empty(), "{}", short.join("\n"));
     }
 
     /// Lay the Components tab's metric row out on a window `width` wide,
