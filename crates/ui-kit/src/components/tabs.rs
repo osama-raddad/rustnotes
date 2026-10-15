@@ -14,11 +14,12 @@
 //! while any tab of the row holds it, wrapping.
 //!
 //! A row that outgrows its width (a narrow phone, or large text) follows
-//! the selection: a tap on a tab, an arrow key, or the host moving
-//! `selected` scrolls that tab into view with the least movement: a tab
-//! already whole in the strip leaves it where it is. Only a move makes
-//! it scroll, so the user can still drag the strip away from the
-//! selected tab.
+//! the selection: a tap on a tab (the selected one too), an arrow key,
+//! or the host moving `selected` has the scroll area bring that tab into
+//! view; it does not centre it. A tab already whole in the strip leaves
+//! it where it is. Only a tap or a move makes the strip scroll, so the
+//! user can still drag it away from the selected tab. A resize, a
+//! rotation or a font-scale change does not follow the selection.
 //!
 //! The ring reaches [`FOCUS_RING_REACH`] past a tab, so the row paints
 //! it under a clip widened by that much at each side (the first tab
@@ -235,11 +236,11 @@ impl<'a> Tabs<'a> {
         // last shown is kept under the row's id, and only a change of
         // it makes the strip scroll: following every frame would pull
         // the strip back from wherever the user dragged it. A fresh
-        // strip stands at its first tab, so on its first frame only a
-        // later selection has anything to scroll to.
+        // strip counts tab 0 as last shown, so a first-frame selection
+        // of any other tab scrolls.
         let shown_key = id.with("shown");
         let last_shown: Option<usize> = ctx.data(|data| data.get_temp(shown_key));
-        let follow = last_shown.unwrap_or(0) != showing;
+        let selection_moved = last_shown.unwrap_or(0) != showing;
 
         // The row: full-width viewport so a row that outgrows the
         // width scrolls sideways rather than wrapping, the tabs held
@@ -304,15 +305,16 @@ impl<'a> Tabs<'a> {
                             ctx.memory_mut(|memory| memory.request_focus(id.with(index)));
                         }
                         // The tab a tap lands on, or the one the selection
-                        // moved to, is brought into view with the least
-                        // scrolling: a tab already whole in the strip
-                        // moves nothing, a cut or hidden one comes in
-                        // just far enough (a tab never needs centring,
-                        // and centring would push a tab that was in view
-                        // out of it). The strip's scroll area takes the
-                        // request whole, on both axes, so a page that
-                        // scrolls round the row stays put.
-                        if tapped || (follow && active) {
+                        // moved to, is brought into view by the scroll
+                        // area, which does not centre it: a tab already
+                        // whole in the strip moves nothing. The scroll
+                        // area keeps the row's item spacing as a margin
+                        // at the edge it scrolls to, so a cut tab can
+                        // land short of that edge, unless the offset
+                        // stops at the row's end. The strip's scroll area
+                        // takes the request whole, on both axes, so a
+                        // page that scrolls round the row stays put.
+                        if tapped || (selection_moved && active) {
                             response.scroll_to_me(None);
                         }
 

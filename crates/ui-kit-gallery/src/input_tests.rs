@@ -1630,35 +1630,55 @@ fn tab_strip_rules(h: &Harness, pane: egui::Rect) -> Vec<egui::Rect> {
 /// The OS font scale of finding 5-A2: the Pixel's "large" step.
 const LARGE_TEXT: f32 = 1.3;
 
+/// The painted label of the strip's tab `label` in the last frame, if
+/// it is painted at all: its topmost occurrence below the bar's pane (at
+/// the wide tiers the bar's nav links carry the same names). A tab
+/// scrolled wholly out of the strip's clip has no painted label
+/// (off-screen text is culled).
+fn strip_label(h: &Harness, theme: ThemeId, label: &str) -> Option<egui::Rect> {
+    let below = bar_pane(h, theme).bottom();
+    h.strings
+        .iter()
+        .filter(|(text, rect)| text == label && rect.top() > below)
+        .map(|(_, rect)| *rect)
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+}
+
+/// A tab's own box, from its label's rect: the label with its 4pt side
+/// paddings, and the 14pt paddings over and under its line box.
+fn tab_box(label_rect: egui::Rect) -> egui::Rect {
+    use ui_kit::components::tabs::{TAB_PAD_X, TAB_PAD_Y, TAB_TEXT_SIZE};
+    use ui_kit::tokens::leading::LEADING_NORMAL;
+
+    egui::Rect::from_center_size(
+        label_rect.center(),
+        egui::vec2(
+            label_rect.width() + 2.0 * TAB_PAD_X,
+            2.0 * TAB_PAD_Y + TAB_TEXT_SIZE * LEADING_NORMAL,
+        ),
+    )
+}
+
 /// The tab strip and one of its tabs as the last frame painted them: the
 /// x range the strip shows (that of its rule, which runs the strip's
-/// whole visible width) and the rect of the tab labelled `label`, which
-/// is its label widened by the tab's own side padding. The tab can lie
-/// partly or wholly outside the strip's range: the strip scrolls
+/// whole visible width) and the box of the tab labelled `label`. The tab
+/// can lie partly or wholly outside the strip's range: the strip scrolls
 /// sideways under a clip. A tab scrolled wholly out of the clip has no
-/// painted label (off-screen text is culled), so it is `None`.
-fn strip_and_tab(h: &Harness, label: &str) -> (egui::Rangef, Option<egui::Rect>) {
-    use ui_kit::components::tabs::TAB_PAD_X;
-
-    let pane = bar_pane(h, ThemeId::Light);
+/// painted label, so it is `None`.
+fn strip_and_tab(h: &Harness, theme: ThemeId, label: &str) -> (egui::Rangef, Option<egui::Rect>) {
+    let pane = bar_pane(h, theme);
     let rules = tab_strip_rules(h, pane);
     let [rule] = rules.as_slice() else {
         panic!("the tab strip must paint one rule as wide as the bar: {rules:?}");
     };
-    let tab = h
-        .strings
-        .iter()
-        .filter(|(text, rect)| text == label && rect.top() > pane.bottom())
-        .map(|(_, rect)| rect.expand2(egui::vec2(TAB_PAD_X, 0.0)))
-        .min_by(|a, b| a.top().total_cmp(&b.top()));
-    (rule.x_range(), tab)
+    (rule.x_range(), strip_label(h, theme, label).map(tab_box))
 }
 
 /// Whether the tab labelled `label` stands whole inside the strip's
 /// visible range, give or take [`PIXEL_SNAP`] (a scrolled row's origin is
 /// rounded to whole device pixels). `Err` says where it stands instead.
-fn tab_in_view(h: &Harness, label: &str) -> Result<(), String> {
-    let (strip, tab) = strip_and_tab(h, label);
+fn tab_in_view(h: &Harness, theme: ThemeId, label: &str) -> Result<(), String> {
+    let (strip, tab) = strip_and_tab(h, theme, label);
     match tab {
         Some(tab)
             if strip.min - PIXEL_SNAP <= tab.left() && tab.right() <= strip.max + PIXEL_SNAP =>
@@ -1703,7 +1723,7 @@ fn a_tapped_tab_the_strip_cuts_scrolls_into_view() {
         let mut h = Harness::window_zoomed(screen, zoom);
         h.touch_screen();
 
-        let (strip, tab) = strip_and_tab(&h, label);
+        let (strip, tab) = strip_and_tab(&h, ThemeId::Light, label);
         let tab = tab.expect("the tab the strip cuts is painted, in part");
         assert!(
             strip.min < tab.left() && tab.left() < strip.max && strip.max < tab.right(),
@@ -1718,7 +1738,7 @@ fn a_tapped_tab_the_strip_cuts_scrolls_into_view() {
         // The finger lands on the part of the tab that shows.
         let visible = egui::Rangef::new(tab.left(), strip.max);
         h.tap(egui::pos2(visible.center(), tab.center().y));
-        let index = copy::TABS.iter().position(|tab| *tab == label);
+        let index = copy::TABS.iter().position(|name| *name == label);
         assert_eq!(
             Some(h.app.gallery.tab),
             index,
@@ -1726,7 +1746,7 @@ fn a_tapped_tab_the_strip_cuts_scrolls_into_view() {
         );
         h.idle(30);
 
-        if let Err(why) = tab_in_view(&h, label) {
+        if let Err(why) = tab_in_view(&h, ThemeId::Light, label) {
             off.push(format!("{at}, after a tap on {label}: {why}"));
         }
     }
@@ -1736,15 +1756,14 @@ fn a_tapped_tab_the_strip_cuts_scrolls_into_view() {
 /// A tab that already stands whole in the strip moves nothing when it is
 /// tapped, however far the strip overflows: tapping Components, whole at
 /// x 200..287 on the audit's device at font scale 1.3, leaves the row
-/// where it is, Brand's label still painted on the margin. (Centring the
-/// tab pushed the row 53pt along and Brand out of the strip.)
+/// where it is, Brand's label still painted on the margin.
 #[test]
 fn a_tapped_tab_that_is_wholly_in_view_leaves_the_strip_where_it_is() {
     let (brand, components, feedback) = (copy::TABS[0], copy::TABS[2], copy::TABS[3]);
     let mut h = Harness::window_zoomed(DEVICE, LARGE_TEXT);
     h.touch_screen();
 
-    let (strip, tab) = strip_and_tab(&h, components);
+    let (strip, tab) = strip_and_tab(&h, ThemeId::Light, components);
     let tab = tab.expect("the tab is painted");
     assert!(
         strip.min <= tab.left() && tab.right() <= strip.max,
@@ -1754,7 +1773,9 @@ fn a_tapped_tab_that_is_wholly_in_view_leaves_the_strip_where_it_is() {
         strip.min,
         strip.max
     );
-    let last = strip_and_tab(&h, feedback).1.expect("the tab is painted");
+    let last = strip_and_tab(&h, ThemeId::Light, feedback)
+        .1
+        .expect("the tab is painted");
     assert!(
         strip.max < last.right(),
         "the strip must overflow, so that it has room to move: {feedback} ends at x {}, the \
@@ -1762,7 +1783,7 @@ fn a_tapped_tab_that_is_wholly_in_view_leaves_the_strip_where_it_is() {
         last.right(),
         strip.max
     );
-    let before = strip_and_tab(&h, brand)
+    let before = strip_and_tab(&h, ThemeId::Light, brand)
         .1
         .expect("the tab is painted")
         .left();
@@ -1774,7 +1795,7 @@ fn a_tapped_tab_that_is_wholly_in_view_leaves_the_strip_where_it_is() {
     );
     h.idle(30);
 
-    let after = strip_and_tab(&h, brand).1;
+    let after = strip_and_tab(&h, ThemeId::Light, brand).1;
     assert!(
         after.is_some_and(|after| (after.left() - before).abs() <= 0.01),
         "a tap on the whole tab {components} moved the strip: the {brand} tab was at x {before}, \
@@ -1791,23 +1812,23 @@ fn a_tab_the_host_selects_scrolls_into_view_at_large_text() {
     let (feedback, brand) = (copy::TABS[3], copy::TABS[0]);
     let mut h = Harness::window_zoomed(PHONE, LARGE_TEXT);
     assert!(
-        tab_in_view(&h, feedback).is_err(),
+        tab_in_view(&h, ThemeId::Light, feedback).is_err(),
         "at font scale {LARGE_TEXT} Feedback must start out of the strip's view"
     );
 
     h.app.gallery.tab = 3;
     h.idle(30);
-    if let Err(why) = tab_in_view(&h, feedback) {
+    if let Err(why) = tab_in_view(&h, ThemeId::Light, feedback) {
         panic!("after the host selected Feedback at font scale {LARGE_TEXT}: {why}");
     }
     assert!(
-        tab_in_view(&h, brand).is_err(),
+        tab_in_view(&h, ThemeId::Light, brand).is_err(),
         "the strip must have scrolled for Feedback: Brand has left the strip's view"
     );
 
     h.app.gallery.tab = 0;
     h.idle(30);
-    if let Err(why) = tab_in_view(&h, brand) {
+    if let Err(why) = tab_in_view(&h, ThemeId::Light, brand) {
         panic!("after the host selected Brand at font scale {LARGE_TEXT}: {why}");
     }
 }
@@ -1823,24 +1844,32 @@ fn the_strip_can_be_dragged_away_from_the_selected_tab() {
     h.touch_screen();
     h.app.gallery.tab = 3;
     h.idle(30);
-    tab_in_view(&h, feedback).expect("the strip follows the selection");
+    tab_in_view(&h, ThemeId::Light, feedback).expect("the strip follows the selection");
 
-    let (strip, tab) = strip_and_tab(&h, feedback);
-    let press = egui::pos2(strip.center(), tab.expect("the tab is painted").center().y);
-    h.swipe(press, press + egui::vec2(300.0, 0.0), 10);
+    // The swipe starts at the strip's left end and stays on the screen,
+    // and is longer than the row can move: it takes the row to its start.
+    let (strip, tab) = strip_and_tab(&h, ThemeId::Light, feedback);
+    let press = egui::pos2(
+        strip.min + 20.0,
+        tab.expect("the tab is painted").center().y,
+    );
+    h.swipe(press, press + egui::vec2(200.0, 0.0), 10);
     h.idle(60);
 
     assert_eq!(h.app.gallery.tab, 3, "a swipe is no tap on a tab");
-    if let Err(why) = tab_in_view(&h, brand) {
+    if let Err(why) = tab_in_view(&h, ThemeId::Light, brand) {
         panic!("after a swipe back to the start the strip must stay there: {why}");
     }
+    assert!(
+        tab_in_view(&h, ThemeId::Light, feedback).is_err(),
+        "the swipe must have taken Feedback, the selected tab, out of the strip's view"
+    );
 }
 
 /// A row that fits its strip does not scroll when the selection moves:
 /// at a desktop's width the four tabs sit inside the strip, and neither
 /// the host selecting one nor a tap on another moves the first tab off
-/// the content margin (the scroll area has no room to move, and the
-/// request to centre a tab stops at the row's ends).
+/// the content margin (the scroll area has no room to move).
 #[test]
 fn a_row_that_fits_the_strip_stays_put_when_the_selection_moves() {
     use crate::gallery::PAGE_GUTTER;
@@ -1850,7 +1879,10 @@ fn a_row_that_fits_the_strip_stays_put_when_the_selection_moves() {
     h.touch_screen();
     let mut off = Vec::new();
     let mut check = |h: &Harness, after: &str| {
-        let left = strip_and_tab(h, brand).1.expect("Brand is painted").left();
+        let left = strip_and_tab(h, ThemeId::Light, brand)
+            .1
+            .expect("Brand is painted")
+            .left();
         if (left - PAGE_GUTTER).abs() > 0.01 {
             off.push(format!(
                 "{after}, the Brand tab starts at x {left}, not on the content margin \
@@ -1863,7 +1895,9 @@ fn a_row_that_fits_the_strip_stays_put_when_the_selection_moves() {
     h.idle(30);
     check(&h, "after the host selected Feedback");
     for label in [copy::TABS[2], copy::TABS[1], copy::TABS[3]] {
-        let tab = strip_and_tab(&h, label).1.expect("the tab is painted");
+        let tab = strip_and_tab(&h, ThemeId::Light, label)
+            .1
+            .expect("the tab is painted");
         h.tap(tab.center());
         h.idle(30);
         check(&h, &format!("after a tap on {label}"));
@@ -1872,9 +1906,9 @@ fn a_row_that_fits_the_strip_stays_put_when_the_selection_moves() {
 }
 
 /// A keyboard moves the selection along the strip with the arrow keys
-/// (the tab holding the focus), and the strip follows it: three presses
-/// of the right arrow from Brand reach Feedback, which lies beyond the
-/// strip at font scale 1.3 and must be in view at the end.
+/// (the tab holding the focus), and the strip follows it: each press of
+/// the right arrow from Brand brings the next tab whole into view, up to
+/// Feedback, which lies beyond the strip at font scale 1.3.
 #[test]
 fn the_arrow_keys_bring_the_next_tab_into_view_at_large_text() {
     let (brand, feedback) = (copy::TABS[0], copy::TABS[3]);
@@ -1888,17 +1922,29 @@ fn the_arrow_keys_bring_the_next_tab_into_view_at_large_text() {
         rings.len()
     );
 
-    for _ in 0..3 {
+    // Each press moves the selection one tab along and brings that tab
+    // whole into view.
+    for (presses, label) in copy::TABS[1..].iter().enumerate() {
         h.press(egui::Key::ArrowRight);
         h.idle(30);
+        assert_eq!(
+            h.app.gallery.tab,
+            presses + 1,
+            "{} right arrows from {brand} reach {label}",
+            presses + 1
+        );
+        if let Err(why) = tab_in_view(&h, ThemeId::Light, label) {
+            panic!(
+                "after {} right arrows at font scale {LARGE_TEXT}: {why}",
+                presses + 1
+            );
+        }
     }
     assert_eq!(
-        h.app.gallery.tab, 3,
-        "three right arrows from Brand reach Feedback"
+        copy::TABS[h.app.gallery.tab],
+        feedback,
+        "the last press reaches Feedback"
     );
-    if let Err(why) = tab_in_view(&h, feedback) {
-        panic!("after three right arrows at font scale {LARGE_TEXT}: {why}");
-    }
 }
 
 /// In a short window, such as a phone in landscape, the page keeps at
@@ -2244,16 +2290,7 @@ impl StripRing {
     /// The tab's own box: the label with its 4pt side paddings, and the
     /// 14pt paddings over and under its line box.
     fn tab(&self) -> egui::Rect {
-        use ui_kit::components::tabs::{TAB_PAD_X, TAB_PAD_Y, TAB_TEXT_SIZE};
-        use ui_kit::tokens::leading::LEADING_NORMAL;
-
-        egui::Rect::from_center_size(
-            self.label_rect.center(),
-            egui::vec2(
-                self.label_rect.width() + 2.0 * TAB_PAD_X,
-                2.0 * TAB_PAD_Y + TAB_TEXT_SIZE * LEADING_NORMAL,
-            ),
-        )
+        tab_box(self.label_rect)
     }
 
     /// Whether the ring is whole: drawn at its full reach round the tab
@@ -2289,13 +2326,7 @@ impl StripRing {
 /// below the bar. (At the wide tiers the bar's nav links carry the same
 /// names, which is why the label is looked for below the bar's pane.)
 fn strip_ring(h: &Harness, theme: ThemeId, label: &'static str) -> Option<StripRing> {
-    let below = bar_pane(h, theme).bottom();
-    let label_rect = h
-        .strings
-        .iter()
-        .filter(|(text, rect)| text == label && rect.top() > below)
-        .map(|(_, rect)| *rect)
-        .min_by(|a, b| a.top().total_cmp(&b.top()))?;
+    let label_rect = strip_label(h, theme, label)?;
     let colour = theme.colors().focus_ring;
     painted_rects(h)
         .into_iter()
