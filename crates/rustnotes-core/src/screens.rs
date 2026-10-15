@@ -215,11 +215,12 @@ impl App {
             Screen::Editor => {
                 let new_note = self.edit_id == 0;
                 let mut back = false;
-                // Capped in Medium and Expanded windows (metrics.rs:24). A
-                // landscape phone has Compact height, and there a 640 pt column
-                // centred in the window starts the typed text about 140pt in,
-                // while the title sits at the margin (finding 7-A2), so it is
-                // uncapped. `two_pane_ok` uses the same height test.
+                // Capped at any width unless the window has Compact height
+                // (metrics.rs:24 documents the cap for readability). A landscape
+                // phone is Compact in height, and there a 640 pt column centred
+                // in the window starts the typed text about 140pt in, while the
+                // title sits at the margin (finding 7-A2), so it is uncapped.
+                // `two_pane_ok` uses the same height test.
                 let scaffold = Scaffold::new(pal, m).background(pal.surface);
                 let scaffold = if class.height != SizeClass::Compact {
                     scaffold.limit_body_width()
