@@ -82,7 +82,8 @@ use ui_kit::components::tabs::Tabs;
 use ui_kit::components::text_field::{hint_row, label_row, TextField};
 use ui_kit::components::toggle::{self, Toggle};
 use ui_kit::components::top_app_bar::{
-    NavLink, TopAppBar, ACTIONS_GAP, CONTENT_HEIGHT, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
+    NavLink, TopAppBar, ACTIONS_GAP, BAR_PAD_X, BAR_PAD_Y, CONTENT_HEIGHT, GROUP_GAP, LINK_GAP,
+    LOGO_HEIGHT,
 };
 use ui_kit::components::{
     BrandShowcase, Card, Cover, EditorialCard, FocusRing, Grid, LiquidGlass, MetricCard,
@@ -175,6 +176,68 @@ const THEME_MENU_LABEL_X: f32 = toggle::TRACK_W + toggle::LABEL_GAP;
 /// which the kit sets a circle and a gap from the row's left, start
 /// at [`THEME_MENU_LABEL_X`]. The group's legend rides along with it.
 const THEME_MENU_RADIO_INSET: f32 = THEME_MENU_LABEL_X - (radio::CIRCLE_SIZE + radio::LABEL_GAP);
+
+/// The search popover's width. The field fills the popover, so this is
+/// its outer width as it stands.
+pub(crate) const SEARCH_POPOVER_WIDTH: f32 = 280.0;
+
+/// The gap between the bar's bottom edge and the popovers that open
+/// under it: `space-2`, the bar's own `ACTIONS_GAP`. It clears the
+/// bar's 1px border and its shadow's edge; the select's 4px, under a
+/// field, would leave a popover touching the floating bar.
+pub(crate) const BAR_POPOVER_GAP: f32 = spacing::SPACE_2;
+
+/// The inner margin of the bar's popovers: `space-4`, the theme menu's.
+/// The kit's popover frame keeps 4px, which suits the select's list of
+/// flush rows; a field or a stack of 44px touch rows wants room around
+/// it.
+pub(crate) const BAR_POPOVER_PAD: f32 = spacing::SPACE_4;
+
+/// The frame both of the bar's popovers draw: the kit's popover chrome
+/// with the bar popovers' one inner margin, so the search field and the
+/// theme menu's rows stand the same distance from the edge.
+fn bar_popover_frame(theme: ThemeId) -> egui::Frame {
+    popup_frame(theme).inner_margin(BAR_POPOVER_PAD)
+}
+
+/// The popover for one of the bar's triggers, under the bar. One rule
+/// places both of the bar's popovers (the theme menu and the search
+/// field):
+///
+/// - it starts [`BAR_POPOVER_GAP`] under the bar's bottom edge, not
+///   under the trigger, which ends the bar's padding short of that edge
+///   and would leave the popover over the bar's card, its border and
+///   its hairline;
+/// - its right edge stands on the trigger's right edge; and
+/// - where it is wider than the room between that edge and the bar's
+///   left edge (the 280px search popover under a phone's search
+///   button, which ends 233px in), it is held inside the bar instead:
+///   pushed right until its left edge stands on the bar's.
+///
+/// egui's own placement tries `BOTTOM_START`, then its flips, then
+/// every menu alignment, and takes the first that fits the window. That
+/// hung the popovers by their left edges on a wide window and centred
+/// the search popover under its button on a phone, so the alignment is
+/// fixed here, with no alternatives. `bar` is the bar's pane and
+/// `width` the popover's width, which the hold measures: exact for the
+/// search popover, a ceiling for the theme menu, whose area shrinks to
+/// its content. The caller sets the open state and shows the content.
+fn bar_popover<'a>(
+    trigger: &egui::Response,
+    bar: Rect,
+    width: f32,
+    theme: ThemeId,
+) -> egui::Popup<'a> {
+    let right = trigger.rect.right().max(bar.left() + width);
+    egui::Popup::from_response(trigger)
+        .anchor(egui::pos2(right, bar.bottom()))
+        .align(egui::RectAlign::BOTTOM_END)
+        .align_alternatives(&[])
+        .gap(BAR_POPOVER_GAP)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .frame(bar_popover_frame(theme))
+        .width(width)
+}
 
 /// Apply `theme` with the gallery's own style on top: labels are not
 /// selectable. A gallery is not a document, and a drag that starts on
@@ -2476,6 +2539,11 @@ impl Gallery {
                 // the nav links, the call to action) is pinned to the
                 // row's top, short of the 44px controls' centre line.
                 ui.set_height(CONTENT_HEIGHT);
+                // The bar's pane: the row grown by the padding the bar's
+                // frame puts round it. The bar's popovers hang from its
+                // bottom edge and keep inside its left edge
+                // (`bar_popover`).
+                let bar = ui.max_rect().expand2(egui::vec2(BAR_PAD_X, BAR_PAD_Y));
                 let fit = BarFit::measure(ui, theme, narrow);
 
                 // The brand: the wordmark at its 24px chrome height,
@@ -2545,11 +2613,8 @@ impl Gallery {
                         self.search_open = !self.search_open;
                         self.theme_open = false;
                     }
-                    egui::Popup::from_response(&search)
+                    bar_popover(&search, bar, SEARCH_POPOVER_WIDTH, theme)
                         .open_bool(&mut self.search_open)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .frame(popup_frame(theme))
-                        .width(280.0)
                         .show(|ui| {
                             TextField::new(copy::SEARCH_FIELD_LABEL, &mut self.search)
                                 .placeholder(copy::SEARCH_PLACEHOLDER)
@@ -2560,7 +2625,7 @@ impl Gallery {
                     // Keep in step with `BarFit::actions_width`.
                     ui.add_space(ACTIONS_GAP);
 
-                    self.theme_menu(ui, ctx, fit.trigger);
+                    self.theme_menu(ui, ctx, fit.trigger, bar);
 
                     if fit.cta {
                         // Keep in step with `BarFit::actions_width`.
@@ -2585,9 +2650,16 @@ impl Gallery {
     /// naming the live theme where the bar has room for the name, or on
     /// the bare label where it has room for that, and on the narrowest
     /// phones the kit's 44px icon button with the tune icon, the search
-    /// button's twin. The popover closes on a tap outside it, and
-    /// opening it closes the search popover.
-    fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, kind: ThemeTrigger) {
+    /// button's twin. The popover hangs under the bar `bar`
+    /// ([`bar_popover`], as the search popover does), closes on a tap
+    /// outside it, and opening it closes the search popover.
+    fn theme_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        kind: ThemeTrigger,
+        bar: Rect,
+    ) {
         let theme = self.theme;
         let flags = self.flags;
         let labelled = |ui: &mut egui::Ui, named: bool| {
@@ -2613,11 +2685,8 @@ impl Gallery {
         // The open state is the Gallery's own: the popover clears it
         // when a tap lands outside it (or on Escape).
         let mut open = self.theme_open;
-        egui::Popup::from_response(&trigger)
+        bar_popover(&trigger, bar, THEME_MENU_WIDTH, theme)
             .open_bool(&mut open)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .frame(popup_frame(theme).inner_margin(spacing::SPACE_4))
-            .width(THEME_MENU_WIDTH)
             .show(|ui| self.theme_menu_content(ui, ctx));
         self.theme_open = open;
     }

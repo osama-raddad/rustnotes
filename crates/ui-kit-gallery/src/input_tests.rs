@@ -834,6 +834,178 @@ fn the_search_popover_closes_on_a_tap_outside_and_gives_way_to_the_theme_menu() 
     );
 }
 
+/// The rect of the one popover open over the page: the area rect of the
+/// visible foreground layer, which is the popover's frame (the kit's
+/// frame adds no outer margin, so the area is the painted box). The
+/// harness holds one popover open at a time and the Feedback panel
+/// opens none of its own, so a second foreground layer fails the lookup.
+fn open_popover(h: &Harness) -> egui::Rect {
+    let rects: Vec<egui::Rect> = h.ctx.memory(|memory| {
+        memory
+            .areas()
+            .visible_layer_ids()
+            .into_iter()
+            .filter(|layer| layer.order == egui::Order::Foreground)
+            .filter_map(|layer| memory.area_rect(layer.id))
+            .collect()
+    });
+    assert_eq!(rects.len(), 1, "one popover is open: {rects:?}");
+    rects[0]
+}
+
+/// The bar's two popovers open below the bar and hang from their
+/// triggers by one rule, and share one inner padding. The popovers were
+/// anchored to the trigger button's own rect, which ends 12pt (the bar's
+/// padding) short of the bar's bottom edge, so they opened over the
+/// bar's card, its border and its hairline. They took whichever of
+/// egui's alignments first fit the window, so at a phone's width the
+/// theme popover's right edge stood on its trigger's, the search
+/// popover (wider than the room left of its button) was centred under
+/// the button, and on a wide window both hung by their left edges. And
+/// the search popover kept the kit frame's 4pt padding while the theme
+/// popover's is 16pt, which put the search input 5pt from the popover's
+/// edge (4pt of padding and the 1pt border).
+///
+/// The rule: a popover starts the `BAR_POPOVER_GAP` under the bar's
+/// bottom edge, and its right edge stands on its trigger's right edge.
+/// Where the popover is wider than the room between that edge and the
+/// bar's left edge (the 280pt search popover under a phone's search
+/// button, which ends 233pt in), it is held inside the bar instead: its
+/// left edge stands on the bar's left edge. Both are asserted at a
+/// phone, the narrowest phone, the compact breakpoint and a desktop, and
+/// the run must reach the held case and the plain case, or it fails. The
+/// popovers keep their widths.
+#[test]
+fn the_bars_popovers_open_below_the_bar_and_hang_from_their_triggers() {
+    use crate::gallery::{BAR_POPOVER_GAP, BAR_POPOVER_PAD, SEARCH_POPOVER_WIDTH};
+
+    // Painted to the pixel, laid out in whole points: a point's slack.
+    const SLACK: f32 = 1.0;
+    // The theme popover's width, as it was and stays: the widest row
+    // (the "Reduced transparency" toggle) and the frame, as measured.
+    // `THEME_MENU_WIDTH` (248pt) is only the area's default width, and
+    // the area shrinks to its content.
+    const THEME_WIDTH: f32 = 226.156;
+    // The kit popover frame's 1pt border: the content stands this far
+    // further in than the frame's inner margin.
+    const BORDER: f32 = 1.0;
+
+    let mut off = Vec::new();
+    let (mut hung, mut held) = (0, 0);
+    for window in [
+        PHONE,
+        egui::vec2(320.0, 800.0),
+        egui::vec2(600.0, 800.0),
+        egui::vec2(1280.0, 900.0),
+    ] {
+        let mut h = Harness::window(window);
+        // The Feedback panel paints neither popover's content of its
+        // own, and no popover of its own.
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        h.touch_screen();
+        let at = format!("at {}pt", window.x);
+        let pane = bar_pane(&h, ThemeId::Light);
+        let search = h
+            .node(Role::Button, copy::SEARCH_BUTTON_NAME)
+            .expect("the bar's search button");
+        let trigger = h
+            .node(Role::Button, copy::THEME_MENU)
+            .expect("the bar's theme trigger");
+
+        // Each popover opens with a tap on its trigger; opening the
+        // second closes the first.
+        for (name, button, width) in [
+            ("search", search, SEARCH_POPOVER_WIDTH),
+            ("theme", trigger, THEME_WIDTH),
+        ] {
+            h.tap(button.center());
+            h.idle(2);
+            let popover = open_popover(&h);
+            let at = format!("{at} the {name} popover {popover:?}");
+
+            if (popover.width() - width).abs() > SLACK {
+                off.push(format!("{at} is {}pt wide, not {width}pt", popover.width()));
+            }
+            if !h.ctx.content_rect().contains_rect(popover) {
+                off.push(format!("{at} leaves the window"));
+            }
+
+            // Below the bar, a gap clear of its border (the popover
+            // once started inside the bar's card, 12pt above its
+            // bottom edge).
+            let gap = popover.top() - pane.bottom();
+            if (gap - BAR_POPOVER_GAP).abs() > SLACK {
+                off.push(format!(
+                    "{at} starts {gap}pt under the bar's bottom edge {}, not {BAR_POPOVER_GAP}pt",
+                    pane.bottom()
+                ));
+            }
+
+            // Hung from the trigger's right edge, or held inside the bar.
+            if popover.width() <= button.right() - pane.left() {
+                hung += 1;
+                if (popover.right() - button.right()).abs() > SLACK {
+                    off.push(format!(
+                        "{at} ends at x {}, not on its trigger's right edge {}",
+                        popover.right(),
+                        button.right()
+                    ));
+                }
+            } else {
+                held += 1;
+                if (popover.left() - pane.left()).abs() > SLACK {
+                    off.push(format!(
+                        "{at} starts at x {}, not on the bar's left edge {} (its trigger \
+                         ends at {}, too near the bar's left edge to hang from)",
+                        popover.left(),
+                        pane.left(),
+                        button.right()
+                    ));
+                }
+            }
+
+            // The padding: the content stands the 16pt inner margin and
+            // the border in from the popover's edge. The search field's
+            // control is the one 44pt box the TextField paints (the
+            // accessibility tree gives the text input no label to find
+            // it by); the theme menu's flag rows start at the content's
+            // edge.
+            let (content, left) = if name == "search" {
+                let control = ui_kit::components::text_field::CONTROL_HEIGHT;
+                let input = painted_rects(&h)
+                    .into_iter()
+                    .map(|(shape, _)| shape.rect)
+                    .filter(|rect| {
+                        popover.contains_rect(*rect) && (rect.height() - control).abs() < 0.01
+                    })
+                    .min_by(|a, b| a.left().total_cmp(&b.left()))
+                    .unwrap_or_else(|| panic!("{at}: paints no search input"));
+                ("input", input.left())
+            } else {
+                let row = h
+                    .node(Role::CheckBox, copy::REDUCED_MOTION)
+                    .unwrap_or_else(|| panic!("{at}: has no Reduced motion row"));
+                ("flag row", row.left())
+            };
+            let inset = left - popover.left();
+            if (inset - (BAR_POPOVER_PAD + BORDER)).abs() > SLACK {
+                off.push(format!(
+                    "{at}: its {content} starts {inset}pt in from the popover's edge, not the \
+                     {BAR_POPOVER_PAD}pt inner margin and the {BORDER}pt border"
+                ));
+            }
+        }
+    }
+    if hung < 4 || held == 0 {
+        off.push(format!(
+            "the run hung {hung} popovers from their triggers and held {held} inside the bar; \
+             it must hang at least four and hold one"
+        ));
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
 /// The bar keeps its working controls clear of the rest of its row
 /// from the narrowest phones to a wide desktop (320, the first iPhone
 /// SE and the small Androids; 600, the compact breakpoint; 768 and 834,
