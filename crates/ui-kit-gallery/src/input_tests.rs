@@ -3318,8 +3318,9 @@ struct BrandGroup {
     /// the photo tiles, whose captions wrap inside the tile).
     paragraphs: Vec<egui::Rect>,
     /// Each card's width where cards share a line: the width the card was
-    /// sized by, its padding on both sides included.
-    shared_width: f32,
+    /// sized by, its padding on both sides included. `None` for a card no
+    /// constant sizes: it hugs its content on a wide window.
+    shared_width: Option<f32>,
     /// The wrap width the cards' sizing constants name for their text:
     /// narrower than the card's inner width, and not the width the text
     /// wraps to (see `the_brand_card_text_wraps_to_the_card_on_a_phone`).
@@ -3359,14 +3360,14 @@ fn card_around(
 /// Lay the Brand page out in a window `width` wide and tall enough to
 /// show all of it, and read each group of cards off the frame: the theme
 /// cards, the voice cards, the photo tiles (the lead Volvo tile on its
-/// own, and the four small ones) and the Do and Don't cards, the control
-/// that already filled the column. Hands back the column, the page's inner
-/// rect (`Gallery::page_rect`, the one the Components gutter tests hold),
-/// and the groups.
+/// own, and the four small ones), the governing-principle card and the Do
+/// and Don't cards, the control that already filled the column. Hands back
+/// the column, the page's inner rect (`Gallery::page_rect`, the one the
+/// Components gutter tests hold), and the groups.
 fn brand_groups(width: f32) -> (egui::Rect, Vec<BrandGroup>) {
     use ui_kit::components::brand_showcase::{
         HEADLINE_MODES, MODE_TILE_WIDTH, PHOTO_TILES, PHOTO_TILE_SMALL, PHOTO_TILE_WIDE,
-        VOICE_CARD_WIDTH, VOICE_POSITIONS,
+        PRINCIPLE_HEADLINE, VOICE_CARD_WIDTH, VOICE_POSITIONS,
     };
     use ui_kit::components::themes_showcase::{CARDS, CARD_WIDTH};
     use ui_kit::tokens::spacing::{SPACE_4, SPACE_8};
@@ -3416,13 +3417,15 @@ fn brand_groups(width: f32) -> (egui::Rect, Vec<BrandGroup>) {
             .collect(),
     );
     let tile = |index: usize| find(PHOTO_TILES[index].1, PHOTO_TILES[index].0.pair(&colors).0).0;
+    // The principle panel is a large elevated card.
+    let principle = find(PRINCIPLE_HEADLINE, colors.surface_container_low).0;
 
     let groups = vec![
         BrandGroup {
             name: "theme cards",
             cards: theme_cards,
             paragraphs: theme_text,
-            shared_width: CARD_WIDTH + 2.0 * SPACE_4,
+            shared_width: Some(CARD_WIDTH + 2.0 * SPACE_4),
             shared_wrap: CARD_WIDTH - SPACE_8,
             padding: SPACE_4,
             height: None,
@@ -3431,7 +3434,7 @@ fn brand_groups(width: f32) -> (egui::Rect, Vec<BrandGroup>) {
             name: "voice cards",
             cards: voice_cards,
             paragraphs: voice_text,
-            shared_width: VOICE_CARD_WIDTH + 2.0 * SPACE_4,
+            shared_width: Some(VOICE_CARD_WIDTH + 2.0 * SPACE_4),
             shared_wrap: VOICE_CARD_WIDTH - SPACE_8,
             padding: SPACE_4,
             height: None,
@@ -3440,7 +3443,7 @@ fn brand_groups(width: f32) -> (egui::Rect, Vec<BrandGroup>) {
             name: "lead photo tile",
             cards: vec![tile(0)],
             paragraphs: Vec::new(),
-            shared_width: PHOTO_TILE_WIDE.x,
+            shared_width: Some(PHOTO_TILE_WIDE.x),
             shared_wrap: 0.0,
             padding: 0.0,
             height: Some(PHOTO_TILE_WIDE.y),
@@ -3449,7 +3452,7 @@ fn brand_groups(width: f32) -> (egui::Rect, Vec<BrandGroup>) {
             name: "small photo tiles",
             cards: (1..PHOTO_TILES.len()).map(tile).collect(),
             paragraphs: Vec::new(),
-            shared_width: PHOTO_TILE_SMALL.x,
+            shared_width: Some(PHOTO_TILE_SMALL.x),
             shared_wrap: 0.0,
             padding: 0.0,
             height: Some(PHOTO_TILE_SMALL.y),
@@ -3458,9 +3461,18 @@ fn brand_groups(width: f32) -> (egui::Rect, Vec<BrandGroup>) {
             name: "do and don't cards",
             cards: mode_cards,
             paragraphs: mode_text,
-            shared_width: MODE_TILE_WIDTH + 2.0 * SPACE_4,
+            shared_width: Some(MODE_TILE_WIDTH + 2.0 * SPACE_4),
             shared_wrap: VOICE_CARD_WIDTH - SPACE_8,
             padding: SPACE_4,
+            height: None,
+        },
+        BrandGroup {
+            name: "governing-principle card",
+            cards: vec![principle],
+            paragraphs: Vec::new(),
+            shared_width: None,
+            shared_wrap: 0.0,
+            padding: SPACE_8,
             height: None,
         },
     ];
@@ -3602,13 +3614,14 @@ fn the_brand_cards_keep_their_desktop_widths() {
     );
     for group in &groups {
         for card in &group.cards {
-            if (card.width() - group.shared_width).abs() > 0.5 {
-                off.push(format!(
-                    "{}: a card is {}pt wide, not the {}pt it is sized by",
-                    group.name,
-                    card.width(),
-                    group.shared_width
-                ));
+            if let Some(shared) = group.shared_width {
+                if (card.width() - shared).abs() > 0.5 {
+                    off.push(format!(
+                        "{}: a card is {}pt wide, not the {shared}pt it is sized by",
+                        group.name,
+                        card.width()
+                    ));
+                }
             }
             if let Some(height) = group.height {
                 if (card.height() - height).abs() > 0.5 {
@@ -3620,14 +3633,16 @@ fn the_brand_cards_keep_their_desktop_widths() {
                 }
             }
         }
-        let inner = group.shared_width - 2.0 * group.padding;
-        for text in &group.paragraphs {
-            if text.width() > inner + 0.5 {
-                off.push(format!(
-                    "{}: a paragraph is {}pt wide, past the {inner}pt inside the card",
-                    group.name,
-                    text.width()
-                ));
+        if let Some(shared) = group.shared_width {
+            let inner = shared - 2.0 * group.padding;
+            for text in &group.paragraphs {
+                if text.width() > inner + 0.5 {
+                    off.push(format!(
+                        "{}: a paragraph is {}pt wide, past the {inner}pt inside the card",
+                        group.name,
+                        text.width()
+                    ));
+                }
             }
         }
     }

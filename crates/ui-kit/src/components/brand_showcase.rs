@@ -428,11 +428,18 @@ impl BrandShowcase {
 
         // The governing principle: the numeral in indicator beside the
         // eyebrow, headline and body, the preview's one panel.
+        let column = ui.available_width();
         Card::new().large().ui(ui, theme, flags, |ui| {
             // Captured while the Ui is still the card's bounded
             // interior: inside the horizontal below, available width is
             // unbounded.
             let panel_width = ui.available_width();
+            // A card hugs its content, and the panel's text wraps short of
+            // the interior: on a phone the panel runs the column, as the
+            // cards of `card_rows` do; wider, it hugs its text as it did.
+            if column < breakpoints::BREAKPOINT_TABLET {
+                ui.set_min_width(panel_width);
+            }
             ui.horizontal(|ui| {
                 let _ = panel_width;
                 ui.add(egui::Label::new(tracked_text(
