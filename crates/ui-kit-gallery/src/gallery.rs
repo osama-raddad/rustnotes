@@ -2223,15 +2223,35 @@ enum ThemeTrigger {
 }
 
 impl ThemeTrigger {
-    /// How far inside its own box the trigger's content sits, at the
-    /// end of the row: the default button's horizontal padding for the
-    /// two labelled triggers (the label and the chevron), and for the
-    /// icon button the room between its 44px circle and its icon. It
-    /// is the distance to the icon's box, not to its ink: the ink sits
-    /// a further 5px inside for the chevron and 3px for the tune icon.
-    fn inset(&self) -> f32 {
+    /// The room a labelled trigger's box leaves, beyond its own focus
+    /// ring, between the ring and the pane's edge. The ring reaches 4px
+    /// past the box (the 2px offset and the 2px outline).
+    const FOCUS_ROOM: f32 = 4.0;
+
+    /// How far the trigger's box runs past the row's right edge, at the
+    /// end of the row, so that its icon stands nearly the bar's padding
+    /// in from the pane's edge: the room inside the box up to the icon,
+    /// which is the default button's horizontal padding for the two
+    /// labelled triggers (the label and the chevron), and for the icon
+    /// button the room between its 44px circle and its icon. It is the
+    /// distance to the icon's box, not to its ink: the ink sits a
+    /// further 5px inside for the chevron and 3px for the tune icon.
+    ///
+    /// A deliberate trade-off: the labelled trigger overhangs by
+    /// [`Self::FOCUS_ROOM`] less than that, so its box stands 8px from
+    /// the pane's edge and its focus ring, which reaches 4px past the
+    /// box, keeps 4px clear of the bar's border (a box 4px from the
+    /// edge put the ring on the border, which cut it). Its icon box
+    /// therefore stands 4px further in than the wordmark does on the
+    /// left (28px against 24px; the chevron's ink, 33px): the two ends
+    /// are not equal, a known limit. The icon button's box is already
+    /// 14px from the edge, and a call to action ends the row 24px in,
+    /// so neither gives anything up.
+    fn overhang(&self) -> f32 {
         match self {
-            ThemeTrigger::Named | ThemeTrigger::Bare => ButtonSize::Default.padding_x(),
+            ThemeTrigger::Named | ThemeTrigger::Bare => {
+                ButtonSize::Default.padding_x() - Self::FOCUS_ROOM
+            }
             ThemeTrigger::Icon => {
                 (ui_kit::components::badge::ICON_BUTTON_SIZE - IconSize::Lg.px()) / 2.0
             }
@@ -2451,11 +2471,13 @@ impl Gallery {
                 // row, and its own padding sits inside the bar's, so
                 // its icon would stand that much further in than the
                 // wordmark does. The group is a child `Ui` that runs
-                // past the row's right edge by the trigger's inset:
-                // `with_layout` would stay inside the row, and
-                // allocating the overhang would widen the bar.
+                // past the row's right edge by the trigger's overhang
+                // (a little less than that padding, to keep its focus
+                // ring inside the bar): `with_layout` would stay inside
+                // the row, and allocating the overhang would widen the
+                // bar.
                 let row = ui.available_rect_before_wrap();
-                let overhang = if fit.cta { 0.0 } else { fit.trigger.inset() };
+                let overhang = if fit.cta { 0.0 } else { fit.trigger.overhang() };
                 let mut actions = ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(Rect::from_min_max(

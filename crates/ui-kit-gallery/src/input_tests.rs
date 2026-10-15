@@ -107,6 +107,20 @@ impl Harness {
         }
     }
 
+    /// A key press: `key` down and up again, a frame each, with no
+    /// modifiers (a keyboard user's Tab, which moves focus).
+    fn press(&mut self, key: egui::Key) {
+        for pressed in [true, false] {
+            self.frame(vec![egui::Event::Key {
+                key,
+                physical_key: Some(key),
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+        }
+    }
+
     /// A tap: one finger down and up again at `pos`.
     fn tap(&mut self, pos: egui::Pos2) {
         self.frame(finger_down(pos));
@@ -754,13 +768,19 @@ fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
 }
 
 /// The bar's content sits on one centre line and the bar pads both ends
-/// alike. The wordmark, the nav links, the call to action and the two
-/// controls each centre on the pane's centre line, and the first thing
-/// the bar shows on its left (the wordmark) and the last thing on its
-/// right (the call to action's fill, or the theme trigger's icon where
-/// the call to action is shed) each stand the bar's own padding in from
-/// the pane's edge, from the narrowest phone to a wide desktop in every
-/// theme. The row once began at egui's 18pt interact height, so the
+/// alike, but for one deliberate difference. The wordmark, the nav
+/// links, the call to action and the two controls each centre on the
+/// pane's centre line, and the first thing the bar shows on its left
+/// (the wordmark) and the last thing on its right (the call to
+/// action's fill, or the theme trigger's icon where the call to action
+/// is shed) each stand the bar's own padding in from the pane's edge,
+/// from the narrowest phone to a wide desktop in every theme. The
+/// labelled trigger's icon (the chevron) stands 4pt further in, 28pt
+/// against the wordmark's 24pt: a trade-off made so that the
+/// trigger's focus ring, which reaches 4pt past its box, stays inside
+/// the bar (`the_theme_triggers_focus_ring_stays_inside_the_bar`), and
+/// a known limit of this test. The icon button's icon and the call to
+/// action stand the full 24pt in. The row once began at egui's 18pt interact height, so the
 /// 24pt wordmark, placed first, was pinned to the row's top and sat
 /// 10pt above the 44pt controls' centre line; and the ghost theme
 /// trigger kept its own button padding (20pt, the icon button's 10pt)
@@ -786,6 +806,8 @@ fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
 
     // Painted to the pixel, laid out in whole points: a point's slack.
     const SLACK: f32 = 1.0;
+    // The room a labelled trigger's box leaves for its focus ring.
+    const RING_ROOM: f32 = 4.0;
     const CTA: &str = "the call to action";
     const CHEVRON: &str = "the bare chevron";
     const TUNE: &str = "the tune icon";
@@ -832,38 +854,131 @@ fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
                 }
             }
 
-            // Both ends.
+            // Both ends: the wordmark's gap, and the gap of whatever
+            // ends the row.
             let leading = mark.left() - pane.left();
-            let trailing = match cta {
+            let (end, trailing) = match cta {
                 // A filled button: its fill is what shows.
-                Some(cta) => {
-                    ends.insert(CTA);
-                    pane.right() - cta.right()
-                }
+                Some(cta) => (CTA, pane.right() - cta.right()),
                 // A ghost button or a bare icon: the icon is what shows.
+                // The icon button is the 44pt circle; the ghost button
+                // with the chevron is wider.
                 None => {
-                    // The icon button is the 44pt circle; the ghost
-                    // button with the chevron is wider.
-                    ends.insert(if trigger.width() == ICON_BUTTON_SIZE {
+                    let end = if trigger.width() == ICON_BUTTON_SIZE {
                         TUNE
                     } else {
                         CHEVRON
-                    });
-                    pane.right() - trigger_icon(&h, trigger).right()
+                    };
+                    (end, pane.right() - trigger_icon(&h, trigger).right())
                 }
             };
-            for (end, gap) in [("leading", leading), ("trailing", trailing)] {
-                if (gap - BAR_PAD_X).abs() > SLACK {
-                    off.push(format!(
-                        "{at} the {end} gap is {gap}pt, not the bar's {BAR_PAD_X}pt padding"
-                    ));
-                }
+            ends.insert(end);
+            if (leading - BAR_PAD_X).abs() > SLACK {
+                off.push(format!(
+                    "{at} the leading gap is {leading}pt, not the bar's {BAR_PAD_X}pt padding"
+                ));
+            }
+            // The chevron's box stands the padding plus the focus ring's
+            // room in; the others stand the padding in.
+            let (wanted, why) = if end == CHEVRON {
+                (
+                    BAR_PAD_X + RING_ROOM,
+                    format!("the bar's {BAR_PAD_X}pt padding and {RING_ROOM}pt for the focus ring"),
+                )
+            } else {
+                (BAR_PAD_X, format!("the bar's {BAR_PAD_X}pt padding"))
+            };
+            if (trailing - wanted).abs() > SLACK {
+                off.push(format!(
+                    "{at} the trailing gap to {end} is {trailing}pt, not {wanted}pt ({why})"
+                ));
             }
         }
     }
     for end in [CTA, CHEVRON, TUNE] {
         if !ends.contains(end) {
             off.push(format!("no width ended the bar with {end}"));
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// Keyboard focus on the bar's theme trigger rings it inside the bar.
+/// With the call to action shed the labelled trigger ends the bar's
+/// row and its box runs on into the bar's padding (`ThemeTrigger::
+/// overhang`). Its focus ring reaches 4pt past the box (the 2pt offset
+/// and the 2pt outline), so a box 4pt short of the pane's edge put the
+/// ring's outer edge on the bar's border, where the pane's clip cuts
+/// it. The ring must lie inside the pane, whole under its clip, and
+/// keep 4pt clear of the pane's right edge. The compact bars with the
+/// bare label are 384 (a phone) and 600 (the compact breakpoint) wide;
+/// the icon trigger and the call to action sit further in. Focus comes
+/// from a Tab press, which the bar, first in the tab order, answers
+/// with its first control: the trigger.
+#[test]
+fn the_theme_triggers_focus_ring_stays_inside_the_bar() {
+    use ui_kit::states::FOCUS_RING_OFFSET;
+
+    // The room the ring's outer edge must keep from the pane's edge.
+    const CLEAR: f32 = 4.0;
+    let mut off = Vec::new();
+    for width in [384.0, 600.0] {
+        for theme in ThemeId::ALL {
+            let mut h = Harness::window(egui::vec2(width, 800.0));
+            h.app.gallery.tab = 3;
+            h.app.gallery.theme = *theme;
+            crate::gallery::apply_theme(*theme, &h.ctx);
+            h.idle(2);
+            let at = format!("at {width}pt in {}", theme.name());
+            let pane = bar_pane(&h, *theme);
+            let trigger = h
+                .node(Role::Button, copy::THEME_MENU)
+                .expect("the bar's theme trigger");
+
+            // The ring around the trigger: the focus-ring stroke on the
+            // trigger's rect grown by the ring's offset. It fades in over
+            // 120ms, so the frames after the Tab let it land.
+            let colour = theme.colors().focus_ring;
+            let around_trigger = |h: &Harness| {
+                painted_rects(h).into_iter().find(|(shape, _)| {
+                    let inner = shape.rect.shrink(FOCUS_RING_OFFSET);
+                    shape.stroke.color == colour
+                        && trigger.expand(0.5).contains_rect(inner)
+                        && inner.expand(0.5).contains_rect(trigger)
+                })
+            };
+            let mut ring = None;
+            for _ in 0..4 {
+                if ring.is_none() {
+                    h.press(egui::Key::Tab);
+                    h.idle(12);
+                    ring = around_trigger(&h);
+                }
+            }
+            let Some((shape, clip)) = ring else {
+                off.push(format!("{at} four Tab presses never rang the trigger"));
+                continue;
+            };
+
+            let outer = shape.visual_bounding_rect();
+            let clear = pane.right() - outer.right();
+            if clear < CLEAR - 0.01 {
+                off.push(format!(
+                    "{at} the focus ring {outer:?} ends {clear}pt from the bar's right edge {}, \
+                     not the {CLEAR}pt it needs",
+                    pane.right()
+                ));
+            }
+            if !pane.contains_rect(outer) {
+                off.push(format!(
+                    "{at} the focus ring {outer:?} leaves the bar {pane:?}"
+                ));
+            }
+            if !clip.contains_rect(outer) {
+                off.push(format!(
+                    "{at} the focus ring {outer:?} is cut by its clip {clip:?}"
+                ));
+            }
         }
     }
     assert!(off.is_empty(), "{}", off.join("\n"));
@@ -898,33 +1013,40 @@ fn wordmark(h: &Harness, row: egui::Rect) -> egui::Rect {
     level[0]
 }
 
-/// The bar's pane: the topmost rect the last frame painted with the
-/// bar's 1px `outline-variant` border at `radius-lg`.
-fn bar_pane(h: &Harness, theme: ThemeId) -> egui::Rect {
-    fn walk(shape: &egui::Shape, border: egui::Stroke, out: &mut Vec<egui::Rect>) {
+/// Every rect shape the last frame painted, with the clip it was
+/// painted under.
+fn painted_rects(h: &Harness) -> Vec<(egui::epaint::RectShape, egui::Rect)> {
+    fn walk(
+        shape: &egui::Shape,
+        clip: egui::Rect,
+        out: &mut Vec<(egui::epaint::RectShape, egui::Rect)>,
+    ) {
         match shape {
-            egui::Shape::Rect(rect)
-                if rect.stroke == border
-                    && rect.corner_radius
-                        == egui::CornerRadius::same(ui_kit::tokens::radii::RADIUS_LG as u8) =>
-            {
-                out.push(rect.rect);
-            }
+            egui::Shape::Rect(rect) => out.push((rect.clone(), clip)),
             egui::Shape::Vec(shapes) => {
                 for shape in shapes {
-                    walk(shape, border, out);
+                    walk(shape, clip, out);
                 }
             }
             _ => {}
         }
     }
-    let border = ui_kit::components::top_app_bar::bar_border(theme);
-    let mut panes = Vec::new();
+    let mut out = Vec::new();
     for clipped in &h.shapes {
-        walk(&clipped.shape, border, &mut panes);
+        walk(&clipped.shape, clipped.clip_rect, &mut out);
     }
-    panes
+    out
+}
+
+/// The bar's pane: the topmost rect the last frame painted with the
+/// bar's 1px `outline-variant` border at `radius-lg`.
+fn bar_pane(h: &Harness, theme: ThemeId) -> egui::Rect {
+    let border = ui_kit::components::top_app_bar::bar_border(theme);
+    let radius = egui::CornerRadius::same(ui_kit::tokens::radii::RADIUS_LG as u8);
+    painted_rects(h)
         .into_iter()
+        .filter(|(shape, _)| shape.stroke == border && shape.corner_radius == radius)
+        .map(|(shape, _)| shape.rect)
         .min_by(|a, b| a.top().total_cmp(&b.top()))
         .expect("the frame paints the bar's pane")
 }
