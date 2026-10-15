@@ -2978,7 +2978,9 @@ impl Gallery {
         // the panel's edge lay against that border and doubled it, and
         // ran on under the pane's rounded corners. The panel reserved
         // the line's room in its outer margin; the clearance keeps it,
-        // so the page below the bar does not move.
+        // so the page below the bar does not move. The room is the width
+        // egui's `Panel::resolve_frame` reserves for the line (the
+        // `noninteractive.bg_stroke` width), rounded the same way.
         let separator_room = root
             .style()
             .visuals
@@ -2988,6 +2990,7 @@ impl Gallery {
             .width
             .round();
         egui::Panel::top("vynatix-app-bar")
+            // Off, with `separator_room` standing in for the room it took.
             .show_separator_line(false)
             .frame(egui::Frame::default().outer_margin(chrome_margin(insets.top, separator_room)))
             .show(root, |ui| self.app_bar(ui, &ctx, narrow));

@@ -1076,6 +1076,13 @@ fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
     assert!(crowded.is_empty(), "{}", crowded.join("\n"));
 }
 
+/// The window widths the bar's geometry tests run at (the centring and
+/// padding test, the bottom edge test, the tab strip's place): the
+/// narrowest phone, a phone, the compact breakpoint, a tablet and a
+/// wide desktop. The tiers they reach are listed with
+/// `the_bar_centres_its_wordmark_and_pads_its_ends`.
+const BAR_WIDTHS: [f32; 5] = [320.0, 384.0, 600.0, 1024.0, 1440.0];
+
 /// The bar's content sits on one centre line, and the bar pads its ends
 /// alike but for one deliberate difference. The wordmark, the nav
 /// links, the call to action and the two controls each centre on the
@@ -1126,7 +1133,7 @@ fn the_bar_centres_its_wordmark_and_pads_its_ends() {
     let mut ends = BTreeSet::new();
     let mut h = Harness::window(egui::vec2(320.0, 800.0));
     h.app.gallery.tab = 3;
-    for width in [320.0, 384.0, 600.0, 1024.0, 1440.0] {
+    for width in BAR_WIDTHS {
         h.window = egui::vec2(width, 800.0);
         for theme in ThemeId::ALL {
             h.app.gallery.theme = *theme;
@@ -1239,8 +1246,12 @@ fn the_bars_bottom_edge_is_its_border_alone() {
     // The thickest a filled rect can be and still read as a rule.
     const RULE: f32 = 2.0;
 
+    // Two line ends at the same height, to within this, make a
+    // horizontal line.
+    const LEVEL: f32 = 0.01;
+
     let mut off = Vec::new();
-    for width in [320.0, 384.0, 600.0, 1024.0, 1440.0] {
+    for width in BAR_WIDTHS {
         let mut h = Harness::window(egui::vec2(width, 800.0));
         // The Feedback panel: the page chrome only, as the other bar
         // tests run it.
@@ -1253,8 +1264,10 @@ fn the_bars_bottom_edge_is_its_border_alone() {
 
         let mut rules: Vec<(&str, egui::Rect)> = Vec::new();
         for (points, stroke) in painted_segments(&h) {
-            if (points[0].y - points[1].y).abs() < 0.01 {
+            if (points[0].y - points[1].y).abs() < LEVEL {
                 let line = egui::Rect::from_two_pos(points[0], points[1]);
+                // A stroke is centred on its line: the painted band
+                // reaches half the stroke's width to either side.
                 rules.push(("a line", line.expand2(egui::vec2(0.0, stroke.width / 2.0))));
             }
         }
@@ -1289,14 +1302,14 @@ fn the_bars_bottom_edge_is_its_border_alone() {
 /// The rule is the 1pt-tall rect as wide as the bar, under it. The 85pt
 /// is a golden value, as `the_bars_controls_keep_their_places` has: a
 /// deliberate change to the strip's height or to the bar's clearance
-/// re-records it.
+/// re-records it, copying `under` from the failure output.
 #[test]
 fn the_tab_strip_keeps_its_place_under_the_bar() {
     const SLACK: f32 = 0.02;
     const RECORDED: f32 = 85.0;
 
     let mut off = Vec::new();
-    for width in [320.0, 384.0, 600.0, 1024.0, 1440.0] {
+    for width in BAR_WIDTHS {
         let mut h = Harness::window(egui::vec2(width, 800.0));
         h.app.gallery.tab = 3;
         h.idle(3);
@@ -1305,10 +1318,10 @@ fn the_tab_strip_keeps_its_place_under_the_bar() {
             .into_iter()
             .map(|(shape, _)| shape.rect)
             .filter(|rect| {
-                rect.height() == 1.0
+                (rect.height() - 1.0).abs() <= SLACK
                     && rect.top() > pane.bottom()
-                    && rect.left() == pane.left()
-                    && rect.right() == pane.right()
+                    && (rect.left() - pane.left()).abs() <= SLACK
+                    && (rect.right() - pane.right()).abs() <= SLACK
             })
             .collect();
         match rules.as_slice() {
