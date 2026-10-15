@@ -58,8 +58,9 @@ struct Harness {
     /// How many passes the last frame took: one, unless the app asked
     /// egui to lay the frame out again (`request_discard`).
     passes: usize,
-    /// Every frame run so far, and how many of them took a second pass.
+    /// Every frame run so far.
     frames: usize,
+    /// How many of those frames took a second pass.
     multipass_frames: usize,
 }
 
@@ -1968,7 +1969,7 @@ fn feedback_at_its_end() -> Harness {
     );
     up(&mut h);
     assert!(
-        (h.page_offset().y - end).abs() < 0.5,
+        (h.page_offset().y - end).abs() < PIXEL_SNAP,
         "the first swipe must take the page to its end: {end} -> {}",
         h.page_offset().y
     );
@@ -1992,10 +1993,24 @@ fn feedback_marks(h: &Harness) -> [Option<f32>; 3] {
 /// at the same place, or in neither.
 fn same_marks(a: [Option<f32>; 3], b: [Option<f32>; 3]) -> bool {
     a.iter().zip(&b).all(|pair| match pair {
-        (Some(a), Some(b)) => (a - b).abs() < 0.5,
+        (Some(a), Some(b)) => (a - b).abs() < PIXEL_SNAP,
         (None, None) => true,
         _ => false,
     })
+}
+
+/// Tap the info banner's dismiss control, the topmost close glyph on the
+/// page: the finger down and up again, a frame each, and no frame after
+/// them (unlike [`dismiss_the_info_banner`], which settles and checks
+/// the restore button), so the caller reads the frames that follow.
+fn dismiss_info_banner(h: &mut Harness) {
+    let close = ui_kit::icons::Icon::Close.as_char().to_string();
+    let dismiss = h
+        .painted(&close)
+        .expect("the info banner's dismiss is on screen")
+        .center();
+    h.frame(finger_down(dismiss));
+    h.frame(finger_up(dismiss));
 }
 
 /// Dismissing the info banner at the end of the Feedback page shortens
@@ -2010,16 +2025,10 @@ fn same_marks(a: [Option<f32>; 3], b: [Option<f32>; 3]) -> bool {
 fn a_banner_dismissed_at_the_pages_end_leaves_the_page_clamped_in_its_first_frame() {
     let mut h = feedback_at_its_end();
     let before = feedback_marks(&h);
-    let close = ui_kit::icons::Icon::Close.as_char().to_string();
-    let dismiss = h
-        .painted(&close)
-        .expect("the info banner's dismiss is on screen at the page's end")
-        .center();
 
     // The tap: the banner is still drawn in the frame that releases it,
     // and the restore button joins it, so the page grows.
-    h.frame(finger_down(dismiss));
-    h.frame(finger_up(dismiss));
+    dismiss_info_banner(&mut h);
     assert_eq!(h.passes, 1, "the release grows the page and needs one pass");
 
     // The first frame with the banner gone: no input, no idle frames
@@ -2041,9 +2050,9 @@ fn a_banner_dismissed_at_the_pages_end_leaves_the_page_clamped_in_its_first_fram
     );
     assert_eq!(
         first_passes, 2,
-        "the shorter page takes a second pass; no other frame does"
+        "the first frame with the shorter page takes a second pass"
     );
-    assert_eq!(h.passes, 1, "an idle frame takes one pass");
+    assert_eq!(h.passes, 1, "an idle frame after it takes one pass");
 }
 
 /// Restoring the banners lengthens the page, so the offset it is at stays
@@ -2053,13 +2062,7 @@ fn a_banner_dismissed_at_the_pages_end_leaves_the_page_clamped_in_its_first_fram
 #[test]
 fn restoring_the_banners_needs_no_second_pass() {
     let mut h = feedback_at_its_end();
-    let close = ui_kit::icons::Icon::Close.as_char().to_string();
-    let dismiss = h
-        .painted(&close)
-        .expect("the info banner's dismiss")
-        .center();
-    h.frame(finger_down(dismiss));
-    h.frame(finger_up(dismiss));
+    dismiss_info_banner(&mut h);
     h.idle(4);
     let dismissed_at = h.page_offset().y;
     let restore = h
@@ -2086,16 +2089,20 @@ fn restoring_the_banners_needs_no_second_pass() {
         "the first frame with the banners back is the page where it settles"
     );
     assert!(
-        (h.page_offset().y - dismissed_at).abs() < 0.5,
+        (h.page_offset().y - dismissed_at).abs() < PIXEL_SNAP,
         "a longer page leaves the offset alone: {dismissed_at} -> {}",
         h.page_offset().y
     );
 }
 
-/// The second pass is for a changed page only. A reader's own scrolling
-/// of a page that does not change (a swipe past the end and the fling
-/// back, the wheel up and down) takes exactly one pass in every frame,
-/// the clamp at the end included.
+/// A reader's own scrolling of a page that does not change (a swipe past
+/// the end and the fling back, the wheel up and down) takes exactly one
+/// pass in every frame, the clamp at the end included.
+///
+/// This guards against a second pass on every scroll or clamp, not the
+/// page's height gate: on an unchanged page the stored offset is already
+/// clamped, so the gate's offset condition is never true here, and the
+/// test passes with the height comparison deleted.
 #[test]
 fn scrolling_an_unchanged_page_takes_one_pass_per_frame() {
     let mut h = Harness::window(PIXEL_PAGE);

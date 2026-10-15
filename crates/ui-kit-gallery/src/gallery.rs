@@ -161,9 +161,12 @@ const PAGE_FORWARD: &str = "gallery-page-forward";
 /// that changed height from one the reader only scrolled.
 const PAGE_HEIGHT: &str = "gallery-page-height";
 
-/// How far a content height or an offset may differ and still count as
-/// the same: half a point, under the layout's own pixel rounding.
-const PAGE_HEIGHT_TOLERANCE: f32 = 0.5;
+/// How far two content heights, or an offset and the page's furthest
+/// offset, may differ and still count as the same: half a point, the
+/// most the layout's pixel snap moves an edge at one device pixel per
+/// point (at 3x a pixel is a third of a point and the snap is finer).
+/// `page` uses it for both comparisons.
+const PAGE_PIXEL_SNAP: f32 = 0.5;
 
 /// One drag gesture on a sideways row: the axis it picked (`true` for
 /// vertical), `None` until its travel passes [`AXIS_LOCK_DISTANCE`].
@@ -2861,19 +2864,23 @@ impl Gallery {
     /// the finger with the kinetic fling on release. The output's
     /// `content_size` is the panel's laid-out extent.
     ///
-    /// A panel that grows or shrinks (a banner dismissed or restored,
-    /// the window resized) is laid out again in the same frame when it
-    /// ends up shorter than the offset the frame began at. egui places
-    /// the content at the offset it stored and clamps that offset only
-    /// after the content is placed, so the first frame with the shorter
-    /// panel would be painted over-scrolled: the top of the panel under
-    /// the tab strip and blank space below it. egui does follow that frame
-    /// with one that paints the clamped page, but the Pixel was seen
-    /// keeping the over-scrolled one on screen (finding 3-A9), so the
-    /// frame is made right by itself: its second pass begins at the
-    /// clamped offset, and only that pass reaches the screen. Only a
-    /// changed height asks for it: a reader's own scrolling, the clamp at
-    /// the page's end included, takes one pass.
+    /// When the content height changes, the frame is laid out again in
+    /// the same frame if the panel ends up shorter than the offset the
+    /// frame began at (a banner dismissed at the page's end). The gate
+    /// compares the content height only: a restore lengthens the page and
+    /// never fires it, and a change of the viewport that leaves the
+    /// content height alone (a rotation, the keyboard) is not covered.
+    ///
+    /// egui places the content at the offset it stored and clamps that
+    /// offset only after the content is placed, so the first frame with
+    /// the shorter panel would be painted over-scrolled: the top of the
+    /// panel under the tab strip and blank space below it. egui does
+    /// follow that frame with one that paints the clamped page, but the
+    /// Pixel was seen keeping the over-scrolled one on screen (finding
+    /// 3-A9), so the frame is made right by itself: its second pass
+    /// begins at the clamped offset, and only that pass reaches the
+    /// screen. Only a changed height asks for it: a reader's own
+    /// scrolling, the clamp at the page's end included, takes one pass.
     fn page(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
         let ctx = ui.ctx().clone();
         let salt = page_scroll_salt(self.tab);
@@ -2889,12 +2896,16 @@ impl Gallery {
                 drag: drag_scroll(),
                 ..ScrollSource::default()
             });
+        // Loaded on every frame, not only when a row forwards a drag:
+        // `began_at` below needs the stored offset each time.
         let stored =
             egui::scroll_area::State::load(&ctx, page_id).map_or(0.0, |state| state.offset.y);
         if forwarded != 0.0 {
             area = area.vertical_scroll_offset(stored + forwarded);
         }
-        // The offset the area lays the content out at this frame.
+        // The offset stored when the frame began. egui applies a drag's
+        // and a fling's deltas inside `begin`, after the load above, so
+        // the area may lay the content out a little away from it.
         let began_at = stored + forwarded;
         let page = area.show(ui, |ui| {
             match self.tab {
@@ -2908,14 +2919,20 @@ impl Gallery {
 
         let height = page.content_size.y;
         let height_id = page_id.with(PAGE_HEIGHT);
+        // The new height is stored on every pass, the one that asks for
+        // the discard included, so the second pass reads `previous ==
+        // height`, the gate stays shut and the frame discards once. The
+        // offset test shuts it as well (the first pass stored the clamped
+        // offset); a store skipped on the discard path would leave that
+        // test as the only guard.
         let previous = ctx.data_mut(|d| {
             let previous = d.get_temp::<f32>(height_id);
             d.insert_temp(height_id, height);
             previous
         });
         let furthest = (height - page.inner_rect.height()).max(0.0);
-        if previous.is_some_and(|previous| (previous - height).abs() > PAGE_HEIGHT_TOLERANCE)
-            && began_at > furthest + PAGE_HEIGHT_TOLERANCE
+        if previous.is_some_and(|previous| (previous - height).abs() > PAGE_PIXEL_SNAP)
+            && began_at > furthest + PAGE_PIXEL_SNAP
         {
             ctx.request_discard("the page is shorter than the offset it was laid out at");
         }
