@@ -35,8 +35,10 @@ use crate::typography::{
     body_semibold_family, specimen_job, tracked_text, TrackedLabel, TypeStyle,
 };
 
-/// The theme card's content width (the card's own padding rides on
-/// top; three cards and their gutters fit the gallery's page).
+/// The theme card's content width where cards share a line (the card's
+/// own padding rides on top; three cards and their gutters fit the
+/// gallery's page). Under the compact breakpoint the cards stack and each
+/// takes the whole column instead (`brand_showcase::card_width`).
 pub const CARD_WIDTH: f32 = 264.0;
 
 /// The roles the swatch grid and the ratio bar paint, resolved from
@@ -313,7 +315,9 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
     let card_theme = copy.theme;
     let colors = card_theme.colors();
     Card::new().compact().ui(ui, card_theme, flags, |ui| {
-        ui.set_min_width(CARD_WIDTH);
+        // The cell's width less the card's padding: `CARD_WIDTH` where
+        // the cards share a line, the column's on a phone.
+        ui.set_min_width(ui.available_width());
 
         // The mark in this theme's primary, the id pill beside it.
         ui.horizontal(|ui| {
@@ -404,8 +408,10 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
 
         // The ratio bar, bordered, and its legend.
         ui.add_space(spacing::SPACE_1);
-        let (bar, _) =
-            ui.allocate_exact_size(Vec2::new(CARD_WIDTH, spacing::SPACE_4), Sense::hover());
+        let (bar, _) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), spacing::SPACE_4),
+            Sense::hover(),
+        );
         let total: u32 = copy.ratio.iter().map(|(share, _)| share).sum();
         let mut x = bar.left();
         for &(share, role) in copy.ratio {
@@ -442,7 +448,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             .filled()
             .compact()
             .ui(ui, card_theme, flags, |ui| {
-                ui.set_min_width(CARD_WIDTH - spacing::SPACE_8);
+                ui.set_min_width(ui.available_width());
                 ui.add(egui::Label::new(tracked_text(
                     SPECIMEN_LINE,
                     FontId {
