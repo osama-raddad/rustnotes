@@ -20,7 +20,10 @@
 //! anti-patterns, exempt from the vocabulary discipline by design
 //! while still passing the punctuation checks.
 
-use egui::{Color32, CornerRadius, FontId, Response, Sense, Ui, Vec2};
+use std::borrow::Cow;
+use std::sync::Arc;
+
+use egui::{Color32, CornerRadius, FontId, Galley, Painter, Response, Sense, Ui, Vec2};
 
 use crate::components::card::{Card, CardPadding};
 use crate::icon::{family_for_theme, icon, IconSize};
@@ -662,25 +665,72 @@ fn photo_tile(ui: &mut Ui, theme: ThemeId, ground: PhotoGround, caption: &str, s
         },
         ink,
     );
-    ui.painter().text(
-        rect.left_bottom() + Vec2::new(spacing::SPACE_3, -spacing::SPACE_3),
-        egui::Align2::LEFT_BOTTOM,
-        caption,
-        FontId {
-            size: type_scale::TEXT_CAPTION,
-            family: TypeStyle::Body.family(theme),
-        },
-        ink,
-    );
+    // The caption wraps inside the tile, the tile's inset kept on both
+    // sides, and hangs from the bottom inset so its last line sits where
+    // the one-line caption did.
+    let font = FontId {
+        size: type_scale::TEXT_CAPTION,
+        family: TypeStyle::Body.family(theme),
+    };
+    let max_width = size.x - 2.0 * spacing::SPACE_3;
+    let galley = caption_galley(ui.painter(), caption, font, ink, max_width);
+    let corner = rect.left_bottom() + Vec2::new(spacing::SPACE_3, -spacing::SPACE_3);
+    let at = egui::Align2::LEFT_BOTTOM.anchor_size(corner, galley.size());
+    ui.painter().galley(at.min, galley, ink);
+}
+
+/// `caption` in `font` laid out to wrap within `max_width`. egui breaks
+/// a word wider than the line mid-word onto the next row, so such a
+/// word is cut short with an ellipsis first and the rest of the caption
+/// kept: every word then fits, the wrap only ever falls between words,
+/// and no row runs past `max_width`.
+fn caption_galley(
+    painter: &Painter,
+    caption: &str,
+    font: FontId,
+    ink: Color32,
+    max_width: f32,
+) -> Arc<Galley> {
+    let fits = |text: &str| {
+        painter
+            .layout_no_wrap(text.to_owned(), font.clone(), ink)
+            .size()
+            .x
+            <= max_width
+    };
+    let fitted: Vec<Cow<str>> = caption
+        .split(' ')
+        .map(|word| {
+            if fits(word) {
+                Cow::Borrowed(word)
+            } else {
+                Cow::Owned(ellipsize(word, fits))
+            }
+        })
+        .collect();
+    painter.layout(fitted.join(" "), font, ink, max_width)
+}
+
+/// `word` cut from its end until what is left and an ellipsis `fits`,
+/// at least one letter kept.
+fn ellipsize(word: &str, fits: impl Fn(&str) -> bool) -> String {
+    let ends: Vec<usize> = word.char_indices().map(|(at, _)| at).skip(1).collect();
+    let cut = |end: usize| format!("{}\u{2026}", &word[..end]);
+    ends.iter()
+        .rev()
+        .map(|&end| cut(end))
+        .find(|cut| fits(cut))
+        .or_else(|| ends.first().map(|&end| cut(end)))
+        .unwrap_or_else(|| word.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         copy_passes_voice_checks, PhotoGround, HEADLINES_HEADING, HEADLINE_MODES, PHOTO_HEADING,
-        PHOTO_INTRO, PHOTO_NOTE, PHOTO_TILES, PRINCIPLE_BODY, PRINCIPLE_EYEBROW,
-        PRINCIPLE_HEADLINE, PRINCIPLE_NUMERAL, SECTION_EYEBROW, VOICE_HEADING, VOICE_INTRO,
-        VOICE_POSITIONS,
+        PHOTO_INTRO, PHOTO_NOTE, PHOTO_TILES, PHOTO_TILE_SMALL, PHOTO_TILE_WIDE, PRINCIPLE_BODY,
+        PRINCIPLE_EYEBROW, PRINCIPLE_HEADLINE, PRINCIPLE_NUMERAL, SECTION_EYEBROW, VOICE_HEADING,
+        VOICE_INTRO, VOICE_POSITIONS,
     };
     use crate::icon::IconSize;
     use crate::icons::Icon;
@@ -888,6 +938,130 @@ mod tests {
                     "at {width}pt the {glyph:?} icon sits {gap}pt from {label:?}, not {inner}pt"
                 );
             }
+        }
+    }
+
+    /// Lay the five photo tiles out headless in `theme`, each at the
+    /// size the showcase gives it (the lead tile wide, the other four
+    /// small), and hand back every tile's rect beside the texts the
+    /// layout painted.
+    fn lay_out_photo_tiles(theme: ThemeId) -> (Vec<egui::Rect>, Vec<(String, egui::Rect)>) {
+        let mut tiles = Vec::new();
+        let (_, painted) = super::lay_out(PHOTO_TILE_WIDE.x, |ui| {
+            tiles.clear();
+            for (index, (ground, caption)) in PHOTO_TILES.iter().enumerate() {
+                let size = if index == 0 {
+                    PHOTO_TILE_WIDE
+                } else {
+                    PHOTO_TILE_SMALL
+                };
+                let tile = ui
+                    .scope(|ui| super::photo_tile(ui, theme, *ground, caption, size))
+                    .response
+                    .rect;
+                assert_eq!(tile.size(), size, "the scope is the tile and nothing else");
+                tiles.push(tile);
+            }
+        });
+        (tiles, painted)
+    }
+
+    /// The rect the painted text `text` covers; a text the layout never
+    /// painted panics.
+    fn painted_rect(painted: &[(String, egui::Rect)], text: &str) -> egui::Rect {
+        painted
+            .iter()
+            .find(|(seen, _)| seen == text)
+            .map(|(_, rect)| *rect)
+            .unwrap_or_else(|| panic!("{text:?} was never painted"))
+    }
+
+    /// Every photo tile's caption stays inside its tile, at the size the
+    /// showcase gives the tile and in every theme's face. The small
+    /// 160pt tiles' captions are wider than the tile on one line; they
+    /// wrap onto more lines instead of running on past its edge. Each
+    /// caption is painted whole (a caption cut short would not be found
+    /// under its own text), keeps the tile's left and bottom inset it
+    /// always had, and the lines the wrap adds, which grow upward from
+    /// that inset, stop short of the camera glyph above them.
+    #[test]
+    fn photo_captions_stay_inside_their_tiles() {
+        let camera = Icon::PhotoCamera.as_char().to_string();
+        let mut problems = Vec::new();
+        for theme in ThemeId::ALL {
+            let (tiles, painted) = lay_out_photo_tiles(*theme);
+            for ((_, caption), tile) in PHOTO_TILES.iter().zip(&tiles) {
+                let text = painted_rect(&painted, caption);
+                if !tile.expand(0.01).contains_rect(text) {
+                    problems.push(format!(
+                        "{theme:?}: {caption:?} paints {text:?}, outside its {tile:?} tile"
+                    ));
+                }
+                let (left, bottom) = (text.left() - tile.left(), tile.bottom() - text.bottom());
+                if (left - spacing::SPACE_3).abs() > 0.01
+                    || (bottom - spacing::SPACE_3).abs() > 0.01
+                {
+                    problems.push(format!(
+                        "{theme:?}: {caption:?} sits {left}pt from the tile's left and {bottom}pt \
+                         from its bottom, not {}pt",
+                        spacing::SPACE_3
+                    ));
+                }
+                let glyph = painted
+                    .iter()
+                    .filter(|(seen, _)| *seen == camera)
+                    .map(|(_, rect)| *rect)
+                    .find(|rect| tile.contains(rect.center()))
+                    .unwrap_or_else(|| panic!("{theme:?}: no camera glyph in the {tile:?} tile"));
+                if glyph.bottom() > text.top() + 0.01 {
+                    problems.push(format!(
+                        "{theme:?}: {caption:?} (top {}) runs up into the camera glyph (bottom {})",
+                        text.top(),
+                        glyph.bottom()
+                    ));
+                }
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    /// A word wider than the tile is the one thing wrapping cannot fit:
+    /// it is cut short with an ellipsis, the rest of the caption kept,
+    /// and still nothing paints outside the tile.
+    #[test]
+    fn photo_caption_word_wider_than_the_tile_ends_in_an_ellipsis() {
+        const WORD: &str = "Antidisestablishmentarianism";
+        let caption = format!("{WORD} · Lundby");
+        for theme in ThemeId::ALL {
+            let mut tile = egui::Rect::NOTHING;
+            let (_, painted) = super::lay_out(PHOTO_TILE_SMALL.x, |ui| {
+                tile = ui
+                    .scope(|ui| {
+                        super::photo_tile(
+                            ui,
+                            *theme,
+                            PhotoGround::SecondaryContainer,
+                            &caption,
+                            PHOTO_TILE_SMALL,
+                        )
+                    })
+                    .response
+                    .rect;
+            });
+            let cut: Vec<_> = painted
+                .iter()
+                .filter(|(seen, _)| seen.contains('\u{2026}'))
+                .collect();
+            assert_eq!(cut.len(), 1, "{theme:?}: one caption, one ellipsis");
+            let (text, rect) = cut[0];
+            assert!(
+                text.starts_with("Anti") && text.ends_with("\u{2026} · Lundby"),
+                "{theme:?}: only the over-wide word is cut, got {text:?}"
+            );
+            assert!(
+                tile.expand(0.01).contains_rect(*rect),
+                "{theme:?}: {text:?} paints {rect:?}, outside its {tile:?} tile"
+            );
         }
     }
 
