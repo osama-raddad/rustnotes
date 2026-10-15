@@ -1275,8 +1275,14 @@ mod tests {
     /// A Pixel in landscape, with its camera cutout reported as a 53 pt inset
     /// on the left and nothing on the right. The emulator's 2992 x 1344 px at
     /// 3 px per pt is 997.3 x 448 pt; 998 keeps the centred body on whole
-    /// points, where a half point would paint a pixel off on one side.
+    /// points, where a half point would paint a pixel off on one side. At 997
+    /// the margins of the note card in `landscape_mirrors_a_left_only_inset`
+    /// differ by a rounding step (191 and 190 pt), and its `near` check fails.
     const PIXEL_LANDSCAPE: (f32, f32) = (998.0, 448.0);
+    /// The left inset the Pixel reports for its cutout, in points: the margin
+    /// each side must keep, and the width `margin_strays` inspects. The window
+    /// is 998 pt wide, not 997, so the centred body stays on whole points; at
+    /// 997 `landscape_mirrors_a_left_only_inset` would fail on the note card.
     const CUTOUT: f32 = 53.0;
 
     fn cutout_on_the_left() -> egui::epaint::MarginF32 {
@@ -1323,6 +1329,8 @@ mod tests {
                 f.fill == pal.surface
                     && f.rect.top() > 0.0
                     && f.rect.bottom() < h
+                    // A card is wide; a small fill of the same colour (an
+                    // icon, a handle) is not the card.
                     && f.rect.width() > 100.0
             }),
         );
@@ -1365,8 +1373,10 @@ mod tests {
                     ));
                 }
             }
-            // The bar rows and the body between them.
-            for y in [28.0, h / 2.0, h - 28.0] {
+            // The bar rows (through the middle of each bar) and the body
+            // between them.
+            let mid_bar = Metrics::DEFAULT.bar_height / 2.0;
+            for y in [mid_bar, h / 2.0, h - mid_bar] {
                 let seen = pass.colour_at(pos2(area.center().x, y));
                 if seen != Some(canvas) {
                     strays.push(format!("{side} margin at y={y}: shows {seen:?}"));

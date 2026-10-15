@@ -72,7 +72,9 @@ type Slot<'a> = Option<Box<dyn FnOnce(&mut Ui) + 'a>>;
 /// the body's corner. Its horizontal insets are mirrored first (the larger
 /// of the left and right insets on both sides), so a cutout on one side of
 /// a landscape phone leaves the layout centred; the margins beside it are
-/// the canvas the scaffold paints behind everything.
+/// the canvas the scaffold paints behind everything. Unlike the vertical
+/// strips, the bars stop at the mirrored rect; the side margins are canvas,
+/// not bar colour.
 pub struct Scaffold<'a> {
     pal: &'a Palette,
     m: &'a Metrics,
@@ -141,9 +143,10 @@ impl<'a> Scaffold<'a> {
         // cutout on one side of a landscape phone would otherwise push the
         // bars and the body to the other side, so both sides keep `side`, the
         // larger of the two. The margin it leaves beside a bar or the body
-        // is the canvas painted behind them. Capped at half the window, so a
-        // window narrower than its two gutters has an empty body rather than
-        // an inverted one.
+        // is the canvas painted behind them. Unlike the vertical strips, the
+        // bars stop at the mirrored rect; the side margins are canvas, not
+        // bar colour. Capped at half the window, so a window narrower than
+        // its two gutters has an empty body rather than an inverted one.
         let side = (content.min.x - viewport.min.x)
             .max(viewport.max.x - content.max.x)
             .min(viewport.width() / 2.0);
@@ -352,16 +355,14 @@ mod tests {
         let r = run(raw_sides(vec2(60.0, 400.0), 53.0, 0.0, 0.0, 0.0), |root| {
             Scaffold::new(&pal, &m)
                 .top_bar(|_| {})
-                .fab(|_| {})
                 .show(root, |_, _| {})
         });
         let bar = r.top_bar.expect("top bar");
-        for rect in [r.body, bar] {
-            assert!(
-                rect.width() >= 0.0 && rect.height() >= 0.0,
-                "not inverted: {rect:?}"
-            );
-        }
+        // Both gutters are capped at half the 60 pt window: 30 pt each, so
+        // the content rect is empty, not inverted.
+        assert_eq!(r.body.width(), 0.0, "an empty body: {:?}", r.body);
+        assert_eq!(bar.width(), 0.0, "an empty bar: {bar:?}");
+        assert!(r.body.height() >= 0.0 && bar.height() >= 0.0);
     }
 
     /// `limit_body_width` centers the capped body in a wide window.
