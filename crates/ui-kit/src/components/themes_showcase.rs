@@ -317,7 +317,8 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
     Card::new().compact().ui(ui, card_theme, flags, |ui| {
         // The cell's width less the card's padding: `CARD_WIDTH` where
         // the cards share a line, the column's on a phone.
-        ui.set_min_width(ui.available_width());
+        let inner = ui.available_width();
+        ui.set_min_width(inner);
 
         // The mark in this theme's primary, the id pill beside it.
         ui.horizontal(|ui| {
@@ -342,7 +343,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                             0.0,
                             None,
                             colors.text_muted(),
-                            Some(CARD_WIDTH - spacing::SPACE_8),
+                            Some(inner),
                         )));
                     });
             });
@@ -359,7 +360,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             Some(type_scale::TEXT_BODY_LG * 1.25),
             colors.text_body(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            Some(inner),
         )));
         ui.add(egui::Label::new(tracked_text(
             copy.character,
@@ -370,7 +371,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             Some(20.0),
             colors.text_muted(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            Some(inner),
         )));
 
         // The anchor swatches, one a row with its mono label beside:
@@ -399,7 +400,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                         0.0,
                         None,
                         colors.text_muted(),
-                        Some(CARD_WIDTH - spacing::SPACE_8),
+                        Some(inner),
                     )));
                     ui.add_space(spacing::SPACE_3);
                 }
@@ -438,7 +439,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             None,
             colors.text_muted(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            Some(inner),
         )));
 
         // The display specimen in this theme's own faces, on a small
@@ -448,7 +449,8 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             .filled()
             .compact()
             .ui(ui, card_theme, flags, |ui| {
-                ui.set_min_width(ui.available_width());
+                let specimen = ui.available_width();
+                ui.set_min_width(specimen);
                 ui.add(egui::Label::new(tracked_text(
                     SPECIMEN_LINE,
                     FontId {
@@ -458,7 +460,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                     -0.01,
                     Some(26.0),
                     colors.text_display(),
-                    Some(CARD_WIDTH - spacing::SPACE_8),
+                    Some(specimen),
                 )));
                 ui.add(egui::Label::new(tracked_text(
                     copy.faces,
@@ -469,7 +471,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                     0.0,
                     None,
                     colors.text_muted(),
-                    Some(CARD_WIDTH - spacing::SPACE_8),
+                    Some(specimen),
                 )));
             });
 

@@ -49,8 +49,8 @@ pub const MODE_TILE_WIDTH: f32 = 380.0;
 pub const PHOTO_TILE_WIDE: Vec2 = Vec2::new(300.0, 220.0);
 
 /// The small photo tiles' size in the desktop composition. On a phone
-/// only its height holds, and its width is the least a tile is given
-/// (`small_tile_row`).
+/// only its height holds: the tiles stack one to a row and each takes the
+/// column's width.
 pub const PHOTO_TILE_SMALL: Vec2 = Vec2::new(160.0, 104.0);
 
 // ---- the voice checks -----------------------------------------------------
@@ -130,25 +130,12 @@ pub(crate) fn card_rows<T>(
     gap: f32,
     max: usize,
     items: &[T],
-    card: impl FnMut(&mut Ui, &T),
-) {
-    let available = ui.available_width();
-    let per_row = card_columns(available, width, gap, max);
-    cell_rows(ui, per_row, card_width(available, width), gap, items, card);
-}
-
-/// Lay `items` out in rows of `per_row` cells, each cell `width` wide,
-/// `gap` apart and `gap` between the rows: the rows [`card_rows`] breaks
-/// its cards into, once it has decided how many fit and how wide each is.
-fn cell_rows<T>(
-    ui: &mut Ui,
-    per_row: usize,
-    width: f32,
-    gap: f32,
-    items: &[T],
-    mut cell: impl FnMut(&mut Ui, &T),
+    mut card: impl FnMut(&mut Ui, &T),
 ) {
     let inner = ui.spacing().item_spacing;
+    let available = ui.available_width();
+    let per_row = card_columns(available, width, gap, max);
+    let width = card_width(available, width);
     for (index, row) in items.chunks(per_row).enumerate() {
         if index > 0 {
             // The item spacing already rides after the row above.
@@ -162,27 +149,12 @@ fn cell_rows<T>(
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.spacing_mut().item_spacing = inner;
-                        cell(ui, item);
+                        card(ui, item);
                     },
                 );
             }
         });
     }
-}
-
-/// How the small photo tiles share a phone's column: how many sit in a
-/// row and how wide each is. As many as fit at [`PHOTO_TILE_SMALL`]'s
-/// width, up to the two the desktop composition has across, and the
-/// column divided among them, so a row runs edge to edge and no tile is
-/// narrower than the small tile was. Pure geometry, so it tests without
-/// a context.
-pub(crate) fn small_tile_row(available: f32, gap: f32) -> (usize, f32) {
-    let fit = ((available + gap) / (PHOTO_TILE_SMALL.x + gap)).floor();
-    let per_row = (fit as usize).clamp(1, 2);
-    (
-        per_row,
-        (available - gap * (per_row - 1) as f32) / per_row as f32,
-    )
 }
 
 /// Lay a showcase out headless in a column `width` wide, every theme's
@@ -531,7 +503,8 @@ impl BrandShowcase {
             VOICE_POSITIONS,
             |ui, (label, register, example)| {
                 Card::new().filled().compact().ui(ui, theme, flags, |ui| {
-                    ui.set_min_width(ui.available_width());
+                    let inner = ui.available_width();
+                    ui.set_min_width(inner);
                     // The indicator rule across the card's top, the
                     // preview's 2px border-top.
                     let (rule, _) = ui
@@ -555,7 +528,7 @@ impl BrandShowcase {
                         -0.01,
                         Some(26.0),
                         colors.text_display(),
-                        Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+                        Some(inner),
                     )));
                     ui.add_space(spacing::SPACE_1);
                     ui.add(egui::Label::new(specimen_job(
@@ -563,7 +536,7 @@ impl BrandShowcase {
                         TypeStyle::Caption,
                         theme,
                         colors.text_body(),
-                        Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+                        Some(inner),
                     )));
                 });
             },
@@ -604,7 +577,8 @@ impl BrandShowcase {
                     .corner_radius(radii::RADIUS_MD as u8)
                     .inner_margin(spacing::SPACE_4)
                     .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
+                        let inner = ui.available_width();
+                        ui.set_min_width(inner);
                         ui.horizontal(|ui| {
                             icon(ui, glyph, IconSize::Sm, ink);
                             ui.add_space(spacing::SPACE_2);
@@ -631,7 +605,7 @@ impl BrandShowcase {
                             -0.01,
                             Some(24.0),
                             ink,
-                            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+                            Some(inner),
                         )));
                     });
             },
@@ -652,46 +626,19 @@ impl BrandShowcase {
         ui.add_space(spacing::SPACE_2);
         let (lead_ground, lead_caption) = PHOTO_TILES[0];
         // The lead tile beside the two-by-two where that composition
-        // fits; on a phone the lead tile leads at the column's width and
-        // the small tiles follow, two to a row where two fit, each row
-        // dividing the column between them (only the widths flex, the
-        // tiles' heights stay); wherever the composition would not fit
-        // above a phone, the lead tile leads at its own size and the
-        // small tiles follow in rows of what fits. The composition's
-        // footprint is the lead tile and two small ones across, each
-        // followed by its gap: the row's item spacing and the 12px
-        // space.
+        // fits; on a phone, and wherever it would not, the lead tile leads
+        // and the small tiles follow in rows of what fits, one to a row
+        // under the compact breakpoint. Under it every tile takes the
+        // column's width at its own height (`card_width`, as the cards
+        // do). The composition's footprint is the lead tile and two small
+        // ones across, each followed by its gap: the row's item spacing
+        // and the 12px space.
         let gap = spacing::SPACE_3 + ui.spacing().item_spacing.x;
         let composition = PHOTO_TILE_WIDE.x + 2.0 * PHOTO_TILE_SMALL.x + 3.0 * gap;
         let available = ui.available_width();
-        if available < breakpoints::BREAKPOINT_TABLET {
-            photo_tile(
-                ui,
-                theme,
-                lead_ground,
-                lead_caption,
-                Vec2::new(available, PHOTO_TILE_WIDE.y),
-            );
-            ui.add_space(spacing::SPACE_3);
-            let (per_row, width) = small_tile_row(available, spacing::SPACE_3);
-            cell_rows(
-                ui,
-                per_row,
-                width,
-                spacing::SPACE_3,
-                &PHOTO_TILES[1..],
-                |ui, (ground, caption)| {
-                    photo_tile(
-                        ui,
-                        theme,
-                        *ground,
-                        caption,
-                        Vec2::new(width, PHOTO_TILE_SMALL.y),
-                    )
-                },
-            );
-        } else if available < composition {
-            photo_tile(ui, theme, lead_ground, lead_caption, PHOTO_TILE_WIDE);
+        if available < breakpoints::BREAKPOINT_TABLET || available < composition {
+            let lead = Vec2::new(card_width(available, PHOTO_TILE_WIDE.x), PHOTO_TILE_WIDE.y);
+            photo_tile(ui, theme, lead_ground, lead_caption, lead);
             ui.add_space(spacing::SPACE_3);
             card_rows(
                 ui,
@@ -699,7 +646,12 @@ impl BrandShowcase {
                 spacing::SPACE_3,
                 2,
                 &PHOTO_TILES[1..],
-                |ui, (ground, caption)| photo_tile(ui, theme, *ground, caption, PHOTO_TILE_SMALL),
+                |ui, (ground, caption)| {
+                    // The cell's width: the small tile's, or the column's
+                    // on a phone.
+                    let size = Vec2::new(ui.available_width(), PHOTO_TILE_SMALL.y);
+                    photo_tile(ui, theme, *ground, caption, size)
+                },
             );
         } else {
             ui.horizontal(|ui| {
@@ -1174,32 +1126,6 @@ mod tests {
                 card_width(available, fixed),
                 fixed,
                 "a {available}pt column keeps the card at {fixed}pt"
-            );
-        }
-    }
-
-    /// The small photo tiles divide a phone's column between them: two to
-    /// a row where two of the least width fit, one where they do not, and
-    /// the tiles of a row plus the gaps between them are the column. No
-    /// tile is narrower than the small tile was.
-    #[test]
-    fn small_photo_tiles_divide_the_column_and_keep_their_least_width() {
-        use super::small_tile_row;
-
-        let gap = spacing::SPACE_3;
-        for (available, per_row) in [(288.0, 1), (331.0, 1), (332.0, 2), (352.0, 2), (599.0, 2)] {
-            let (count, width) = small_tile_row(available, gap);
-            assert_eq!(count, per_row, "tiles per row in {available}pt");
-            assert!(
-                width >= PHOTO_TILE_SMALL.x,
-                "a tile in {available}pt is {width}pt, under {}pt",
-                PHOTO_TILE_SMALL.x
-            );
-            let row = width * count as f32 + gap * (count - 1) as f32;
-            assert!(
-                (row - available).abs() < 1e-3,
-                "{count} tiles of {width}pt and their gaps are {row}pt, not the column's \
-                 {available}pt"
             );
         }
     }

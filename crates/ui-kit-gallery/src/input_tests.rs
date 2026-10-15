@@ -3309,69 +3309,68 @@ fn the_components_page_keeps_its_right_gutter_at_every_phone_width() {
 }
 
 /// One group of cards on the Brand page, as the harness read them off a
-/// frame: the rect each card painted.
+/// frame, with what it was laid out at before the cards filled the column.
 struct BrandGroup {
     name: &'static str,
+    /// The rect each card painted.
     cards: Vec<egui::Rect>,
+    /// The paragraph each card wraps to its width, as painted (none for
+    /// the photo tiles, whose captions wrap inside the tile).
+    paragraphs: Vec<egui::Rect>,
+    /// Each card's width where cards share a line: the width the card was
+    /// sized by, its padding on both sides included.
+    shared_width: f32,
+    /// The wrap width the cards' sizing constants name for their text:
+    /// narrower than the card's inner width, and not the width the text
+    /// wraps to (see `the_brand_card_text_wraps_to_the_card_on_a_phone`).
+    shared_wrap: f32,
+    /// The card's padding at each side.
+    padding: f32,
+    /// The card's height where it is a fixed one (the photo tiles).
+    height: Option<f32>,
 }
 
-/// The card around the painted `anchor` text: the smallest rect shape of
-/// `fill` (a plain fill, not a shadow's blur) that holds the text. The
-/// anchor is a string only that card paints, so the rect found is the
-/// card's own frame.
+/// The card and the paragraph around the painted `anchor` text: the text's
+/// rect, and the smallest rect shape of `fill` (a plain fill, not a
+/// shadow's blur) that holds it. The anchor is a string only that card
+/// paints, so the rect found is the card's own frame.
 fn card_around(
     rects: &[(egui::epaint::RectShape, egui::Rect)],
     texts: &[(String, egui::Rect, egui::Rect)],
     anchor: &str,
     fill: egui::Color32,
-) -> egui::Rect {
+) -> (egui::Rect, egui::Rect) {
     let text = texts
         .iter()
         .find(|(painted, _, _)| painted == anchor)
         .unwrap_or_else(|| panic!("the Brand page never painted {anchor:?}"))
         .1;
-    rects
+    let card = rects
         .iter()
         .filter(|(shape, _)| {
             shape.fill == fill && shape.blur_width == 0.0 && shape.rect.contains_rect(text)
         })
         .map(|(shape, _)| shape.rect)
         .min_by(|a, b| a.area().total_cmp(&b.area()))
-        .unwrap_or_else(|| panic!("no rect of {fill:?} holds {anchor:?} at {text:?}"))
-}
-
-/// The rows a group's cards sit in: the cards sharing a top edge (to
-/// half a point) are one row, and a row is the union of its cards.
-fn card_rows_of(cards: &[egui::Rect]) -> Vec<egui::Rect> {
-    let mut sorted = cards.to_vec();
-    sorted.sort_by(|a, b| a.top().total_cmp(&b.top()));
-    let mut rows: Vec<egui::Rect> = Vec::new();
-    for card in sorted {
-        match rows.last_mut() {
-            Some(row) if (row.top() - card.top()).abs() < 0.5 => *row = row.union(card),
-            _ => rows.push(card),
-        }
-    }
-    rows
+        .unwrap_or_else(|| panic!("no rect of {fill:?} holds {anchor:?} at {text:?}"));
+    (card, text)
 }
 
 /// Lay the Brand page out in a window `width` wide and tall enough to
 /// show all of it, and read each group of cards off the frame: the theme
 /// cards, the voice cards, the photo tiles (the lead Volvo tile on its
 /// own, and the four small ones) and the Do and Don't cards, the control
-/// that already filled the column. The column is the page's inner rect
-/// (`Gallery::page_rect`), the same one the Components gutter tests hold.
-///
-/// Every row of every group must run from the column's left edge to its
-/// right edge, to within a point. The report has a line for each group,
-/// with the fraction of the column its rows take, and the leftmost row's
-/// left edge against the column's; the first of each pair says whether
-/// the group fills the column.
-fn brand_column_report(width: f32) -> Vec<(bool, String)> {
-    use ui_kit::components::brand_showcase::{HEADLINE_MODES, PHOTO_TILES, VOICE_POSITIONS};
-    use ui_kit::components::themes_showcase::CARDS;
+/// that already filled the column. Hands back the column, the page's inner
+/// rect (`Gallery::page_rect`, the one the Components gutter tests hold),
+/// and the groups.
+fn brand_groups(width: f32) -> (egui::Rect, Vec<BrandGroup>) {
+    use ui_kit::components::brand_showcase::{
+        HEADLINE_MODES, MODE_TILE_WIDTH, PHOTO_TILES, PHOTO_TILE_SMALL, PHOTO_TILE_WIDE,
+        VOICE_CARD_WIDTH, VOICE_POSITIONS,
+    };
+    use ui_kit::components::themes_showcase::{CARDS, CARD_WIDTH};
+    use ui_kit::tokens::spacing::{SPACE_4, SPACE_8};
 
-    const SLACK: f32 = 1.0;
     let mut h = Harness::window(egui::vec2(width, 9000.0));
     h.app.gallery.tab = 0;
     h.idle(6);
@@ -3380,77 +3379,129 @@ fn brand_column_report(width: f32) -> Vec<(bool, String)> {
         .gallery
         .page_rect
         .expect("the chrome has shown the page");
-    let theme = h.app.gallery.theme;
-    let colors = theme.colors();
+    let colors = h.app.gallery.theme.colors();
     let rects = painted_rects(&h);
     let texts = painted_text(&h);
     let find = |anchor: &str, fill| card_around(&rects, &texts, anchor, fill);
+    let split = |found: Vec<(egui::Rect, egui::Rect)>| -> (Vec<_>, Vec<_>) {
+        (
+            found.iter().map(|(card, _)| *card).collect(),
+            found.iter().map(|(_, text)| *text).collect(),
+        )
+    };
 
-    let groups = [
+    let (theme_cards, theme_text) = split(
+        CARDS
+            .iter()
+            .map(|card| find(card.character, card.theme.colors().surface_container_low))
+            .collect(),
+    );
+    let (voice_cards, voice_text) = split(
+        VOICE_POSITIONS
+            .iter()
+            .map(|(_, _, example)| find(example, colors.surface_container))
+            .collect(),
+    );
+    let (mode_cards, mode_text) = split(
+        HEADLINE_MODES
+            .iter()
+            .map(|(label, example)| {
+                let fill = if label.starts_with("Do ·") {
+                    colors.success_container
+                } else {
+                    colors.error_container
+                };
+                find(example, fill)
+            })
+            .collect(),
+    );
+    let tile = |index: usize| find(PHOTO_TILES[index].1, PHOTO_TILES[index].0.pair(&colors).0).0;
+
+    let groups = vec![
         BrandGroup {
             name: "theme cards",
-            cards: CARDS
-                .iter()
-                .map(|card| find(card.character, card.theme.colors().surface_container_low))
-                .collect(),
+            cards: theme_cards,
+            paragraphs: theme_text,
+            shared_width: CARD_WIDTH + 2.0 * SPACE_4,
+            shared_wrap: CARD_WIDTH - SPACE_8,
+            padding: SPACE_4,
+            height: None,
         },
         BrandGroup {
             name: "voice cards",
-            cards: VOICE_POSITIONS
-                .iter()
-                .map(|(_, _, example)| find(example, colors.surface_container))
-                .collect(),
+            cards: voice_cards,
+            paragraphs: voice_text,
+            shared_width: VOICE_CARD_WIDTH + 2.0 * SPACE_4,
+            shared_wrap: VOICE_CARD_WIDTH - SPACE_8,
+            padding: SPACE_4,
+            height: None,
         },
         BrandGroup {
             name: "lead photo tile",
-            cards: vec![find(PHOTO_TILES[0].1, PHOTO_TILES[0].0.pair(&colors).0)],
+            cards: vec![tile(0)],
+            paragraphs: Vec::new(),
+            shared_width: PHOTO_TILE_WIDE.x,
+            shared_wrap: 0.0,
+            padding: 0.0,
+            height: Some(PHOTO_TILE_WIDE.y),
         },
         BrandGroup {
             name: "small photo tiles",
-            cards: PHOTO_TILES[1..]
-                .iter()
-                .map(|(ground, caption)| find(caption, ground.pair(&colors).0))
-                .collect(),
+            cards: (1..PHOTO_TILES.len()).map(tile).collect(),
+            paragraphs: Vec::new(),
+            shared_width: PHOTO_TILE_SMALL.x,
+            shared_wrap: 0.0,
+            padding: 0.0,
+            height: Some(PHOTO_TILE_SMALL.y),
         },
         BrandGroup {
             name: "do and don't cards",
-            cards: HEADLINE_MODES
-                .iter()
-                .map(|(label, example)| {
-                    let fill = if label.starts_with("Do ·") {
-                        colors.success_container
-                    } else {
-                        colors.error_container
-                    };
-                    find(example, fill)
-                })
-                .collect(),
+            cards: mode_cards,
+            paragraphs: mode_text,
+            shared_width: MODE_TILE_WIDTH + 2.0 * SPACE_4,
+            shared_wrap: VOICE_CARD_WIDTH - SPACE_8,
+            padding: SPACE_4,
+            height: None,
         },
     ];
+    (column, groups)
+}
 
+/// Every card of every group at `width` against the column: whether each
+/// runs from the column's left edge to its right edge, to within a point
+/// (and keeps its height where it has a fixed one), and a line for each
+/// group with every card's fraction of the column and the leftmost
+/// card's left edge against the column's.
+fn brand_column_report(width: f32) -> Vec<(bool, String)> {
+    const SLACK: f32 = 1.0;
+    let (column, groups) = brand_groups(width);
     groups
         .iter()
         .map(|group| {
-            let rows = card_rows_of(&group.cards);
-            let fractions: Vec<String> = rows
+            let fractions: Vec<String> = group
+                .cards
                 .iter()
-                .map(|row| format!("{:.1}%", 100.0 * row.width() / column.width()))
+                .map(|card| format!("{:.1}%", 100.0 * card.width() / column.width()))
                 .collect();
-            let left = rows
+            let left = group
+                .cards
                 .iter()
-                .map(|row| row.left())
+                .map(|card| card.left())
                 .fold(f32::INFINITY, f32::min);
-            let fills = rows.iter().all(|row| {
-                (row.width() - column.width()).abs() <= SLACK
-                    && (row.left() - column.left()).abs() <= SLACK
+            let fills = group.cards.iter().all(|card| {
+                (card.width() - column.width()).abs() <= SLACK
+                    && (card.left() - column.left()).abs() <= SLACK
+                    && group
+                        .height
+                        .is_none_or(|height| (card.height() - height).abs() <= SLACK)
             });
             (
                 fills,
                 format!(
-                    "{} at {width}pt: {} rows take {} of the column ({}pt wide), the leftmost \
+                    "{} at {width}pt: {} cards take {} of the column ({}pt wide), the leftmost \
                      starts at x {left}, the column at x {}",
                     group.name,
-                    rows.len(),
+                    group.cards.len(),
                     fractions.join(", "),
                     column.width(),
                     column.left(),
@@ -3460,13 +3511,17 @@ fn brand_column_report(width: f32) -> Vec<(bool, String)> {
         .collect()
 }
 
-/// Finding 5-A3: on the Brand page every group of cards fills the
-/// column, as the Do and Don't cards do. Measured on the Pixel (448pt)
-/// the theme cards took 71% of the column, the voice cards 44%, the photo
-/// tiles 39% (the lead Volvo tile 72%), and the cards stood in from the
-/// content's left edge. The 384pt phone the other tests hold is held to
-/// the same edges, and so are the narrowest common phone (320pt) and the
-/// widest window still under the compact breakpoint (a 599pt column).
+/// Finding 5-A3: on the Brand page every card fills the column, as the Do
+/// and Don't cards do, each one on its own: the small photo tiles are
+/// stacked one to a row at their height, not two to a row at about half
+/// the column. Measured on the Pixel (448pt) the theme cards took 71% of
+/// the column, the voice cards 44% (the content, without the card's
+/// padding), the photo tiles 39% (the lead Volvo tile 72%). The cards'
+/// left edges were already at the column's left, and the 16pt the tester
+/// saw is the cards' own padding. The 384pt phone the other tests hold is
+/// held to the same edges, and so are the narrowest common phone (320pt)
+/// and the widest window still under the compact breakpoint (a 599pt
+/// column).
 #[test]
 fn the_brand_cards_fill_the_column() {
     let mut lines = Vec::new();
@@ -3482,4 +3537,99 @@ fn the_brand_cards_fill_the_column() {
         "the Brand cards do not fill the column:\n{}",
         lines.join("\n")
     );
+}
+
+/// On a phone a card's text wraps to the card's inner width (the card
+/// less its padding), not to the narrower width the cards' sizing
+/// constants name (`CARD_WIDTH - 32` and the like): a card that fills the
+/// column holds its text across it. Each paragraph stays inside the
+/// card's padding, and some paragraph of every group runs past the width
+/// the constants name (some, not each: a paragraph ends where its last
+/// word that fits does, and a short one fits on a line).
+///
+/// The text never wrapped to those constants: `egui::Label` sets the
+/// layout job's `wrap.max_width` to the `Ui`'s available width (or to
+/// infinity in a row), whatever width the job carries. This pins the
+/// behaviour so a change to the cards' text does not bring a narrow wrap
+/// back.
+#[test]
+fn the_brand_card_text_wraps_to_the_card_on_a_phone() {
+    let mut off = Vec::new();
+    for width in [320.0, PHONE.x, DEVICE.x, 631.0] {
+        let (_, groups) = brand_groups(width);
+        for group in groups.iter().filter(|group| !group.paragraphs.is_empty()) {
+            let mut widest = 0.0f32;
+            for (card, text) in group.cards.iter().zip(&group.paragraphs) {
+                let inner = card.shrink(group.padding);
+                widest = widest.max(text.width());
+                if text.right() > inner.right() + 0.5 {
+                    off.push(format!(
+                        "{} at {width}pt: a paragraph ends at x {}, past the card's inner edge at \
+                         x {}",
+                        group.name,
+                        text.right(),
+                        inner.right()
+                    ));
+                }
+            }
+            if widest <= group.shared_wrap + 1.0 {
+                off.push(format!(
+                    "{} at {width}pt: the widest paragraph is {widest}pt, no wider than the {}pt \
+                     the cards' constants name",
+                    group.name, group.shared_wrap
+                ));
+            }
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// Where cards share a line the layout is what it was before the cards
+/// took the column on a phone: at 1152pt every card is as wide as the
+/// constant that sized it (the card's content width and its padding), the
+/// photo tiles are their own sizes, and no paragraph wraps wider than it
+/// did. The row counts of `cards_fit_the_column_and_share_rows_where_they_fit`
+/// do not show this: cards narrower or wider than their constants would
+/// still sit in the same rows.
+#[test]
+fn the_brand_cards_keep_their_desktop_widths() {
+    let mut off = Vec::new();
+    let (column, groups) = brand_groups(1152.0);
+    assert!(
+        column.width() > ui_kit::tokens::breakpoints::BREAKPOINT_TABLET,
+        "1152pt must be a desktop layout: the column is {}pt",
+        column.width()
+    );
+    for group in &groups {
+        for card in &group.cards {
+            if (card.width() - group.shared_width).abs() > 0.5 {
+                off.push(format!(
+                    "{}: a card is {}pt wide, not the {}pt it is sized by",
+                    group.name,
+                    card.width(),
+                    group.shared_width
+                ));
+            }
+            if let Some(height) = group.height {
+                if (card.height() - height).abs() > 0.5 {
+                    off.push(format!(
+                        "{}: a card is {}pt tall, not {height}pt",
+                        group.name,
+                        card.height()
+                    ));
+                }
+            }
+        }
+        let inner = group.shared_width - 2.0 * group.padding;
+        for text in &group.paragraphs {
+            if text.width() > inner + 0.5 {
+                off.push(format!(
+                    "{}: a paragraph is {}pt wide, past the {inner}pt inside the card",
+                    group.name,
+                    text.width()
+                ));
+            }
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
 }
