@@ -404,3 +404,156 @@ Moved to later iterations, with the reason:
 Harness notes, for future passes: `idb ui tap` needs `--duration 0.15` for the
 Save trigger, because default-length taps were missed. Gestures do not reach the
 iOS apps, so iOS passes can only check what is reachable by taps.
+
+### Iteration 3: chrome, popovers and focus
+
+Testers: Android (Feedback, Theme and search popovers, tab order and focus rings,
+the select's scroll on open, the top bar's edge) and iOS (taps only). Screenshots
+are under `build/usability-audit/iter-3/`. Build: `1b38fca` plus the ledger
+commit `4daef56`.
+
+Confirmed working: the Theme re-skins the page, and the popovers dismiss on a
+bare-canvas tap. Both banners dismiss, and "Restore the banners" brings them
+back. The snackbar works. The select's page does not scroll on open (Android,
+0 px). That closes the headless-only finding 2-A15: it was a harness effect,
+and it does not reproduce on the device.
+
+Triage. Majors ship in this iteration:
+
+- **3-A1 / 3-I1, major, Theme popover rows.** Radio rows are about 32 pt apart and
+  toggle rows about 41 pt, under the 44-pt touch floor. The toggle labels also
+  sit 28 pt right of the radio labels. **Fix: task 11.**
+- **3-A2, major, top-bar tab order.** Tab goes Theme, then Search, while Search
+  sits left of Theme on screen. **Fix: task 12.**
+- **3-A3, major, Brand tab focus ring.** The ring is clipped on its left edge,
+  at the content margin (x 48 px). The Foundations, Components, Feedback, Theme and
+  Search rings are whole. **Fix: task 13.**
+
+Minor, ship in this iteration:
+
+- **3-A4 / 3-I2 / 3-I3, minor, popover anchoring.** The popover tops sit about
+  11 pt inside the bar card, covering its bottom border. The Theme popover's left
+  edge lines up with nothing, and its right edge sits 8 pt inside the bar's edge.
+  The search popover is centred under its icon instead. **Fix: task 14.**
+- **3-A5 / 3-I7, minor, search popover padding.** It is about 5 pt inside its edge,
+  against 16 pt in the Theme popover. **Fix: task 14.**
+- **3-A9, minor, stale over-scroll after a banner dismiss at the end of the page.**
+  The page stays over-scrolled, with blank space below, until the next input. The
+  same kind of missed repaint as the snackbar. **Fix: task 15.**
+- **3-A7 / 3-A11, minor, top bar's bottom edge.** A full-width hairline runs under
+  the card's border, so the edge reads as a double rule, and at the corners the
+  curve lifts off the line. **Fix: task 16.**
+
+Deferred, with the reason:
+
+- **3-A6 / 3-I6, minor, search popover covers the tab strip.** A popover over
+  content is normal. Whether it should cover the tabs, or close on a tab change, is
+  a design decision. **Decision D6.**
+- **3-I4 / 3-A12, nit, the Theme chevron does not flip when open.** The icon catalogue
+  describes `expand_more` as "open a menu or section", so the design intent is
+  unclear. **Decision D7.**
+- **3-I8, nit, the snackbar covers its trigger row.** A snackbar floats over content
+  by design. Left as it is.
+- **3-I9 and 3-I10, nit, "Restore the banners" has no affordance, and the banner X is
+  a bare 12-pt glyph.** The hit area is adequate (about 36 pt). Iteration 5
+  (affordance and layout).
+- **3-A10, nit, the snackbar and paragraph spacing.** Iteration 5.
+- **3-A8, minor, form fields overhang the right gutter.** This is the 2-A11 item.
+  Iteration 5.
+- **Not reproduced.** An editorial-strip swipe that scrolled the strip rather than the
+  page, once. It may be the horizontal-drag issue from PR #23. The seventh Tab stop
+  shows no ring.
+
+Fix batch for iteration 3: tasks 11 to 16, run one at a time under
+`subagent-driven-development`.
+
+### Iteration 3 closed
+
+Build for the device re-check: `03858a2` (Android installed, iOS simulator
+installed from the same head). Every fix below was spec-reviewed and
+quality-reviewed, and each review's follow-ups landed as comment or test
+commits.
+
+Fixed and verified on the device:
+
+- **3-A1 and 3-I1, Theme popover rows.** `ca1b391`. The rows are 44 pt, and the
+  labels align. The kit gained an additive, opt-in row-height API, and its defaults
+  are unchanged. Verified on both platforms: the rows are spaced generously.
+- **3-A2, top-bar tab order.** `12c256e`, follow-up `0beed03`. egui hands Tab focus
+  along in creation order, and the group had been built right-to-left. The layout
+  is pixel-identical (checked across 288 bars). Verified on Android: Search comes
+  first, then Theme.
+- **3-A3, Brand tab focus ring.** `206daff`, follow-up `10bfbad`. The tab strip's
+  scroll clip cut the first tab's ring. The clip is now widened along x around the
+  ring's paint, and no tab moves. Verified on Android: the ring is whole.
+- **3-A4, 3-I2, 3-I3 and 3-A5, 3-I7, popover anchoring and padding.** `aa6cb7f`,
+  now `caa29e4`, with comment follow-ups `1b0066e`. Both popovers open 8 pt under
+  the bar and share one rule: the right edge stands on the trigger's right edge.
+  The search input is inset 17 pt (16 pt and the border). Verified on both
+  platforms.
+- **3-A9, banner dismiss at the page end.** `7bd2365`, follow-up `dbc72ff`. The
+  first painted frame now shows the clamped page. A `request_discard` runs only
+  when the content height changed and the offset is past the new maximum. A plain
+  scroll takes one pass per frame. Verified on Android: the capture immediately
+  after the tap matches the one two seconds later.
+- **3-A7, 3-A11 and 3-I11, the top bar's bottom edge.** `ab9dfdd`, follow-up
+  `03858a2`. The double rule was egui's default separator line on the top panel.
+  The line is off, and its reserved room is given back as clearance, so nothing
+  below the bar moves. Verified on both platforms: one clean rule.
+- **The select.** The page does not scroll when the Region select opens. The
+  headless finding 2-A15 did not reproduce on the device, so it is closed.
+
+Known and accepted:
+
+- **The Theme toggles' glyphs.** With the labels aligned, the toggle knobs sit about
+  24 pt left of the radio circles, in the off state. This is the trade-off from
+  `ca1b391`. Decision D8 below.
+- **The trailing gap of the labelled trigger** (decision D3 above) is unchanged.
+- **The search popover on a phone** is held against the bar's left edge, not hung
+  from its trigger, because it is too wide to fit to the right of a trigger at 233 pt.
+  This is the designed clamp, and the rule otherwise holds. Decision D9 below.
+- **The Theme popover's right edge** sits 8 pt inside the bar's right edge, because
+  the rule anchors on the trigger's right edge. This is by design.
+
+Decisions for you, new in this iteration:
+
+- **D6, the search popover covers the tab strip** on a phone. A popover over content
+  is normal, but this one hides the tab labels. Whether it should close on a tab
+  change, or leave the strip uncovered, is a design choice.
+- **D7, the Theme chevron does not flip** when the menu opens. The icon catalogue
+  describes `expand_more` as "open a menu or section", so the intent is unclear.
+- **D8, toggle glyphs versus labels** (above). Accept the trade-off, or give the
+  toggles and radios their own label inset.
+- **D9, the held search popover** (above). Accept it, or anchor the search popover
+  on the bar's right edge instead.
+- **The "Banners" label at the page's end** sits half under the tab strip, because
+  the page scrolls to its limit after the "Restore the banners" link takes back the
+  freed height. This is the scroll limit, not the fix. Decide whether the label
+  should stay visible at the limit.
+
+Moved to later iterations, with the reason:
+
+- Iteration 4 (landscape and orientation): the Theme popover is about 111 pt taller
+  than it was, and in landscape on a phone, about 360 to 412 pt of height, it
+  overflows with no scroll area. This came from the `ca1b391` concern. Landscape
+  is Android-only for the device pass, because the iOS simulator cannot rotate
+  from here.
+- Iteration 5 (layout and touch targets): the Components right gutter, the
+  controls below 44 pt, the card surfaces, the Brand single column, the
+  keyboard-dismiss blank strip, the glass specimen spill, the Tab-to-me pill, the
+  form fields' overhang of the right gutter, "Restore the banners" with no
+  affordance, the banner dismiss glyph, and the snackbar-and-paragraph spacing.
+- Iteration 9 (iOS pass): the bottom clip on both the Feedback page and the
+  Components page (about 814 to 816 pt), and the bar's edge and gap on iOS.
+- Test-quality sweep (iteration 10): the backlog above, and the new items from the
+  iteration-3 reviews. These are the golden tables and their re-recording notes,
+  the shape walkers that repeat across the test files, and the minor doc wording
+  in the reviews.
+
+Not reproduced: an editorial-strip swipe that scrolled the strip rather than the
+page, once. It may be the horizontal-drag issue from PR #23. The seventh Tab stop
+shows no ring.
+
+Still open from earlier: the relaunch freeze after Back (D1, the blocker), the
+swatch hairlines as a design element (D2), the personal iPhone install (D5), and
+the wordmark's legibility (D4).
