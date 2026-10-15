@@ -455,9 +455,23 @@ fn forward_to_page(ctx: &egui::Context, offset: f32) {
 /// `add` gets the item spacing the row's `Ui` had before the row set
 /// its own, for each tile to restore inside itself: the row's spacing
 /// is for between tiles, and a tile's art and caption keep the page's.
+///
+/// The row is `horizontal_wrapped` with its tiles aligned to the top of
+/// the line, not its centre. `horizontal_wrapped` centres each widget on
+/// the line laid out so far, and a tile (its height is not known when it
+/// is placed) taller than that line settles lower than the one before it,
+/// by half the difference: the tiles of a line then hang 10 to 100pt
+/// apart instead of from one edge.
 fn wrapping_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui, Vec2)) {
     let inherited = ui.spacing().item_spacing;
-    ui.horizontal_wrapped(|ui| {
+    // The size and the layout `horizontal_wrapped` starts a line with,
+    // less its centre alignment.
+    let line = Vec2::new(
+        ui.available_size_before_wrap().x,
+        ui.spacing().interact_size.y,
+    );
+    let layout = egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true);
+    ui.allocate_ui_with_layout(line, layout, |ui| {
         ui.spacing_mut().item_spacing = Vec2::new(spacing::SPACE_4, spacing::SPACE_3);
         add(ui, inherited);
     });
@@ -905,6 +919,10 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
     ui.add_space(spacing::SPACE_2);
     // Eight labelled swatches run wide; the row scrolls.
     scrolling_row(ui, "radii-row", |ui| {
+        // The swatch's 1px outline is drawn outside its rect, and the
+        // scroll area clips at the row's left edge: start the first
+        // swatch one outline in, so its left pixel is inside the clip.
+        ui.add_space(spacing::SPACE_PX);
         for (name, value) in radii::ALL {
             ui.vertical(|ui| {
                 let (rect, _) =
@@ -918,13 +936,20 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
                 );
                 ui.painter()
                     .rect_filled(rect.shrink(1.0), radius, colors.surface_container_high);
-                ui.add(egui::Label::new(specimen_job(
-                    &format!("{} · {}", sentence_case(name), trim_float(*value)),
-                    TypeStyle::Caption,
-                    theme,
-                    colors.text_muted(),
-                    Some(ui.available_width()),
-                )));
+                // One line, however far the row has scrolled: a `Label`
+                // wraps a job at the width left to it, and a swatch at the
+                // row's right edge has little, so "Radius Lg · 12" broke
+                // after "Radius" until it was scrolled in.
+                ui.add(
+                    egui::Label::new(specimen_job(
+                        &format!("{} · {}", sentence_case(name), trim_float(*value)),
+                        TypeStyle::Caption,
+                        theme,
+                        colors.text_muted(),
+                        None,
+                    ))
+                    .wrap_mode(egui::TextWrapMode::Extend),
+                );
             });
             ui.add_space(spacing::SPACE_2);
         }

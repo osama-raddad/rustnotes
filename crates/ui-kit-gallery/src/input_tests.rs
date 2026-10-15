@@ -3745,3 +3745,240 @@ fn the_foundations_spec_lines_print_no_raw_floats() {
         raw.join("\n")
     );
 }
+
+/// The windows the Foundations specimen tests hold: the phone, where the
+/// wrapping rows wrap onto several lines, and the desktop, where they run
+/// on one.
+const SPECIMEN_WINDOWS: [egui::Vec2; 2] = [PHONE, egui::vec2(1280.0, 900.0)];
+
+/// Where each of `tiles` (in paint order, left to right, a new line when
+/// a tile starts no further right than the last) sits against the top of
+/// its own line, which its first tile sets: one message per tile more
+/// than a point off it. A row of specimens reads as a row when its tiles
+/// hang from one edge.
+fn off_the_lines_top(tiles: &[egui::Rect]) -> Vec<String> {
+    let mut off = Vec::new();
+    let mut line_top = f32::NAN;
+    let mut last_left = f32::INFINITY;
+    for (i, tile) in tiles.iter().enumerate() {
+        if tile.left() <= last_left {
+            line_top = tile.top();
+        } else if 1.0 < (tile.top() - line_top).abs() {
+            off.push(format!(
+                "tile {i} tops at {:.1}, {:+.1}pt from its line's {line_top:.1}",
+                tile.top(),
+                tile.top() - line_top
+            ));
+        }
+        last_left = tile.left();
+    }
+    off
+}
+
+/// The Foundations spacing and elevation specimens: the tiles of each
+/// wrapping row hang from one top edge per line. The row laid its tiles
+/// out centre-aligned, and a tile taller than the line the row had so far
+/// settled lower than the one before it, a little less each time: gaps of
+/// 54, 27, 13.5pt down the elevation row (findings 5-C1 and 1-A11). The
+/// spacing tiles are told by their captions, which sit at the same depth
+/// in every tile; the elevation tiles by their cards, which are what the
+/// eye reads as the tile's top.
+#[test]
+fn the_foundations_spacing_and_elevation_tiles_sit_on_one_line() {
+    let mut off = Vec::new();
+    for window in SPECIMEN_WINDOWS {
+        let mut h = Harness::window(window);
+        h.app.gallery.tab = 1;
+        h.idle(3);
+        let theme = h.app.gallery.theme;
+
+        h.scroll_to(copy::SPACING_LABEL, 100.0..300.0)
+            .expect("the spacing label scrolls into view");
+        let captions: Vec<egui::Rect> = painted_text(&h)
+            .into_iter()
+            .filter(|(text, ..)| text.starts_with("space-"))
+            .map(|(_, rect, _)| rect)
+            .collect();
+        assert!(
+            6 <= captions.len(),
+            "{window:?}: the spacing row paints its tiles, got {}",
+            captions.len()
+        );
+        off.extend(
+            off_the_lines_top(&captions)
+                .into_iter()
+                .map(|m| format!("{window:?} spacing {m}")),
+        );
+
+        let label = format!("{} · {}", copy::ELEVATION_LABEL, theme.name());
+        let at = h
+            .scroll_to(&label, 100.0..300.0)
+            .expect("the elevation label scrolls into view");
+        let card = theme.colors().surface_container_low;
+        let cards: Vec<egui::Rect> = painted_rects(&h)
+            .into_iter()
+            .filter(|(shape, _)| {
+                shape.rect.size() == egui::vec2(64.0, 40.0)
+                    && shape.fill == card
+                    && at.bottom() < shape.rect.top()
+            })
+            .map(|(shape, _)| shape.rect)
+            .collect();
+        assert_eq!(
+            cards.len(),
+            5,
+            "{window:?}: one card per elevation level, got {cards:?}"
+        );
+        off.extend(
+            off_the_lines_top(&cards)
+                .into_iter()
+                .map(|m| format!("{window:?} elevation {m}")),
+        );
+    }
+    assert!(
+        off.is_empty(),
+        "{} tiles off their line's top edge:\n{}",
+        off.len(),
+        off.join("\n")
+    );
+}
+
+/// Every string a frame painted that is still one line, or not: the
+/// string and how many lines its galley laid it out in.
+fn painted_line_counts(h: &Harness) -> Vec<(String, usize)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(String, usize)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                out.push((text.galley.text().to_owned(), text.galley.rows.len()));
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.shapes {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The Foundations radii row: no tile's label wraps, wherever the row is
+/// scrolled to. The label took the row's remaining width as its wrap
+/// width, and a tile at the row's right edge, half in view, had little
+/// of it left: "Radius Lg · 12" broke after "Radius" until the finger
+/// scrolled it in (finding 1-A11). The row is swiped along its whole
+/// length, and every frame of the swipes and of the settling after them
+/// is read.
+#[test]
+fn the_foundations_radius_labels_stay_on_one_line() {
+    const RADII: usize = 8;
+    let mut off: Vec<String> = Vec::new();
+    for window in [
+        egui::vec2(320.0, 700.0),
+        PHONE,
+        DEVICE,
+        egui::vec2(1280.0, 900.0),
+    ] {
+        let mut h = Harness::window(window);
+        h.app.gallery.tab = 1;
+        h.idle(3);
+        let label = h
+            .scroll_to(copy::RADII_LABEL, 100.0..300.0)
+            .expect("the radii label scrolls into view");
+        let row_y = label.bottom() + 45.0;
+        let mut seen: Vec<String> = Vec::new();
+        let mut note = |h: &Harness, off: &mut Vec<String>| {
+            for (text, lines) in painted_line_counts(h) {
+                if !text.starts_with("Radius ") {
+                    continue;
+                }
+                if !seen.contains(&text) {
+                    seen.push(text.clone());
+                }
+                let message = format!("{window:?}: {text:?} wraps onto {lines} lines");
+                if 1 < lines && !off.contains(&message) {
+                    off.push(message);
+                }
+            }
+        };
+        note(&h, &mut off);
+        let from = egui::pos2(window.x - 30.0, row_y);
+        let to = egui::pos2(30.0, row_y);
+        for _ in 0..8 {
+            h.frame(finger_down(from));
+            note(&h, &mut off);
+            for step in 1..=6 {
+                h.frame(finger_move(from.lerp(to, step as f32 / 6.0)));
+                note(&h, &mut off);
+            }
+            h.frame(finger_up(to));
+            note(&h, &mut off);
+            for _ in 0..40 {
+                h.idle(1);
+                note(&h, &mut off);
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            RADII,
+            "{window:?}: every radius label shows once the row is swiped, got {seen:?}"
+        );
+    }
+    assert!(
+        off.is_empty(),
+        "{} radius labels wrap:\n{}",
+        off.len(),
+        off.join("\n")
+    );
+}
+
+/// The Foundations radii row: the first tile's 1px outline, drawn outside
+/// its rect, shows whole. The tile began on the scroll area's left edge,
+/// so the outline's left pixel fell outside the clip and the first tile's
+/// border was a pixel thin on that side (finding 1-A11).
+#[test]
+fn the_first_radius_tiles_border_is_not_clipped() {
+    let mut off = Vec::new();
+    for window in SPECIMEN_WINDOWS {
+        let mut h = Harness::window(window);
+        h.app.gallery.tab = 1;
+        h.idle(3);
+        let outline = h.app.gallery.theme.colors().outline_variant;
+        h.scroll_to(copy::RADII_LABEL, 100.0..300.0)
+            .expect("the radii label scrolls into view");
+        let tiles: Vec<_> = painted_rects(&h)
+            .into_iter()
+            .filter(|(shape, _)| {
+                shape.rect.size() == egui::Vec2::splat(64.0)
+                    && shape.fill == egui::Color32::TRANSPARENT
+                    && shape.stroke.width == 1.0
+                    && shape.stroke.color == outline
+            })
+            .collect();
+        assert_eq!(
+            tiles.len(),
+            8,
+            "{window:?}: one outlined swatch per radius in view or in reach"
+        );
+        let (first, clip) = tiles
+            .iter()
+            .min_by(|a, b| a.0.rect.left().total_cmp(&b.0.rect.left()))
+            .expect("tiles is not empty");
+        let width = first.stroke.width;
+        let outer = match first.stroke_kind {
+            egui::StrokeKind::Outside => first.rect.expand(width),
+            egui::StrokeKind::Middle => first.rect.expand(width / 2.0),
+            egui::StrokeKind::Inside => first.rect,
+        };
+        if !clip.contains_rect(outer) {
+            off.push(format!(
+                "{window:?}: the first tile's outline reaches {outer:?}, outside its clip {clip:?}"
+            ));
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
