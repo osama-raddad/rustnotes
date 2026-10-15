@@ -827,3 +827,80 @@ fn the_theme_trigger_names_the_live_theme_on_a_wide_window() {
         "a wide bar's trigger is not the bare label"
     );
 }
+
+/// The Region select on the Components panel, scrolled into the window's
+/// upper half: its box's rect, a field gap under its label and 44pt tall.
+fn region_select(h: &mut Harness) -> egui::Rect {
+    h.app.gallery.tab = 2;
+    h.idle(3);
+    h.touch_screen();
+    let label = h
+        .scroll_to(copy::SELECT_REGION_LABEL, 280.0..420.0)
+        .expect("the Region select scrolls into view");
+    egui::Rect::from_min_size(
+        egui::pos2(
+            label.left(),
+            label.bottom() + ui_kit::components::text_field::FIELD_GAP,
+        ),
+        egui::vec2(
+            h.window.x - 2.0 * label.left(),
+            ui_kit::components::text_field::CONTROL_HEIGHT,
+        ),
+    )
+}
+
+/// Whether the last frame painted `value` as a select's shown value: a
+/// field padding in from the box's left edge, `box_left`. (The radio
+/// group below paints the same names, but past its circles.)
+fn shows_value(h: &Harness, value: &str, box_left: f32) -> bool {
+    let x = box_left + ui_kit::components::text_field::FIELD_PAD_X;
+    h.strings
+        .iter()
+        .any(|(painted, at)| painted == value && (at.left() - x).abs() < 0.5)
+}
+
+/// A tap on the Region select's box by touch opens its popover, and a
+/// tap on plain, non-interactive text outside it closes it again with
+/// the choice unchanged: the caption says a click outside closes the
+/// list.
+#[test]
+fn a_touch_tap_on_plain_text_closes_the_open_select() {
+    let mut h = Harness::phone();
+    let boxed = region_select(&mut h);
+    assert!(
+        !egui::Popup::is_any_open(&h.ctx),
+        "the select starts closed"
+    );
+
+    assert!(
+        shows_value(&h, "Nordics", boxed.left()),
+        "the select starts on Nordics"
+    );
+
+    h.tap(boxed.center());
+    h.idle(2);
+    assert!(
+        egui::Popup::is_any_open(&h.ctx),
+        "a tap on the select's box opens its popover"
+    );
+
+    // The group's own label: plain text, under no popover.
+    let text = h
+        .painted(copy::SELECTS_LABEL)
+        .expect("the selects group's label is painted");
+    assert_ne!(
+        h.ctx.layer_id_at(text.center()).map(|layer| layer.order),
+        Some(egui::Order::Foreground),
+        "the label lies outside the popover"
+    );
+    h.tap(text.center());
+    h.idle(2);
+    assert!(
+        !egui::Popup::is_any_open(&h.ctx),
+        "a tap on plain text outside the popover closes it"
+    );
+    assert!(
+        shows_value(&h, "Nordics", boxed.left()),
+        "closing by a tap outside leaves the choice alone"
+    );
+}

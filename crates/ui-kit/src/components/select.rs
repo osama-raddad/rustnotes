@@ -455,8 +455,13 @@ impl<'a, T: Copy + Eq> Select<'a, T> {
 
         if interaction.is_open() {
             Popup::open_id(&ctx, popup_id);
+            // `from_response` alone is an always-open popup, which never
+            // acts on its close behavior; kept in egui's popup memory it
+            // closes itself on a click outside (a tap too, which egui
+            // reads as a click) and the sync above follows.
             let popup = Popup::from_response(&response)
                 .id(popup_id)
+                .open_memory(None)
                 .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
                 .width(rect.width())
                 .gap(4.0)
@@ -1046,5 +1051,210 @@ mod tests {
                 pos.x
             );
         }
+    }
+
+    /// One persistent context holding a select under three outside
+    /// targets (plain text, a button and a multiline field), driven by
+    /// frames scripted the way a mouse and a touch screen deliver them.
+    /// A click resolves from a press in one pass and its release in a
+    /// later one, so the context must persist across frames.
+    struct Rig {
+        ctx: egui::Context,
+        time: f64,
+        region: Option<Region>,
+        notes: String,
+        /// The Region select's open state as the last frame reported it.
+        open: bool,
+        /// Every option the select committed, in order.
+        commits: Vec<Region>,
+        text: Rect,
+        button: Rect,
+        field: Rect,
+        boxed: Rect,
+        /// The option rows' rects, while the list is open.
+        rows: Vec<Rect>,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let ctx = egui::Context::default();
+            install_faces(&ctx, ThemeId::Light);
+            let mut rig = Self {
+                ctx,
+                time: 1.0,
+                region: Some(Region::Nordics),
+                notes: String::new(),
+                open: false,
+                commits: Vec::new(),
+                text: Rect::NOTHING,
+                button: Rect::NOTHING,
+                field: Rect::NOTHING,
+                boxed: Rect::NOTHING,
+                rows: Vec::new(),
+            };
+            for _ in 0..3 {
+                rig.frame(Vec::new());
+            }
+            rig
+        }
+
+        /// One frame at 60Hz with `events`.
+        fn frame(&mut self, events: Vec<egui::Event>) {
+            self.time += 1.0 / 60.0;
+            let input = RawInput {
+                events,
+                time: Some(self.time),
+                ..Default::default()
+            };
+            let (theme, flags) = (ThemeId::Light, UiKitFlags::default());
+            let (region, notes) = (self.region, &mut self.notes);
+            let mut seen = None;
+            let mut rows = Vec::new();
+            self.ctx
+                .run_ui(input, |ui| {
+                    let text = ui
+                        .add(egui::Label::new("Where the team will work from").selectable(false))
+                        .rect;
+                    let button = ui.button("Save").rect;
+                    let field = ui.add(egui::TextEdit::multiline(notes)).rect;
+                    let picked = Select::new("Region")
+                        .options(REGIONS)
+                        .selected(region)
+                        .ui(ui, theme, &flags);
+                    let popup_id = picked.response.id.with("popup");
+                    rows = (0..REGIONS.len())
+                        .filter_map(|index| {
+                            ui.ctx().read_response(popup_id.with("option").with(index))
+                        })
+                        .map(|response| response.rect)
+                        .collect();
+                    seen = Some((text, button, field, picked));
+                })
+                .drop_without_applying_deltas();
+            let (text, button, field, picked) = seen.expect("the frame ran");
+            (self.text, self.button, self.field) = (text, button, field);
+            self.boxed = picked.response.rect;
+            self.open = picked.open;
+            self.rows = if picked.open { rows } else { Vec::new() };
+            if let Some(value) = picked.committed {
+                self.commits.push(value);
+                self.region = Some(value);
+            }
+        }
+
+        /// A mouse click at `pos`: the pointer arrives and presses, then
+        /// releases a frame later, and stays where it is.
+        fn click(&mut self, pos: Pos2) {
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            self.frame(vec![egui::Event::PointerMoved(pos), button(true)]);
+            self.frame(vec![button(false)]);
+            self.frame(Vec::new());
+        }
+
+        /// A tap at `pos`, as egui-winit delivers a finger from a touch
+        /// screen: the touch, then the first finger's parallel pointer
+        /// stream; on the lift the pointer releases and vanishes.
+        fn tap(&mut self, pos: Pos2) {
+            let touch = |phase| egui::Event::Touch {
+                device_id: egui::TouchDeviceId(1),
+                id: egui::TouchId(0),
+                phase,
+                pos,
+                force: None,
+            };
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            self.frame(vec![
+                touch(egui::TouchPhase::Start),
+                egui::Event::PointerMoved(pos),
+                button(true),
+            ]);
+            self.frame(vec![
+                touch(egui::TouchPhase::End),
+                button(false),
+                egui::Event::PointerGone,
+            ]);
+            self.frame(Vec::new());
+        }
+
+        /// Open the list with a tap on the box.
+        fn open_by_tap(&mut self) {
+            self.tap(self.boxed.center());
+            assert!(self.open, "a tap on the box opens the list");
+            assert_eq!(self.rows.len(), REGIONS.len(), "and lays out its rows");
+        }
+    }
+
+    /// A click anywhere outside the open list, on plain text, a button or
+    /// a field, closes it without committing, and the current value stays.
+    /// The select used to open its popover as always open, so the popover
+    /// never closed itself: a click outside left it up.
+    #[test]
+    fn a_mouse_click_outside_closes_the_open_list_without_committing() {
+        let mut rig = Rig::new();
+        for (name, target) in [
+            ("plain text", rig.text.center()),
+            ("a button", rig.button.center()),
+            ("a field", rig.field.center()),
+        ] {
+            rig.open_by_tap();
+            rig.click(target);
+            assert!(!rig.open, "a click on {name} closes the list");
+            assert!(rig.commits.is_empty(), "{name} commits nothing");
+            assert_eq!(rig.region, Some(Region::Nordics), "the value stays");
+        }
+    }
+
+    /// The device case: a tap outside the open list, as a finger from a
+    /// touch screen delivers it (the touch, the pointer press, then the
+    /// release and the pointer's departure), closes it too, on plain text
+    /// as well as on a button or a field that takes the focus.
+    #[test]
+    fn a_touch_tap_outside_closes_the_open_list_without_committing() {
+        let mut rig = Rig::new();
+        for (name, target) in [
+            ("plain text", rig.text.center()),
+            ("a button", rig.button.center()),
+            ("a field", rig.field.center()),
+        ] {
+            rig.open_by_tap();
+            rig.tap(target);
+            assert!(!rig.open, "a tap on {name} closes the list");
+            assert!(rig.commits.is_empty(), "{name} commits nothing");
+            assert_eq!(rig.region, Some(Region::Nordics), "the value stays");
+        }
+    }
+
+    /// A tap on an option still chooses it and closes the list.
+    #[test]
+    fn a_touch_tap_on_an_option_commits_it_and_closes_the_list() {
+        let mut rig = Rig::new();
+        rig.open_by_tap();
+        rig.tap(rig.rows[2].center());
+        assert!(!rig.open, "choosing closes the list");
+        assert_eq!(rig.commits, [Region::Global], "the tapped option lands");
+        assert_eq!(rig.region, Some(Region::Global), "and becomes the value");
+    }
+
+    /// A second tap on the box toggles the open list shut, as a click on
+    /// the box did before: it neither commits nor reopens the list.
+    #[test]
+    fn a_second_tap_on_the_box_closes_the_open_list() {
+        let mut rig = Rig::new();
+        rig.open_by_tap();
+        rig.tap(rig.boxed.center());
+        assert!(!rig.open, "the second tap closes the list");
+        assert!(rig.commits.is_empty(), "and commits nothing");
+        rig.frame(Vec::new());
+        assert!(!rig.open, "and the list stays shut");
     }
 }
