@@ -162,8 +162,10 @@ struct DragAxis {
     vertical: Option<bool>,
 }
 
-/// The theme menu's popover width: the longest toggle row ("Reduced
-/// transparency" beside its 44px track) and the frame's insets.
+/// The theme menu's popover width ceiling, not its width: `.width` caps
+/// the area, which shrinks to its content, the longest toggle row
+/// ("Reduced transparency" beside its 44px track) and the frame's
+/// insets, about 226px.
 const THEME_MENU_WIDTH: f32 = 248.0;
 
 /// The x the theme menu's labels start at, in the theme rows and the
@@ -177,8 +179,8 @@ const THEME_MENU_LABEL_X: f32 = toggle::TRACK_W + toggle::LABEL_GAP;
 /// at [`THEME_MENU_LABEL_X`]. The group's legend rides along with it.
 const THEME_MENU_RADIO_INSET: f32 = THEME_MENU_LABEL_X - (radio::CIRCLE_SIZE + radio::LABEL_GAP);
 
-/// The search popover's width. The field fills the popover, so this is
-/// its outer width as it stands.
+/// The search popover's outer width, frame included: `.width` caps the
+/// area and the field fills it.
 pub(crate) const SEARCH_POPOVER_WIDTH: f32 = 280.0;
 
 /// The gap between the bar's bottom edge and the popovers that open
@@ -210,9 +212,11 @@ fn bar_popover_frame(theme: ThemeId) -> egui::Frame {
 ///   its hairline;
 /// - its right edge stands on the trigger's right edge; and
 /// - where it is wider than the room between that edge and the bar's
-///   left edge (the 280px search popover under a phone's search
-///   button, which ends 233px in), it is held inside the bar instead:
-///   pushed right until its left edge stands on the bar's.
+///   left edge (e.g. at a 384px phone, the 280px search popover under a
+///   search button that ends 233px from the window's left edge, 217px
+///   from the bar's), it is held inside the bar instead: pushed right
+///   until its left edge stands on the bar's. Otherwise it would run
+///   off the window's left edge.
 ///
 /// egui's own placement tries `BOTTOM_START`, then its flips, then
 /// every menu alignment, and takes the first that fits the window. That
@@ -228,6 +232,9 @@ fn bar_popover<'a>(
     width: f32,
     theme: ThemeId,
 ) -> egui::Popup<'a> {
+    // The trigger's right edge, or the right edge that puts the
+    // popover's left edge on the bar's, where the former would leave
+    // the popover's left edge short of the bar's.
     let right = trigger.rect.right().max(bar.left() + width);
     egui::Popup::from_response(trigger)
         .anchor(egui::pos2(right, bar.bottom()))
@@ -2539,10 +2546,15 @@ impl Gallery {
                 // the nav links, the call to action) is pinned to the
                 // row's top, short of the 44px controls' centre line.
                 ui.set_height(CONTENT_HEIGHT);
-                // The bar's pane: the row grown by the padding the bar's
-                // frame puts round it. The bar's popovers hang from its
-                // bottom edge and keep inside its left edge
-                // (`bar_popover`).
+                // The bar's pane: the row grown by the padding of
+                // `TopAppBar::ui`'s inner margin (`BAR_PAD_X` at the
+                // sides, `BAR_PAD_Y` above and below), which this
+                // inverts. It assumes `ui.max_rect()` is the frame's
+                // content rect: the row spans its width, and
+                // `set_height` above pins the row to its height. The
+                // bar's popovers hang from the pane's bottom edge and
+                // keep inside its left edge (`bar_popover`). Keep in
+                // step with `TopAppBar::ui`'s inner margin.
                 let bar = ui.max_rect().expand2(egui::vec2(BAR_PAD_X, BAR_PAD_Y));
                 let fit = BarFit::measure(ui, theme, narrow);
 

@@ -853,28 +853,19 @@ fn open_popover(h: &Harness) -> egui::Rect {
     rects[0]
 }
 
-/// The bar's two popovers open below the bar and hang from their
-/// triggers by one rule, and share one inner padding. The popovers were
-/// anchored to the trigger button's own rect, which ends 12pt (the bar's
-/// padding) short of the bar's bottom edge, so they opened over the
-/// bar's card, its border and its hairline. They took whichever of
-/// egui's alignments first fit the window, so at a phone's width the
-/// theme popover's right edge stood on its trigger's, the search
-/// popover (wider than the room left of its button) was centred under
-/// the button, and on a wide window both hung by their left edges. And
-/// the search popover kept the kit frame's 4pt padding while the theme
-/// popover's is 16pt, which put the search input 5pt from the popover's
-/// edge (4pt of padding and the 1pt border).
+/// The bar's two popovers open below the bar, hang from their triggers
+/// by one rule, and share one inner padding.
 ///
 /// The rule: a popover starts the `BAR_POPOVER_GAP` under the bar's
 /// bottom edge, and its right edge stands on its trigger's right edge.
 /// Where the popover is wider than the room between that edge and the
-/// bar's left edge (the 280pt search popover under a phone's search
-/// button, which ends 233pt in), it is held inside the bar instead: its
-/// left edge stands on the bar's left edge. Both are asserted at a
-/// phone, the narrowest phone, the compact breakpoint and a desktop, and
-/// the run must reach the held case and the plain case, or it fails. The
-/// popovers keep their widths.
+/// bar's left edge (the search popover at a phone's width), it is held
+/// inside the bar instead: its left edge stands on the bar's left edge.
+/// The content stands the inner margin and the frame's border in from
+/// the popover's edge, and the popovers keep their widths. Both
+/// popovers are asserted at a phone, the narrowest phone, the compact
+/// breakpoint and a desktop, and the run must reach the held case and
+/// the plain case, or it fails.
 #[test]
 fn the_bars_popovers_open_below_the_bar_and_hang_from_their_triggers() {
     use crate::gallery::{BAR_POPOVER_GAP, BAR_POPOVER_PAD, SEARCH_POPOVER_WIDTH};
@@ -883,8 +874,8 @@ fn the_bars_popovers_open_below_the_bar_and_hang_from_their_triggers() {
     const SLACK: f32 = 1.0;
     // The theme popover's width, as it was and stays: the widest row
     // (the "Reduced transparency" toggle) and the frame, as measured.
-    // `THEME_MENU_WIDTH` (248pt) is only the area's default width, and
-    // the area shrinks to its content.
+    // `THEME_MENU_WIDTH` (248pt) is only a ceiling, and the area
+    // shrinks to its content.
     const THEME_WIDTH: f32 = 226.156;
     // The kit popover frame's 1pt border: the content stands this far
     // further in than the frame's inner margin.
@@ -931,9 +922,7 @@ fn the_bars_popovers_open_below_the_bar_and_hang_from_their_triggers() {
                 off.push(format!("{at} leaves the window"));
             }
 
-            // Below the bar, a gap clear of its border (the popover
-            // once started inside the bar's card, 12pt above its
-            // bottom edge).
+            // Below the bar, a gap clear of its border.
             let gap = popover.top() - pane.bottom();
             if (gap - BAR_POPOVER_GAP).abs() > SLACK {
                 off.push(format!(
@@ -997,6 +986,9 @@ fn the_bars_popovers_open_below_the_bar_and_hang_from_their_triggers() {
             }
         }
     }
+    // The floor of four hung popovers is both popovers at the two
+    // wider windows (600 and 1280pt); the narrow windows hang the theme
+    // popover and hold the search popover.
     if hung < 4 || held == 0 {
         off.push(format!(
             "the run hung {hung} popovers from their triggers and held {held} inside the bar; \
