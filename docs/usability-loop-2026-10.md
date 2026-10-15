@@ -1,8 +1,9 @@
 # Framework usability loop — October 2026
 
-Status: iteration 5 in progress. Tasks 20 (5-A1, `b47473f`), 21 (5-A2,
-`7f8ed7c` to `53a291b`) and 22 (5-A3, `b1c5a6c` to `ee11286`) are closed; task
-23 is next. Iterations 1 to 4 are closed and pushed. The "Status and handoff"
+Status: iteration 5 is closed on its fix tasks. Tasks 20 (5-A1, `b47473f`), 21
+(5-A2, `7f8ed7c` to `53a291b`), 22 (5-A3, `b1c5a6c` to `ee11286`) and 23 (5-E1,
+`1581d7d`, `9611b8a`) are closed. D11 and D12 are still open, and they block the
+touch-target sweep. Iteration 6 is next. Iterations 1 to 4 are closed and pushed. The "Status and handoff"
 section at the end is the handoff as of the pause, and it is now out of date
 for iteration 5 onward.
 
@@ -822,6 +823,28 @@ governing-principle card, was 98.4%, found on the device and closed in
 - Review follow-ups (`ee11286`): the dead wrap constants, a test that checked
   nothing the fix changed (deleted), a redundant loop in the desktop test, the
   doc comments, and the names.
+
+**Task 23 closed (5-E1), `1581d7d`, `9611b8a`.** The photo captions' middle dot
+ended a row ("After-hours debug · " over "Gothenburg HQ") in a 160pt tile, in
+410 of the rows the test swept. `caption_galley` now puts a no-break space after
+the dot, so a row cannot end on it.
+
+- Red: `Light: "After-hours debug · Gothenburg HQ" in a 160pt tile wraps to
+  ["After-hours debug · ", "Gothenburg HQ"]`. Green:
+  `a_photo_captions_middle_dot_is_never_left_ending_a_row`, which sweeps six
+  themes, five captions and widths 120 to 320pt in 4pt steps. It also checks that
+  the words are unchanged, so an ellipsis fails it.
+- The trade-off, **D14:** a dot can now begin a row, as in "· architecture
+  review". Binding the no-break space on both sides would chain "Whiteboard ·
+  architecture" to 137.6pt, against a 136pt limit in Teal and Mono, so it would be
+  truncated. The review measured the leading dot as a modest gain at best, since
+  it still breaks the left edge. A third option is to break the line at " · "
+  whenever the pair does not fit. Keep the leading dot, or take that option?
+- The test is in `ui-kit` (`brand_showcase.rs`), not the gallery crate. It does
+  not cover widths under 120 or over 320pt, or the middle dot in the other copy
+  (`gallery_copy.rs:109`, `cover.rs:137`).
+- Review follow-ups (`9611b8a`): the comment and the failure message now say what
+  the test checks.
 
 ## Status and handoff
 
