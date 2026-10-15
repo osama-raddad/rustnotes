@@ -149,6 +149,24 @@ impl Harness {
             .offset
     }
 
+    /// `steps` wheel notches of `delta` points each over the page, then
+    /// time for the smoothed wheel to settle.
+    fn wheel_page(&mut self, steps: usize, delta: f32) {
+        let over_page = egui::pos2(self.window.x / 2.0, self.window.y * 0.6);
+        for _ in 0..steps {
+            self.frame(vec![
+                egui::Event::PointerMoved(over_page),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, delta),
+                    modifiers: Default::default(),
+                    phase: egui::TouchPhase::Move,
+                },
+            ]);
+        }
+        self.idle(60);
+    }
+
     /// Where the last frame painted `text` (its topmost occurrence), if
     /// it painted it at all: off-screen text is culled.
     fn painted(&self, text: &str) -> Option<egui::Rect> {
@@ -506,6 +524,49 @@ fn wheel_events_scroll_the_page() {
     assert!(
         after > before + 100.0,
         "30 wheel steps of 5pt must scroll the page: {before} -> {after}"
+    );
+}
+
+/// Every panel keeps its own page scroll offset. Scroll Brand down and
+/// switch to Foundations: the panel opens at its top, not at Brand's
+/// offset. Scroll Foundations to a different depth, and each panel is
+/// where its own reader left it when they switch back.
+#[test]
+fn each_panel_keeps_its_own_page_scroll_offset() {
+    let mut h = Harness::phone();
+    h.wheel_page(60, -10.0);
+    let brand = h.page_offset().y;
+    assert!(brand > 300.0, "Brand must scroll down first: {brand}");
+
+    h.app.gallery.tab = 1;
+    h.idle(3);
+    assert!(
+        h.page_offset().y < 1.0,
+        "Foundations is first shown, so it opens at its top, not at Brand's {brand}: {}",
+        h.page_offset().y
+    );
+
+    h.wheel_page(30, -10.0);
+    let foundations = h.page_offset().y;
+    assert!(
+        foundations > 100.0 && (foundations - brand).abs() > 100.0,
+        "Foundations must scroll to a depth of its own: {foundations} against Brand's {brand}"
+    );
+
+    h.app.gallery.tab = 0;
+    h.idle(3);
+    assert!(
+        (h.page_offset().y - brand).abs() < 1.0,
+        "Brand keeps the offset it was left at: {brand} -> {}",
+        h.page_offset().y
+    );
+
+    h.app.gallery.tab = 1;
+    h.idle(3);
+    assert!(
+        (h.page_offset().y - foundations).abs() < 1.0,
+        "Foundations keeps the offset it was left at: {foundations} -> {}",
+        h.page_offset().y
     );
 }
 

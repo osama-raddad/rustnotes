@@ -112,8 +112,21 @@ const NARROW_WIDTH: f32 = breakpoints::BREAKPOINT_TABLET;
 /// vertical offset back to zero every frame: neither the wheel nor a
 /// finger could move the page for longer than a frame. The strip
 /// carries its own salt now; this one keeps the page's state its own
-/// whatever else the panel holds.
+/// whatever else the panel holds. [`page_scroll_salt`] pairs it with
+/// the active panel, so each panel has a page state of its own.
 const PAGE_SCROLL: &str = "gallery-page";
+
+/// The salt source of the page scroll area for the panel at `tab`.
+/// The area's state, and with it the scroll offset, lives under the
+/// id this source makes; one source for every panel would carry the
+/// offset from the panel the reader left to the one they open.
+/// `page` takes both the area's salt and the id it loads the state
+/// by from this one value: `ScrollArea::id_salt` hashes its argument
+/// into an `IdSalt`, so a lookup by any other spelling reads a fresh
+/// default state.
+fn page_scroll_salt(tab: usize) -> (&'static str, usize) {
+    (PAGE_SCROLL, tab)
+}
 
 /// The page's side gutter. The bar, the tab strip and the page all share
 /// it, so the chrome's edges line up with the text rather than sitting
@@ -389,7 +402,7 @@ pub struct Gallery {
     /// page's live offset (the area's `scroll_area::State`). The app
     /// never reads it. A test cannot rebuild the id itself: egui derives
     /// it from the content panel's nested `Ui`s salted with
-    /// `PAGE_SCROLL`, so a rebuild would re-trace the chrome's nesting.
+    /// `page_scroll_salt`, so a rebuild would re-trace the chrome's nesting.
     pub(crate) page_scroll_id: Option<egui::Id>,
     /// Which of the dismissible banner demos still hold their
     /// banners; the warning and the error stay until resolved.
@@ -2625,14 +2638,15 @@ impl Gallery {
     /// `content_size` is the panel's laid-out extent.
     fn page(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
         let ctx = ui.ctx().clone();
-        let page_id = ui.make_persistent_id(egui::IdSalt::new(PAGE_SCROLL));
+        let salt = page_scroll_salt(self.tab);
+        let page_id = ui.make_persistent_id(egui::IdSalt::new(salt));
         // A vertical drag that began on a sideways row arrives as the
         // offset change the row handed over last frame (`scrolling_row`).
         let forwarded = ctx.data_mut(|d| {
             std::mem::take(d.get_temp_mut_or_default::<f32>(egui::Id::new(PAGE_FORWARD)))
         });
         let mut area = egui::ScrollArea::vertical()
-            .id_salt(PAGE_SCROLL)
+            .id_salt(salt)
             .scroll_source(ScrollSource {
                 drag: drag_scroll(),
                 ..ScrollSource::default()
