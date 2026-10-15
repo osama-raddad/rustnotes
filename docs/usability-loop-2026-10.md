@@ -557,3 +557,119 @@ shows no ring.
 Still open from earlier: the relaunch freeze after Back (D1, the blocker), the
 swatch hairlines as a design element (D2), the personal iPhone install (D5), and
 the wordmark's legibility (D4).
+
+### Iteration 4: landscape and orientation
+
+Testers: Android only, since the iOS simulator cannot be rotated from here. The
+emulator was rotated with `accelerometer_rotation 0` and `user_rotation 1`, and
+restored to `user_rotation 0`. Note that `accelerometer_rotation` was already 0
+when the pass began, so auto-rotate stays off. Screenshots are under
+`build/usability-audit/iter-4/android/`. Build: `03858a2`.
+
+Confirmed working in landscape: the gallery's chrome (the top bar, the wordmark,
+the search icon, the Theme control, the tab strip) clears the cutout, with equal
+margins of 207 px on each side. The search popover fits below the bar. The
+Brand, Components and Feedback pages render with equal margins and scroll. The
+Rust Notes list and editor render, and its in-app back arrow works.
+
+Triage. The majors ship in this iteration:
+
+- **4-A1, major, Theme popover in landscape.** It overflows the bottom of the
+  window and has no scroll area, so the last row (reduced transparency) cannot be
+  reached. It also rises above the bar's top edge. **Fix: task 17.**
+- **4-A2, major, the gallery's page area in landscape.** The page's scroll area is
+  about 109 pt of a 448 pt screen, because the fixed chrome takes the rest: the top
+  bar, a second tab strip, and a three-line tab description. **Fix: task 18.**
+- **4-A5, major, Rust Notes' horizontal inset in landscape.** Rust Notes honours
+  only the real left inset, so its content runs 208 px from the left and 48 px from
+  the right. The gallery mirrors the inset and is 207 px on both sides. **Fix:
+  task 19.**
+
+Deferred, with the reason:
+
+- **4-A3, minor, a one-line banner keeps a two-line height,** and its dismiss X sits
+  low. Iteration 5 (layout).
+- **4-A4, minor, the Rust Notes editor with the keyboard up** shows only about one
+  and a half lines. Iteration 7 (touch flows and the keyboard).
+- **Not checked.** The Rust Notes Settings tab, the Foundations tab in landscape,
+  and whether the right inset is real on other devices. This emulator has a cutout
+  on the left only.
+
+Fix batch for iteration 4: tasks 17 to 19, run one at a time.
+
+### Iteration 4 closed
+
+Build for the re-check: `e365b24` (Android installed for both apps; the iOS
+simulator was not rebuilt, since no iOS-only behaviour changed in this iteration).
+Every fix was spec-reviewed and quality-reviewed.
+
+Fixed and verified on the Android emulator in landscape:
+
+- **4-A1, the Theme popover in landscape.** `72ab126`. The popover fits the space
+  below the bar and scrolls. Its top is 9 pt under the bar, and its bottom is
+  inside the screen. A swipe inside it reaches the last row. The portrait popover
+  keeps its 440-pt size.
+- **4-A2, the page's height in landscape.** `66cda43`, follow-up `e45382b`. In a
+  window under 500 pt, the tab description is dropped and the gaps under the bar
+  are compressed. The page now uses about 52% of the screen, up from 24%. The
+  portrait and desktop layouts keep their full chrome, pinned by a test.
+- **4-A5, the Rust Notes margins in landscape.** `0de8ad4`, follow-up `e365b24`.
+  The content mirrors the larger horizontal inset, so the note list has 159 px
+  (53 pt) on both sides, and the card is centred. The editor's left edge is
+  consistent with the card's. The margins beside the cutout are the canvas colour.
+
+Design notes, from the reviews:
+
+- **The side margins are canvas, not bar colour.** Unlike the vertical strips, the
+  bars stop at the mirrored rect, so a light-mode landscape shows white bars with
+  canvas gutters on both sides. A full-bleed bar, extended into the margins, is a
+  different change. **Decision D10.**
+- **The page's threshold is 500 pt, and it counts the insets.** The landscape
+  phones (360 to 448 pt) and the portrait phones (568 pt or more) sit clear of it.
+  A window between 500 and about 590 pt with insets still gets under half the
+  height for the page. That is a deliberate cliff, and it is outside the finding.
+- **The Pixel's short-window headroom is 6 pt.** Measured in the test, not on a
+  device with a taller top inset.
+- **Two-pane on a tablet with a side cutout** would show the surface colour in the
+  detail pane's right margin. It needs a window of at least 480 pt of height, so it
+  is not reachable on the Pixel. Not tested.
+
+Observed, deferred:
+
+- **The gallery's bar and the tab strip repeat the same four tabs** in landscape.
+  This may be intended for wide windows. Iteration 5.
+- **The Rust Notes editor with the keyboard up** shows about one and a half lines,
+  and the keyboard runs past the app's margin. This is 4-A4. Iteration 7.
+- **The sample note's text** contains a "ZZ" prefix from an earlier test pass. It
+  is device data, not a code issue.
+
+Revised schedule for the rest of the loop:
+
+- **Iteration 5, layout and touch targets.** The deferred list from iterations 2
+  and 3: the Components right gutter, the controls below 44 pt, the card surfaces,
+  the Brand single column, the keyboard-dismiss blank strip, the glass specimen
+  spill, the Tab-to-me pill, the form fields' overhang of the right gutter,
+  "Restore the banners" with no affordance, the banner dismiss glyph, the
+  snackbar-and-paragraph spacing, the duplicated tabs in landscape, and the
+  one-line banner's height. Also a large-text pass: Android `font_scale` at 1.3 and
+  1.5.
+- **Iteration 6, rendering and contrast.** Night mode across the six themes, the
+  wordmark's anti-aliasing (2-I4), and the low-contrast disabled and "Sending…"
+  labels (2-A9 and 2-I5). Also the swatches that are invisible without an outline
+  (1-A12), and the Teal Light card.
+- **Iteration 7, Rust Notes touch flows and the keyboard.** List, create, edit,
+  swipe-to-delete, pull-to-refresh, the two-tap delete, the editor's hold-to-select,
+  the autosave, and the keyboard covering the editor (4-A4). Also the Rust Notes
+  delete cross and the "+" button's sizes (1-A13 for Rust Notes), and the date's
+  alignment (1-I9).
+- **Iteration 8, size classes.** The tablet AVDs (`Snakebyte_Tablet`) for the
+  two-pane layout, and the phone landscape single pane.
+- **Iteration 9, the iOS pass.** The bottom clip (2-I8), and the bar's edge and gap
+  on iOS (2-I9).
+- **Iteration 10, the regression sweep and the test-quality backlog.** Lint, test,
+  check, the emulator touch script, re-screenshotting what each iteration touched,
+  and a review of the branch diff.
+
+Still open from earlier: the relaunch freeze after Back (D1, the blocker), the swatch
+hairlines (D2), the personal iPhone install (D5), the wordmark's legibility (D4), and
+the decisions D6 to D10.
