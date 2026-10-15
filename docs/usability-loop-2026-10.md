@@ -973,6 +973,27 @@ Not checked yet, so iteration 7 is open:
 - The size of the delete cross and the "+" button (1-A13), and the date's alignment
   in the note row (1-I9). Both look aligned on the screenshots; neither was measured.
 
+## Iteration 8: size classes (partial)
+
+Device: `Snakebyte_Tablet` (1280 by 800, landscape), `emulator-5556`, booted for
+this pass. The Pixel (`emulator-5554`) was left on portrait 448pt at font scale 1.0.
+`just run-android` picks the first emulator, so the tablet was installed with
+`just android-install rustnotes emulator-5556 native`.
+
+Checked, and working:
+- The two-pane layout: the note list on the left (about 420pt), the detail pane on
+  the right, and the bottom bar across both.
+- The empty detail pane reads "Select a note or tap +", centred.
+- A note created on the tablet opens in the right pane with the title "Edit note"
+  and the body text on the same left edge. The selected row is highlighted.
+- The tablet's software keyboard leaves most of the editor visible.
+
+Not checked, so iteration 8 is open:
+- The two-pane surface colour, and its side inset (from the 0de8ad4 review). The
+  pane edges look plain on this screenshot, but the inset was not measured.
+- The Snakebyte_Tablet_Design AVD, and a portrait tablet.
+- Phone landscape single-pane was checked in iteration 7 on the Pixel, not here.
+
 ## Status and handoff
 
 Paused at the user's request during iteration 5, task 20. Nothing has been
