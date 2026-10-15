@@ -952,11 +952,21 @@ Later in the pass:
 - **Pull-to-refresh works.** Held mid-pull, the spinner shows above the list and the
   list moves down with it. A quick swipe that releases before the threshold does
   nothing, which is correct.
-- **7-A2, major, the editor in landscape.** The keyboard covers everything below
-  the first line, leaving about one and a half lines above it (4-A4, still open).
-  The text also starts about 87pt in from the left margin, under the title's
-  left edge. It was seen in landscape only, and it is not yet tested in portrait.
-  Not fixed.
+- **7-A2, major, the editor text in landscape started about 140pt in** (the
+  screenshot's 87pt was against a different origin). **Fixed in `32b3f86`.** The
+  editor route was capped at 640pt and centred, so in a 998pt landscape window the
+  column started at x 179. The cap is removed for the editor route. The red test
+  measured the text at x 195 against a left inset of 53. It now starts at 69, which
+  is the inset plus the 16pt margin. The device, rotated to landscape, shows the
+  text level with the back arrow. Comment fixes are in `e7ddb59`.
+- **D16, a product call from this fix.** The editor route is no longer capped, so
+  any single-pane editor wider than 640pt runs full width. That includes portrait
+  tablets in the Medium class (600 to 839pt), which the cap used to narrow. No test
+  covers Medium. The alternative is to keep the reading width and cap the title bar
+  too. Keep full width, or restore the reading width for portrait tablets?
+- **4-A4, still open.** In landscape the keyboard covers all but about one and a
+  half lines of the editor. That is the keyboard's own height, not a layout
+  defect; the caret stays visible. It is not fixed.
 
 Not checked yet, so iteration 7 is open:
 - The editor's hold-to-select, and autosave timing with the note open.
