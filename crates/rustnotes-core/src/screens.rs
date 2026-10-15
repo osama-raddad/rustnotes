@@ -851,7 +851,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Event, RawInput};
+    use egui::{Color32, Event, RawInput};
     use std::time::Duration;
 
     /// Copy of `temp` in lib.rs's tests (private to that module), under its own prefix,
@@ -890,10 +890,62 @@ mod tests {
         events: Vec<Event>,
         t: f64,
     ) -> Vec<Painted> {
+        run_pass_insets(app, ctx, size, Default::default(), events, t).text
+    }
+
+    /// A filled rectangle as a pass painted it.
+    struct Filled {
+        rect: Rect,
+        fill: Color32,
+        /// The clip rect it was painted under: what shows of it.
+        clip: Rect,
+    }
+
+    /// What one pass painted, each kind in paint order (later is on top).
+    struct Pass {
+        text: Vec<Painted>,
+        fills: Vec<Filled>,
+    }
+
+    impl Pass {
+        /// The colour a pass left at `pos`: the topmost filled rectangle
+        /// covering it, as its clip leaves it showing.
+        fn colour_at(&self, pos: egui::Pos2) -> Option<Color32> {
+            self.fills
+                .iter()
+                .rev()
+                .find(|f| f.rect.contains(pos) && f.clip.contains(pos))
+                .map(|f| f.fill)
+        }
+
+        /// Every filled rectangle with some part of itself inside `area`
+        /// (one that only touches an edge of `area` is outside it).
+        fn fills_in(&self, area: Rect) -> impl Iterator<Item = &Filled> {
+            self.fills.iter().filter(move |f| {
+                let shown = f.rect.intersect(f.clip);
+                shown.min.x < area.max.x
+                    && shown.max.x > area.min.x
+                    && shown.min.y < area.max.y
+                    && shown.max.y > area.min.y
+            })
+        }
+    }
+
+    /// `run_pass_sized` with the safe-area insets the host reports, and the
+    /// filled rectangles it painted as well as its text.
+    fn run_pass_insets(
+        app: &mut App,
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        insets: egui::epaint::MarginF32,
+        events: Vec<Event>,
+        t: f64,
+    ) -> Pass {
         let screen = Rect::from_min_size(egui::Pos2::ZERO, size);
         ctx.begin_pass(RawInput {
             time: Some(t),
             screen_rect: Some(screen),
+            safe_area_insets: Some(egui::SafeAreaInsets(insets)),
             events,
             ..Default::default()
         });
@@ -907,24 +959,33 @@ mod tests {
         // No renderer applies the glyph-atlas delta; clear it or epaint
         // panics on the drop.
         out.textures_delta.clear();
-        let mut painted = vec![];
+        let mut pass = Pass {
+            text: vec![],
+            fills: vec![],
+        };
         for clipped in &out.shapes {
-            collect_text(&clipped.shape, clipped.clip_rect, &mut painted);
+            collect_shapes(&clipped.shape, clipped.clip_rect, &mut pass);
         }
-        painted
+        pass
     }
 
-    /// Every `Shape::Text` in `shape`, looking inside `Shape::Vec` groups,
-    /// which are painted under their parent's clip rect.
-    fn collect_text(shape: &Shape, clip: Rect, into: &mut Vec<Painted>) {
+    /// Every `Shape::Text` and filled `Shape::Rect` in `shape`, looking
+    /// inside `Shape::Vec` groups, which are painted under their parent's
+    /// clip rect.
+    fn collect_shapes(shape: &Shape, clip: Rect, into: &mut Pass) {
         match shape {
-            Shape::Text(text) => into.push(Painted {
+            Shape::Text(text) => into.text.push(Painted {
                 text: text.galley.text().to_owned(),
                 shown: text.galley.rows.iter().map(|row| row.text()).collect(),
                 rect: Rect::from_min_size(text.pos, text.galley.size()),
                 clip,
             }),
-            Shape::Vec(inner) => inner.iter().for_each(|s| collect_text(s, clip, into)),
+            Shape::Rect(r) if r.fill != Color32::TRANSPARENT => into.fills.push(Filled {
+                rect: r.rect,
+                fill: r.fill,
+                clip,
+            }),
+            Shape::Vec(inner) => inner.iter().for_each(|s| collect_shapes(s, clip, into)),
             _ => {}
         }
     }
@@ -1208,6 +1269,210 @@ mod tests {
             date.shown.starts_with("Sep") && date.shown.ends_with('…'),
             "the date is cut at its end: {:?}",
             date.shown
+        );
+    }
+
+    /// A Pixel in landscape, with its camera cutout reported as a 53 pt inset
+    /// on the left and nothing on the right. The emulator's 2992 x 1344 px at
+    /// 3 px per pt is 997.3 x 448 pt; 998 keeps the centred body on whole
+    /// points, where a half point would paint a pixel off on one side.
+    const PIXEL_LANDSCAPE: (f32, f32) = (998.0, 448.0);
+    const CUTOUT: f32 = 53.0;
+
+    fn cutout_on_the_left() -> egui::epaint::MarginF32 {
+        egui::epaint::MarginF32 {
+            left: CUTOUT,
+            ..Default::default()
+        }
+    }
+
+    /// One settled pass of `app` on the Pixel in landscape.
+    fn landscape_pass(app: &mut App, ctx: &egui::Context) -> Pass {
+        // Nothing mid-slide, so the one route that shows is the only one drawn.
+        app.nav.settle();
+        let (w, h) = PIXEL_LANDSCAPE;
+        run_pass_insets(app, ctx, vec2(w, h), cutout_on_the_left(), vec![], 0.0)
+    }
+
+    /// How far the list screen's parts stand from the window's left and right
+    /// edges: (what, left margin, right margin), in points. The bars' contents
+    /// are in it as well as the bars, as they show where a bar's own edges are:
+    /// the title one `sp(3)` inside the left edge, the "+" button one `sp(3)`
+    /// inside the right.
+    fn list_margins(pass: &Pass, pal: &Palette, w: f32, h: f32) -> Vec<(&'static str, f32, f32)> {
+        let filled = |what: &str, found: Option<&Filled>| {
+            found
+                .unwrap_or_else(|| panic!("nothing painted for {what}"))
+                .rect
+        };
+        let top_bar = filled(
+            "the top bar",
+            pass.fills
+                .iter()
+                .find(|f| f.fill == pal.bar && f.rect.top() <= 0.0),
+        );
+        let bottom_bar = filled(
+            "the bottom bar",
+            pass.fills
+                .iter()
+                .find(|f| f.fill == pal.bar && f.rect.bottom() >= h),
+        );
+        let card = filled(
+            "a note's card",
+            pass.fills.iter().find(|f| {
+                f.fill == pal.surface
+                    && f.rect.top() > 0.0
+                    && f.rect.bottom() < h
+                    && f.rect.width() > 100.0
+            }),
+        );
+        let plus = filled(
+            "the + button",
+            pass.fills.iter().find(|f| f.fill == pal.accent),
+        );
+        // The bottom bar's tab has the same word; this one is in the top half.
+        let title = pass
+            .text
+            .iter()
+            .find(|p| p.text == "Notes" && p.rect.top() < h / 2.0)
+            .expect("the top bar's title")
+            .rect;
+        vec![
+            ("top bar", top_bar.left(), w - top_bar.right()),
+            ("bottom bar", bottom_bar.left(), w - bottom_bar.right()),
+            ("note card", card.left(), w - card.right()),
+            ("title / + button", title.left(), w - plus.right()),
+        ]
+    }
+
+    /// What stands in the two `CUTOUT`-wide side margins of a `w` x `h`
+    /// window besides the screen's canvas: a message for each stray.
+    fn margin_strays(pass: &Pass, w: f32, h: f32, canvas: Color32) -> Vec<String> {
+        let sides = [
+            ("left", Rect::from_min_max(pos2(0.0, 0.0), pos2(CUTOUT, h))),
+            (
+                "right",
+                Rect::from_min_max(pos2(w - CUTOUT, 0.0), pos2(w, h)),
+            ),
+        ];
+        let mut strays = vec![];
+        for (side, area) in sides {
+            for f in pass.fills_in(area) {
+                if f.fill != canvas {
+                    strays.push(format!(
+                        "{side} margin: a {:?} rect at {:?}",
+                        f.fill, f.rect
+                    ));
+                }
+            }
+            // The bar rows and the body between them.
+            for y in [28.0, h / 2.0, h - 28.0] {
+                let seen = pass.colour_at(pos2(area.center().x, y));
+                if seen != Some(canvas) {
+                    strays.push(format!("{side} margin at y={y}: shows {seen:?}"));
+                }
+            }
+        }
+        strays
+    }
+
+    /// Finding 4-A5. A Pixel in landscape reports its cutout as a 53 pt left
+    /// inset and no right inset. The scaffold honoured only that, so the bars
+    /// stood 53 pt from the left edge and at the right edge, and the title and
+    /// "+" button 69 pt from the left and 16 pt from the right. The gallery
+    /// mirrors the inset (the larger of the two on both sides); so does this.
+    #[test]
+    fn landscape_mirrors_a_left_only_inset() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "mirror-list");
+        let pass = landscape_pass(&mut app, &ctx);
+        let pal = Palette::of(&ctx);
+        let (w, h) = PIXEL_LANDSCAPE;
+
+        // Each part stands as far from one edge as from the other, and clear
+        // of the cutout.
+        let crooked: Vec<String> = list_margins(&pass, &pal, w, h)
+            .into_iter()
+            .filter(|&(_, left, right)| !near(left, right) || left < CUTOUT)
+            .map(|(what, left, right)| {
+                format!("{what}: {left} pt from the left, {right} from the right")
+            })
+            .collect();
+        assert!(
+            crooked.is_empty(),
+            "equal margins of at least {CUTOUT} pt were wanted: {crooked:#?}"
+        );
+    }
+
+    /// The margins beside the cutout hold the app's canvas and nothing else:
+    /// no bar, button or card runs into them, so no stray colour shows. On the
+    /// list the canvas is the background token.
+    #[test]
+    fn landscape_margins_of_the_list_are_its_canvas() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "mirror-list-canvas");
+        let pass = landscape_pass(&mut app, &ctx);
+        let (w, h) = PIXEL_LANDSCAPE;
+        let strays = margin_strays(&pass, w, h, Palette::of(&ctx).bg);
+        assert!(
+            strays.is_empty(),
+            "the margins are not all canvas: {strays:#?}"
+        );
+    }
+
+    /// The editor paints its own canvas (the surface) and Settings the
+    /// ordinary one (the background); the margins take whichever the screen
+    /// has, in both themes.
+    #[test]
+    fn landscape_margins_hold_each_screens_own_canvas() {
+        let (w, h) = PIXEL_LANDSCAPE;
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let ctx = egui::Context::default();
+            ctx.set_theme(theme);
+            let pal = Palette::of(&ctx);
+
+            let mut editor = app_with_two_notes(&ctx, "mirror-editor");
+            editor.open_editor(0);
+            let pass = landscape_pass(&mut editor, &ctx);
+            let strays = margin_strays(&pass, w, h, pal.surface);
+            assert!(strays.is_empty(), "editor, {theme:?}: {strays:#?}");
+
+            let mut settings = app_with_two_notes(&ctx, "mirror-settings");
+            settings.tab = Tab::Settings;
+            let pass = landscape_pass(&mut settings, &ctx);
+            let strays = margin_strays(&pass, w, h, pal.bg);
+            assert!(strays.is_empty(), "settings, {theme:?}: {strays:#?}");
+        }
+    }
+
+    /// With no horizontal inset (a phone upright) nothing moves: the bars
+    /// run edge to edge, the title and button stand one `sp(3)` inside them.
+    #[test]
+    fn portrait_without_a_horizontal_inset_is_unchanged() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "mirror-portrait");
+        app.nav.settle();
+        let (w, h) = (400.0, 800.0);
+        let insets = egui::epaint::MarginF32 {
+            top: 59.0,
+            bottom: 34.0,
+            ..Default::default()
+        };
+        let pass = run_pass_insets(&mut app, &ctx, vec2(w, h), insets, vec![], 0.0);
+        let pal = Palette::of(&ctx);
+        assert_eq!(
+            list_margins(&pass, &pal, w, h),
+            vec![
+                ("top bar", 0.0, 0.0),
+                ("bottom bar", 0.0, 0.0),
+                ("note card", 12.0, 12.0),
+                ("title / + button", 16.0, 16.0),
+            ]
+        );
+        assert_eq!(
+            pass.colour_at(pos2(2.0, 400.0)),
+            Some(pal.bg),
+            "the canvas still fills the window"
         );
     }
 }
