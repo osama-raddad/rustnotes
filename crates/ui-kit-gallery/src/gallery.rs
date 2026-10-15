@@ -667,6 +667,18 @@ fn format_tracking(tracking_em: f32) -> String {
     }
 }
 
+/// A style's leading as the specimen states it: the unitless ratio
+/// ("1.02"), or, for the eyebrow, the tokens' absolute line ("16px").
+/// The eyebrow's ratio is stored as 16 over 11 so its line box comes out
+/// at 16px, and printed as a ratio it reads "1.4545455".
+fn format_leading(style: TypeStyle) -> String {
+    if style == TypeStyle::Eyebrow {
+        format!("{}px", trim_float(style.line_height().round()))
+    } else {
+        trim_float(style.leading())
+    }
+}
+
 /// The type specimen: every style in the active theme's faces, each with
 /// its meta line (size over leading, tracking, family).
 fn type_section(ui: &mut egui::Ui, theme: ThemeId) {
@@ -702,7 +714,7 @@ fn type_section(ui: &mut egui::Ui, theme: ThemeId) {
             "{} · {}/{} · {} · {}",
             sentence_case(style.name().trim_start_matches("type-")),
             trim_float(style.size()),
-            trim_float(style.leading()),
+            format_leading(*style),
             format_tracking(style.tracking()),
             style.family_name(theme),
         );
@@ -2901,10 +2913,20 @@ impl Gallery {
                         .role(role)
                         .expect("ROLES names all resolve to fields");
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
-                    ui.painter().rect_filled(
+                    let radius = CornerRadius::same(radii::RADIUS_XS as u8);
+                    ui.painter().rect_filled(rect, radius, color);
+                    // The surfaces and glass tints sit close to the
+                    // canvas and vanish without an edge. The edge is
+                    // `outline`, the border role that holds 3:1 on the
+                    // canvas in every theme (`outline_variant` is a
+                    // 1.4:1 hairline, and translucent in the Teal
+                    // themes), drawn outside so the swatch keeps its
+                    // own colour.
+                    ui.painter().rect_stroke(
                         rect,
-                        CornerRadius::same(radii::RADIUS_XS as u8),
-                        color,
+                        radius,
+                        egui::Stroke::new(1.0, colors.outline),
+                        egui::StrokeKind::Outside,
                     );
                     ui.label(sentence_case(role));
                     ui.end_row();

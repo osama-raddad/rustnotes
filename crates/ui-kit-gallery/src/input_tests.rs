@@ -3551,3 +3551,197 @@ fn the_brand_cards_keep_their_desktop_widths() {
     }
     assert!(off.is_empty(), "{}", off.join("\n"));
 }
+
+/// `fg` painted over the opaque `bg`: egui's colours are premultiplied,
+/// so what shows through is `bg` scaled by the alpha the paint leaves.
+fn over(fg: egui::Color32, bg: egui::Color32) -> egui::Color32 {
+    let [r, g, b, a] = fg.to_array();
+    let kept = 255 - u16::from(a);
+    let mix =
+        |paint: u8, under: u8| (u16::from(paint) + u16::from(under) * kept / 255).min(255) as u8;
+    egui::Color32::from_rgb(mix(r, bg.r()), mix(g, bg.g()), mix(b, bg.b()))
+}
+
+/// WCAG relative luminance of an opaque colour.
+fn relative_luminance(c: egui::Color32) -> f64 {
+    let channel = |v: u8| {
+        let s = f64::from(v) / 255.0;
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+}
+
+/// WCAG contrast ratio between two opaque colours (1 to 21).
+fn contrast_ratio(a: egui::Color32, b: egui::Color32) -> f64 {
+    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The 3:1 that WCAG 1.4.11 asks of a graphic that carries meaning.
+const OUTLINE_MIN_CONTRAST: f64 = 3.0;
+
+/// The Foundations colour-role grid: every role's swatch, as it paints.
+/// The eight roles that sit close to the canvas (the surfaces, the
+/// glass tints) are invisible without an edge, so each swatch carries a
+/// 1px outline that holds 3:1 against the canvas the page sits on, in
+/// every theme (finding 1-A12). The swatch keeps its own colour: the
+/// outline is drawn outside its rect.
+#[test]
+fn every_colour_role_swatch_keeps_a_visible_outline() {
+    let swatch_radius = egui::CornerRadius::same(ui_kit::tokens::radii::RADIUS_XS as u8);
+    let mut off = Vec::new();
+    for theme in ThemeId::ALL {
+        let mut h = Harness::phone();
+        h.app.gallery.tab = 1;
+        h.app.gallery.theme = *theme;
+        crate::gallery::apply_theme(*theme, &h.ctx);
+        h.idle(3);
+        let colors = theme.colors();
+        // `GalleryApp::ui` paints the theme's background behind the page.
+        let canvas = colors.background;
+        let rects = painted_rects(&h);
+        let swatches: Vec<_> = rects
+            .iter()
+            .map(|(shape, _)| shape)
+            .filter(|shape| {
+                shape.rect.size() == egui::Vec2::splat(14.0)
+                    && shape.corner_radius == swatch_radius
+                    && shape.fill != egui::Color32::TRANSPARENT
+            })
+            .collect();
+        assert_eq!(
+            swatches.len(),
+            ui_kit::tokens::colors::ThemeColors::ROLES.len(),
+            "{theme:?}: one 14pt swatch per colour role"
+        );
+        for (shape, role) in swatches
+            .iter()
+            .zip(ui_kit::tokens::colors::ThemeColors::ROLES)
+        {
+            assert_eq!(
+                Some(shape.fill),
+                colors.role(role),
+                "{theme:?}: the swatches run in role order, each in its own colour"
+            );
+            let fill = contrast_ratio(over(shape.fill, canvas), canvas);
+            let edge = rects
+                .iter()
+                .map(|(edge, _)| edge)
+                .filter(|edge| edge.rect == shape.rect && edge.stroke.width >= 1.0)
+                .map(|edge| contrast_ratio(over(edge.stroke.color, canvas), canvas))
+                .fold(None, |best: Option<f64>, ratio| {
+                    Some(best.map_or(ratio, |b| b.max(ratio)))
+                });
+            match edge {
+                None => off.push(format!(
+                    "{theme:?} {role}: no outline (the fill alone is {fill:.2}:1 on the canvas)"
+                )),
+                Some(ratio) if ratio < OUTLINE_MIN_CONTRAST => off.push(format!(
+                    "{theme:?} {role}: outline {ratio:.2}:1 on the canvas, under \
+                     {OUTLINE_MIN_CONTRAST}:1 (the fill alone is {fill:.2}:1)"
+                )),
+                Some(_) => {}
+            }
+        }
+    }
+    assert!(
+        off.is_empty(),
+        "{} swatches:\n{}",
+        off.len(),
+        off.join("\n")
+    );
+}
+
+/// Every number in `text` written with more than `places` decimal
+/// places: a digit run, a dot, and a longer run of digits.
+fn long_decimals(text: &str, places: usize) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut found = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i + 1 < chars.len() && chars[i] == '.' && chars[i + 1].is_ascii_digit() {
+            let fraction = i + 1;
+            i = fraction;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            if i - fraction > places {
+                found.push(chars[start..i].iter().collect());
+            }
+        }
+    }
+    found
+}
+
+/// The Foundations page: no spec line prints a raw float. The type
+/// specimen's meta line is `size/leading, tracking, family`; a ratio
+/// the tokens state as an absolute length (the eyebrow's 16px over
+/// 11px) printed `1.4545455` (finding 1-A12). Three places is the most a
+/// documented value carries (the display's tracking, −0.035em); a
+/// seventh is an f32 quotient.
+#[test]
+fn the_foundations_spec_lines_print_no_raw_floats() {
+    let mut h = Harness::phone();
+    h.app.gallery.tab = 1;
+    h.idle(3);
+    let mut seen: Vec<String> = Vec::new();
+    let mut still = 0;
+    let mut last = f32::NAN;
+    // Wheel the page from its top to its end, keeping every string a
+    // frame paints: text below the fold is not painted at all.
+    let over_page = egui::pos2(h.window.x / 2.0, h.window.y * 0.6);
+    for _ in 0..4000 {
+        h.frame(vec![
+            egui::Event::PointerMoved(over_page),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -40.0),
+                modifiers: Default::default(),
+                phase: egui::TouchPhase::Move,
+            },
+        ]);
+        for (text, _) in &h.strings {
+            if !seen.contains(text) {
+                seen.push(text.clone());
+            }
+        }
+        let offset = h.page_offset().y;
+        still = if offset == last { still + 1 } else { 0 };
+        last = offset;
+        if 30 <= still {
+            break;
+        }
+    }
+    assert!(30 <= still, "the wheel must reach the page's end");
+    // The eyebrow's documented line is the tokens' absolute 16px.
+    assert!(
+        seen.iter()
+            .any(|text| text.starts_with("Eyebrow · 11/16px · +0.24em · ")),
+        "the type specimen's eyebrow meta line must read its 11/16px, among the {} strings seen",
+        seen.len()
+    );
+    let raw: Vec<String> = seen
+        .iter()
+        .filter_map(|text| {
+            let floats = long_decimals(text, 3);
+            (!floats.is_empty()).then(|| format!("{text:?}: {}", floats.join(", ")))
+        })
+        .collect();
+    assert!(
+        raw.is_empty(),
+        "raw floats on the Foundations page:\n{}",
+        raw.join("\n")
+    );
+}
