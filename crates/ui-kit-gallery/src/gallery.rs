@@ -71,7 +71,7 @@ use egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
 use ui_kit::components::badge::{Badge, IconButton};
 use ui_kit::components::banner::{Banner, BannerEvent, BannerTone};
-use ui_kit::components::button::{Button, ButtonEmphasis};
+use ui_kit::components::button::{self, Button, ButtonEmphasis, ButtonSize};
 use ui_kit::components::checkbox::{Checkbox, CheckboxState};
 use ui_kit::components::chip::{Chip, ChipEvent};
 use ui_kit::components::liquid_glass::{glass_recipe, paint_glass, GlassThickness, GlassTint};
@@ -578,6 +578,12 @@ fn trim_float(value: f32) -> String {
 
 /// One state specimen: a button-shaped rect at `scale`, its caption,
 /// and the focus ring when the state is focus.
+///
+/// The rect is as wide as the label needs, not a fixed width: the label
+/// is laid out first and the rect takes the kit button's horizontal
+/// padding around it, so a wider face (the themes' body faces differ in
+/// width) widens the tile instead of spilling the label's ends past the
+/// fill. The row scrolls sideways, so a wider tile costs nothing.
 fn state_tile(
     ui: &mut egui::Ui,
     theme: ThemeId,
@@ -588,7 +594,13 @@ fn state_tile(
     focused: bool,
 ) {
     let colors = theme.colors();
-    let size = Vec2::new(spacing::SPACE_24, spacing::SPACE_10);
+    let label = ui.painter().layout_no_wrap(
+        copy::START_A_PROJECT.to_owned(),
+        TypeStyle::Body.font_id(theme),
+        text,
+    );
+    let width = button::min_width(ButtonSize::Default, label.size().x, false, false);
+    let size = Vec2::new(width, spacing::SPACE_10);
     ui.vertical(|ui| {
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let body = Rect::from_center_size(rect.center(), size * scale);
@@ -597,13 +609,8 @@ fn state_tile(
         if focused {
             states::focus_ring_at(ui.painter(), rect, radius, theme);
         }
-        ui.painter().text(
-            body.center(),
-            Align2::CENTER_CENTER,
-            copy::START_A_PROJECT,
-            TypeStyle::Body.font_id(theme),
-            text,
-        );
+        ui.painter()
+            .galley(body.center() - label.size() / 2.0, label, text);
         ui.add_space(spacing::SPACE_1);
         ui.add(egui::Label::new(specimen_job(
             caption,
@@ -2866,6 +2873,88 @@ mod tests {
                 overflow <= 0.5,
                 "{name} runs {overflow}pt past a {DESKTOP_WIDTH}pt window"
             );
+        }
+    }
+
+    /// Lay the Foundations STATES row out in `theme` on a desktop window
+    /// and return, for each "Start a project" label it paints, the
+    /// label's rect and the rect of the filled tile body it sits on (the
+    /// last filled rect before the label that holds the label's centre;
+    /// the focus ring's halo and outline are strokes with no fill).
+    fn state_tile_labels(theme: ThemeId) -> Vec<(Rect, Rect)> {
+        let ctx = egui::Context::default();
+        install(theme, &ctx);
+        apply_theme(theme, &ctx);
+        let flags = UiKitFlags::default();
+        let mut pairs = Vec::new();
+        // The first pass binds the installed faces; the next let the
+        // scroll row settle.
+        for _ in 0..3 {
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(DESKTOP_WIDTH, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        states_section(ui, theme, &flags);
+                    });
+                },
+            );
+            let mut bodies: Vec<Rect> = Vec::new();
+            pairs.clear();
+            for clipped in &out.shapes {
+                match &clipped.shape {
+                    egui::Shape::Rect(rect) if rect.fill != Color32::TRANSPARENT => {
+                        bodies.push(rect.rect);
+                    }
+                    egui::Shape::Text(text) if text.galley.text() == copy::START_A_PROJECT => {
+                        let label = Rect::from_min_size(text.pos, text.galley.size());
+                        let body = bodies
+                            .iter()
+                            .rev()
+                            .find(|body| body.contains(label.center()))
+                            .copied()
+                            .expect("a label sits on a filled tile body");
+                        pairs.push((label, body));
+                    }
+                    _ => {}
+                }
+            }
+            out.drop_without_applying_deltas();
+        }
+        pairs
+    }
+
+    /// The STATES row's five tiles each hold the whole "Start a project"
+    /// label inside their painted body, in every theme: the body takes
+    /// its width from the label, so a wider face or a longer label
+    /// widens the tile instead of spilling its ends onto the page.
+    #[test]
+    fn state_tile_labels_fit_inside_their_tiles() {
+        for theme in ThemeId::ALL {
+            let pairs = state_tile_labels(*theme);
+            assert_eq!(
+                pairs.len(),
+                copy::STATE_CAPTIONS.len(),
+                "{theme:?}: one label per state tile"
+            );
+            for (index, (label, body)) in pairs.iter().enumerate() {
+                assert!(
+                    body.contains_rect(*label),
+                    "{theme:?}, tile {index}: the {}pt label at x {}..{} runs outside \
+                     its {}pt button at x {}..{}",
+                    label.width(),
+                    label.left(),
+                    label.right(),
+                    body.width(),
+                    body.left(),
+                    body.right(),
+                );
+            }
         }
     }
 

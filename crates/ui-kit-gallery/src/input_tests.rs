@@ -402,7 +402,12 @@ fn vertical_touch_drag_on_a_specimen_row_scrolls_the_page() {
         .scroll_to(caption, 250.0..600.0)
         .expect("the state tiles scroll into view");
     let page = h.page_offset().y;
-    let x = before.center().x;
+    // The tiles are as wide as their labels, so the pressed tile's
+    // caption starts near a phone's right edge: swipe down the window's
+    // centre line instead, where the wheel left the pointer. The touch's
+    // first delta is then purely vertical; one that jumped sideways
+    // would move the row before the gesture picks its axis.
+    let x = h.window.x / 2.0;
     let y = before.center().y;
     h.swipe(egui::pos2(x, y), egui::pos2(x, y - 200.0), 10);
     h.idle(30);
