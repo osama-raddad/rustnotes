@@ -2222,35 +2222,37 @@ enum ThemeTrigger {
     Icon,
 }
 
-impl ThemeTrigger {
-    /// The room a labelled trigger's box leaves, beyond its own focus
-    /// ring, between the ring and the pane's edge. The ring reaches 4px
-    /// past the box (the 2px offset and the 2px outline).
-    const FOCUS_ROOM: f32 = 4.0;
+/// How far the keyboard focus ring reaches outside a widget's box: the
+/// ring's offset and its outline (the halo lies within them).
+pub(crate) const FOCUS_REACH: f32 = states::FOCUS_RING_OFFSET + states::FOCUS_RING_WIDTH;
 
-    /// How far the trigger's box runs past the row's right edge, at the
-    /// end of the row, so that its icon stands nearly the bar's padding
-    /// in from the pane's edge: the room inside the box up to the icon,
-    /// which is the default button's horizontal padding for the two
-    /// labelled triggers (the label and the chevron), and for the icon
-    /// button the room between its 44px circle and its icon. It is the
-    /// distance to the icon's box, not to its ink: the ink sits a
-    /// further 5px inside for the chevron and 3px for the tune icon.
+impl ThemeTrigger {
+    /// How far the trigger's box runs past the row's right edge, when
+    /// it ends the row, so that its icon stands the bar's padding in
+    /// from the pane's edge. The box holds its icon's room inside it:
+    /// the default button's horizontal padding for the labelled
+    /// triggers, and for the icon button the room between its 44px
+    /// circle and its icon. The icon is measured by its box, not by its
+    /// ink, which sits a further 5px in for the chevron and 3px for the
+    /// tune icon.
     ///
-    /// A deliberate trade-off: the labelled trigger overhangs by
-    /// [`Self::FOCUS_ROOM`] less than that, so its box stands 8px from
-    /// the pane's edge and its focus ring, which reaches 4px past the
-    /// box, keeps 4px clear of the bar's border (a box 4px from the
-    /// edge put the ring on the border, which cut it). Its icon box
-    /// therefore stands 4px further in than the wordmark does on the
-    /// left (28px against 24px; the chevron's ink, 33px): the two ends
-    /// are not equal, a known limit. The icon button's box is already
-    /// 14px from the edge, and a call to action ends the row 24px in,
-    /// so neither gives anything up.
+    /// The labelled triggers pull back from that by [`FOCUS_REACH`], a
+    /// deliberate trade-off. Overhanging by the whole padding put their
+    /// box 4px from the pane's edge, and their focus ring, which
+    /// reaches [`FOCUS_REACH`] past the box, on the bar's border, where
+    /// it is cut. Now the ring ends where the box would have, 4px in
+    /// from the edge (`BAR_PAD_X` less the padding), and the icon's box
+    /// stands 4px further in than the wordmark (28px against 24px): the
+    /// bar's two ends are unequal, a known limit of the bar.
+    ///
+    /// That 4px of clearance is `BAR_PAD_X` less the padding whatever
+    /// the reach is; it is also the reach, which the focus-ring test
+    /// asks of it, only while both are 4px. The icon button and the
+    /// call to action keep their rings clear without a pull back.
     fn overhang(&self) -> f32 {
         match self {
             ThemeTrigger::Named | ThemeTrigger::Bare => {
-                ButtonSize::Default.padding_x() - Self::FOCUS_ROOM
+                ButtonSize::Default.padding_x() - FOCUS_REACH
             }
             ThemeTrigger::Icon => {
                 (ui_kit::components::badge::ICON_BUTTON_SIZE - IconSize::Lg.px()) / 2.0

@@ -767,25 +767,27 @@ fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
     assert!(crowded.is_empty(), "{}", crowded.join("\n"));
 }
 
-/// The bar's content sits on one centre line and the bar pads both ends
-/// alike, but for one deliberate difference. The wordmark, the nav
+/// The bar's content sits on one centre line, and the bar pads its ends
+/// alike but for one deliberate difference. The wordmark, the nav
 /// links, the call to action and the two controls each centre on the
-/// pane's centre line, and the first thing the bar shows on its left
-/// (the wordmark) and the last thing on its right (the call to
-/// action's fill, or the theme trigger's icon where the call to action
-/// is shed) each stand the bar's own padding in from the pane's edge,
-/// from the narrowest phone to a wide desktop in every theme. The
-/// labelled trigger's icon (the chevron) stands 4pt further in, 28pt
-/// against the wordmark's 24pt: a trade-off made so that the
-/// trigger's focus ring, which reaches 4pt past its box, stays inside
-/// the bar (`the_theme_triggers_focus_ring_stays_inside_the_bar`), and
-/// a known limit of this test. The icon button's icon and the call to
-/// action stand the full 24pt in. The row once began at egui's 18pt interact height, so the
-/// 24pt wordmark, placed first, was pinned to the row's top and sat
-/// 10pt above the 44pt controls' centre line; and the ghost theme
-/// trigger kept its own button padding (20pt, the icon button's 10pt)
-/// inside the bar's, so its icon stood that much further in than the
-/// wordmark does. The icon is its painted box, the 20pt or 24pt cell
+/// pane's centre line. The first thing the bar shows on its left (the
+/// wordmark) and the last on its right (the call to action's fill, or
+/// the theme trigger's icon where the call to action is shed) each
+/// stand the bar's own padding in from the pane's edge, from the
+/// narrowest phone to a wide desktop in every theme. The exception is
+/// the labelled trigger's icon (the chevron): its box stands 4pt
+/// further in, 28pt against the wordmark's 24pt, so that the trigger's
+/// focus ring, which reaches 4pt past its box, stays inside the bar
+/// (`the_theme_triggers_focus_ring_stays_inside_the_bar`). That is a
+/// known limit of the bar. The icon button's icon and the call to
+/// action stand the full 24pt in.
+///
+/// The row once began at egui's 18pt interact height, so the 24pt
+/// wordmark, placed first, was pinned to the row's top and sat 10pt
+/// above the 44pt controls' centre line; and the ghost theme trigger
+/// kept its own button padding (20pt, the icon button's 10pt) inside
+/// the bar's, so its icon stood that much further in than the wordmark
+/// does. An icon is measured by its painted box, the 20pt or 24pt cell
 /// the glyph sits in; the glyph's ink sits a few points inside that.
 /// The bar's 68pt height is asserted too, so a fix cannot buy its
 /// centring by growing the bar.
@@ -796,18 +798,19 @@ fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
 /// compact bar with the bare label (the chevron ends the row), and
 /// 1024 and 1440 the full bar, whose call to action ends the row. The
 /// run must reach all three trailing cases, or it fails: a breakpoint
-/// change cannot drop one of them unseen.
+/// change cannot drop one of them unseen. The tier with the nav links
+/// and no call to action is not sampled.
 #[test]
-fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
+fn the_bar_centres_its_wordmark_and_pads_its_ends() {
     use std::collections::BTreeSet;
 
     use ui_kit::components::badge::ICON_BUTTON_SIZE;
     use ui_kit::components::top_app_bar::{bar_height, BAR_PAD_X, CONTENT_HEIGHT};
 
+    use crate::gallery::FOCUS_REACH;
+
     // Painted to the pixel, laid out in whole points: a point's slack.
     const SLACK: f32 = 1.0;
-    // The room a labelled trigger's box leaves for its focus ring.
-    const RING_ROOM: f32 = 4.0;
     const CTA: &str = "the call to action";
     const CHEVRON: &str = "the bare chevron";
     const TUNE: &str = "the tune icon";
@@ -878,12 +881,15 @@ fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
                     "{at} the leading gap is {leading}pt, not the bar's {BAR_PAD_X}pt padding"
                 ));
             }
-            // The chevron's box stands the padding plus the focus ring's
-            // room in; the others stand the padding in.
+            // The chevron's icon box stands the padding plus the focus
+            // ring's reach in; the other icon boxes (and the call to
+            // action's fill) stand the padding in.
             let (wanted, why) = if end == CHEVRON {
                 (
-                    BAR_PAD_X + RING_ROOM,
-                    format!("the bar's {BAR_PAD_X}pt padding and {RING_ROOM}pt for the focus ring"),
+                    BAR_PAD_X + FOCUS_REACH,
+                    format!(
+                        "the bar's {BAR_PAD_X}pt padding and {FOCUS_REACH}pt for the focus ring"
+                    ),
                 )
             } else {
                 (BAR_PAD_X, format!("the bar's {BAR_PAD_X}pt padding"))
@@ -910,17 +916,20 @@ fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
 /// and the 2pt outline), so a box 4pt short of the pane's edge put the
 /// ring's outer edge on the bar's border, where the pane's clip cuts
 /// it. The ring must lie inside the pane, whole under its clip, and
-/// keep 4pt clear of the pane's right edge. The compact bars with the
-/// bare label are 384 (a phone) and 600 (the compact breakpoint) wide;
-/// the icon trigger and the call to action sit further in. Focus comes
-/// from a Tab press, which the bar, first in the tab order, answers
-/// with its first control: the trigger.
+/// keep its own reach (4pt) clear of the pane's right edge. The
+/// compact bars with the bare label are 384 (a phone) and 600 (the
+/// compact breakpoint) wide, and the bare label is the one labelled
+/// trigger that ends the row there (the named label comes with the
+/// call to action, which ends it instead); the icon trigger and the
+/// call to action sit further in. Focus comes from one Tab press,
+/// which the bar, first in the tab order, answers with its first
+/// control: the trigger. A second press would move on past it.
 #[test]
 fn the_theme_triggers_focus_ring_stays_inside_the_bar() {
     use ui_kit::states::FOCUS_RING_OFFSET;
 
-    // The room the ring's outer edge must keep from the pane's edge.
-    const CLEAR: f32 = 4.0;
+    use crate::gallery::FOCUS_REACH;
+
     let mut off = Vec::new();
     for width in [384.0, 600.0] {
         for theme in ThemeId::ALL {
@@ -935,9 +944,11 @@ fn the_theme_triggers_focus_ring_stays_inside_the_bar() {
                 .node(Role::Button, copy::THEME_MENU)
                 .expect("the bar's theme trigger");
 
-            // The ring around the trigger: the focus-ring stroke on the
-            // trigger's rect grown by the ring's offset. It fades in over
-            // 120ms, so the frames after the Tab let it land.
+            // The ring around the trigger: the focus-ring stroke, at full
+            // strength (it fades in over 120ms, so the frames after the
+            // Tab let it land), on the trigger's rect grown by the
+            // ring's offset to within half a point. `outer` below
+            // assumes the kit's stroke lies outside that rect.
             let colour = theme.colors().focus_ring;
             let around_trigger = |h: &Harness| {
                 painted_rects(h).into_iter().find(|(shape, _)| {
@@ -947,25 +958,23 @@ fn the_theme_triggers_focus_ring_stays_inside_the_bar() {
                         && inner.expand(0.5).contains_rect(trigger)
                 })
             };
-            let mut ring = None;
-            for _ in 0..4 {
-                if ring.is_none() {
-                    h.press(egui::Key::Tab);
-                    h.idle(12);
-                    ring = around_trigger(&h);
-                }
-            }
-            let Some((shape, clip)) = ring else {
-                off.push(format!("{at} four Tab presses never rang the trigger"));
+            h.press(egui::Key::Tab);
+            h.idle(12);
+            let Some((shape, clip)) = around_trigger(&h) else {
+                off.push(format!(
+                    "{at} the first Tab press drew no focus ring round the trigger \
+                     {trigger:?}: focus did not reach it, or the ring's geometry \
+                     or colour changed"
+                ));
                 continue;
             };
 
             let outer = shape.visual_bounding_rect();
             let clear = pane.right() - outer.right();
-            if clear < CLEAR - 0.01 {
+            if clear < FOCUS_REACH - 0.01 {
                 off.push(format!(
                     "{at} the focus ring {outer:?} ends {clear}pt from the bar's right edge {}, \
-                     not the {CLEAR}pt it needs",
+                     not the {FOCUS_REACH}pt it needs",
                     pane.right()
                 ));
             }
