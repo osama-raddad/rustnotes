@@ -15,9 +15,10 @@
 //!
 //! A row that outgrows its width (a narrow phone, or large text) follows
 //! the selection: a tap on a tab, an arrow key, or the host moving
-//! `selected` scrolls that tab to the middle of the strip, stopping at
-//! the row's ends. Only a move makes it scroll, so the user can still
-//! drag the strip away from the selected tab.
+//! `selected` scrolls that tab into view with the least movement: a tab
+//! already whole in the strip leaves it where it is. Only a move makes
+//! it scroll, so the user can still drag the strip away from the
+//! selected tab.
 //!
 //! The ring reaches [`FOCUS_RING_REACH`] past a tab, so the row paints
 //! it under a clip widened by that much at each side (the first tab
@@ -303,13 +304,16 @@ impl<'a> Tabs<'a> {
                             ctx.memory_mut(|memory| memory.request_focus(id.with(index)));
                         }
                         // The tab a tap lands on, or the one the selection
-                        // moved to, comes to the middle of the strip (the
-                        // scroll area stops at the row's ends, so the first
-                        // and last tabs stand at the edges). The strip's
-                        // scroll area takes the request whole, on both axes,
-                        // so a page that scrolls round the row stays put.
+                        // moved to, is brought into view with the least
+                        // scrolling: a tab already whole in the strip
+                        // moves nothing, a cut or hidden one comes in
+                        // just far enough (a tab never needs centring,
+                        // and centring would push a tab that was in view
+                        // out of it). The strip's scroll area takes the
+                        // request whole, on both axes, so a page that
+                        // scrolls round the row stays put.
                         if tapped || (follow && active) {
-                            response.scroll_to_me(Some(egui::Align::Center));
+                            response.scroll_to_me(None);
                         }
 
                         let painter = ui.painter().clone().with_layer_id(response.layer_id);

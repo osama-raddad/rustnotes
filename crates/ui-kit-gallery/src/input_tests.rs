@@ -31,6 +31,10 @@ use crate::GalleryApp;
 /// breakpoint, so the phone layout is the one under test.
 const PHONE: egui::Vec2 = egui::vec2(384.0, 855.0);
 
+/// The device the audits ran on, the Pixel in portrait: 448 by 997pt at
+/// the normal text size. At font scale 1.3 it is 345pt wide.
+const DEVICE: egui::Vec2 = egui::vec2(448.0, 997.0);
+
 /// One frame's length, the 60Hz the hosts run at: egui derives the
 /// pointer's velocity (and with it the fling) from the clock.
 const FRAME: f64 = 1.0 / 60.0;
@@ -1681,16 +1685,22 @@ fn tab_in_view(h: &Harness, label: &str) -> Result<(), String> {
 /// is Feedback, the last, on the 384pt phone at the normal text size (it
 /// ends 14pt past the strip) and Components, the third, at font scale 1.3,
 /// where the 295pt screen shows 263pt of strip and Feedback lies wholly
-/// beyond it.
+/// beyond it. On the audit's device at font scale 1.3 (345pt) Feedback
+/// shows as a sliver 13pt wide, and the finger lands on that.
 #[test]
 fn a_tapped_tab_the_strip_cuts_scrolls_into_view() {
-    // The font scale, and the tab the strip's right edge cuts at it.
-    let cases = [(1.0, copy::TABS[3]), (LARGE_TEXT, copy::TABS[2])];
+    // The screen, the font scale, and the tab the strip's right edge
+    // cuts there.
+    let cases = [
+        (PHONE, 1.0, copy::TABS[3]),
+        (PHONE, LARGE_TEXT, copy::TABS[2]),
+        (DEVICE, LARGE_TEXT, copy::TABS[3]),
+    ];
 
     let mut off = Vec::new();
-    for (zoom, label) in cases {
-        let at = format!("at font scale {zoom}");
-        let mut h = Harness::window_zoomed(PHONE, zoom);
+    for (screen, zoom, label) in cases {
+        let at = format!("on a {}pt screen at font scale {zoom}", screen.x);
+        let mut h = Harness::window_zoomed(screen, zoom);
         h.touch_screen();
 
         let (strip, tab) = strip_and_tab(&h, label);
@@ -1721,6 +1731,55 @@ fn a_tapped_tab_the_strip_cuts_scrolls_into_view() {
         }
     }
     assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// A tab that already stands whole in the strip moves nothing when it is
+/// tapped, however far the strip overflows: tapping Components, whole at
+/// x 200..287 on the audit's device at font scale 1.3, leaves the row
+/// where it is, Brand's label still painted on the margin. (Centring the
+/// tab pushed the row 53pt along and Brand out of the strip.)
+#[test]
+fn a_tapped_tab_that_is_wholly_in_view_leaves_the_strip_where_it_is() {
+    let (brand, components, feedback) = (copy::TABS[0], copy::TABS[2], copy::TABS[3]);
+    let mut h = Harness::window_zoomed(DEVICE, LARGE_TEXT);
+    h.touch_screen();
+
+    let (strip, tab) = strip_and_tab(&h, components);
+    let tab = tab.expect("the tab is painted");
+    assert!(
+        strip.min <= tab.left() && tab.right() <= strip.max,
+        "the {components} tab must stand whole in the strip: it spans x {}..{}, the strip {}..{}",
+        tab.left(),
+        tab.right(),
+        strip.min,
+        strip.max
+    );
+    let last = strip_and_tab(&h, feedback).1.expect("the tab is painted");
+    assert!(
+        strip.max < last.right(),
+        "the strip must overflow, so that it has room to move: {feedback} ends at x {}, the \
+         strip at {}",
+        last.right(),
+        strip.max
+    );
+    let before = strip_and_tab(&h, brand)
+        .1
+        .expect("the tab is painted")
+        .left();
+
+    h.tap(tab.center());
+    assert_eq!(
+        h.app.gallery.tab, 2,
+        "a tap on {components} switches panels"
+    );
+    h.idle(30);
+
+    let after = strip_and_tab(&h, brand).1;
+    assert!(
+        after.is_some_and(|after| (after.left() - before).abs() <= 0.01),
+        "a tap on the whole tab {components} moved the strip: the {brand} tab was at x {before}, \
+         it is now {after:?}"
+    );
 }
 
 /// A selection the host moves (the app bar's links, a restored state, a
