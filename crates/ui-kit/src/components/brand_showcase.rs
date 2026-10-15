@@ -1152,7 +1152,8 @@ mod tests {
                             "{theme:?}: {caption:?} in a {width}pt tile wraps to {rows:?}"
                         ));
                     }
-                    // Only where it may break changes: the words stay.
+                    // The no-break spaces read back as spaces, so the words
+                    // must come through unchanged: an ellipsis is a change.
                     if rows.concat().replace('\u{a0}', " ") != *caption {
                         problems.push(format!(
                             "{theme:?}: {caption:?} in a {width}pt tile reads {rows:?}"
@@ -1163,7 +1164,7 @@ mod tests {
         }
         assert!(
             problems.is_empty(),
-            "{} rows end on the middle dot:\n{}",
+            "{} captions break badly (a row ends on the middle dot, or the words change):\n{}",
             problems.len(),
             problems.join("\n")
         );
