@@ -767,14 +767,30 @@ fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
 /// inside the bar's, so its icon stood that much further in than the
 /// wordmark does. The icon is its painted box, the 20pt or 24pt cell
 /// the glyph sits in; the glyph's ink sits a few points inside that.
+/// The bar's 68pt height is asserted too, so a fix cannot buy its
+/// centring by growing the bar.
+///
+/// The widths are `BarFit` tiers: 320 is the compact bar with the icon
+/// trigger (the Tune icon ends the row), 384 (a phone) and 600 (the
+/// compact breakpoint, where the full bar still does not fit) the
+/// compact bar with the bare label (the chevron ends the row), and
+/// 1024 and 1440 the full bar, whose call to action ends the row. The
+/// run must reach all three trailing cases, or it fails: a breakpoint
+/// change cannot drop one of them unseen.
 #[test]
 fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
+    use std::collections::BTreeSet;
+
+    use ui_kit::components::badge::ICON_BUTTON_SIZE;
     use ui_kit::components::top_app_bar::{bar_height, BAR_PAD_X, CONTENT_HEIGHT};
-    use ui_kit::icons::Icon;
 
     // Painted to the pixel, laid out in whole points: a point's slack.
     const SLACK: f32 = 1.0;
+    const CTA: &str = "the call to action";
+    const CHEVRON: &str = "the bare chevron";
+    const TUNE: &str = "the tune icon";
     let mut off = Vec::new();
+    let mut ends = BTreeSet::new();
     let mut h = Harness::window(egui::vec2(320.0, 800.0));
     h.app.gallery.tab = 3;
     for width in [320.0, 384.0, 600.0, 1024.0, 1440.0] {
@@ -805,7 +821,7 @@ fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
                 ("the theme trigger".to_owned(), trigger),
                 ("the search button".to_owned(), search),
             ];
-            centred.extend(cta.map(|rect| ("the call to action".to_owned(), rect)));
+            centred.extend(cta.map(|rect| (CTA.to_owned(), rect)));
             centred.extend(nav_links(&h));
             for (name, rect) in centred {
                 if (rect.center().y - line).abs() > SLACK {
@@ -820,21 +836,20 @@ fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
             let leading = mark.left() - pane.left();
             let trailing = match cta {
                 // A filled button: its fill is what shows.
-                Some(cta) => pane.right() - cta.right(),
+                Some(cta) => {
+                    ends.insert(CTA);
+                    pane.right() - cta.right()
+                }
                 // A ghost button or a bare icon: the icon is what shows.
                 None => {
-                    let icons =
-                        [Icon::ExpandMore, Icon::Tune].map(|icon| icon.as_char().to_string());
-                    let icon = h
-                        .strings
-                        .iter()
-                        .filter(|(text, rect)| {
-                            icons.contains(text) && trigger.expand(SLACK).contains_rect(*rect)
-                        })
-                        .map(|(_, rect)| *rect)
-                        .max_by(|a, b| a.right().total_cmp(&b.right()))
-                        .expect("the theme trigger paints its icon");
-                    pane.right() - icon.right()
+                    // The icon button is the 44pt circle; the ghost
+                    // button with the chevron is wider.
+                    ends.insert(if trigger.width() == ICON_BUTTON_SIZE {
+                        TUNE
+                    } else {
+                        CHEVRON
+                    });
+                    pane.right() - trigger_icon(&h, trigger).right()
                 }
             };
             for (end, gap) in [("leading", leading), ("trailing", trailing)] {
@@ -844,6 +859,11 @@ fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
                     ));
                 }
             }
+        }
+    }
+    for end in [CTA, CHEVRON, TUNE] {
+        if !ends.contains(end) {
+            off.push(format!("no width ended the bar with {end}"));
         }
     }
     assert!(off.is_empty(), "{}", off.join("\n"));
@@ -907,6 +927,24 @@ fn bar_pane(h: &Harness, theme: ThemeId) -> egui::Rect {
         .into_iter()
         .min_by(|a, b| a.top().total_cmp(&b.top()))
         .expect("the frame paints the bar's pane")
+}
+
+/// The theme trigger's icon as the last frame painted it: the box the
+/// glyph sits in (the chevron on the labelled trigger, the tune icon
+/// on the icon button), found among the painted strings inside the
+/// trigger's rect. The rightmost, when there are several.
+fn trigger_icon(h: &Harness, trigger: egui::Rect) -> egui::Rect {
+    use ui_kit::icons::Icon;
+
+    // The rect is the trigger's own, give or take rounding.
+    const WITHIN: f32 = 1.0;
+    let icons = [Icon::ExpandMore, Icon::Tune].map(|icon| icon.as_char().to_string());
+    h.strings
+        .iter()
+        .filter(|(text, rect)| icons.contains(text) && trigger.expand(WITHIN).contains_rect(*rect))
+        .map(|(_, rect)| *rect)
+        .max_by(|a, b| a.right().total_cmp(&b.right()))
+        .expect("the theme trigger paints its icon")
 }
 
 /// On the narrowest phones the theme trigger is its icon alone, named

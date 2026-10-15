@@ -2226,7 +2226,9 @@ impl ThemeTrigger {
     /// How far inside its own box the trigger's content sits, at the
     /// end of the row: the default button's horizontal padding for the
     /// two labelled triggers (the label and the chevron), and for the
-    /// icon button the room between its 44px circle and its icon.
+    /// icon button the room between its 44px circle and its icon. It
+    /// is the distance to the icon's box, not to its ink: the ink sits
+    /// a further 5px inside for the chevron and 3px for the tune icon.
     fn inset(&self) -> f32 {
         match self {
             ThemeTrigger::Named | ThemeTrigger::Bare => ButtonSize::Default.padding_x(),
@@ -2446,15 +2448,12 @@ impl Gallery {
                 // The actions, flush right: the one CTA where the row
                 // has room for it, the theme menu, the search
                 // affordance. With no CTA the theme trigger ends the
-                // row, and it is a ghost button (or a bare icon): at
-                // rest what shows of it is its icon, not its box. The
-                // group therefore runs on past the row's right edge by
-                // the trigger's inset, so that the icon, like the
-                // wordmark on the left, stands the bar's padding in
-                // from the bar's edge. The box overhangs into the bar's
-                // own padding, short of the pane's edge by what is left
-                // of it, and the row still claims no more than its
-                // width, so the bar stays as wide as its panel.
+                // row, and its own padding sits inside the bar's, so
+                // its icon would stand that much further in than the
+                // wordmark does. The group is a child `Ui` that runs
+                // past the row's right edge by the trigger's inset:
+                // `with_layout` would stay inside the row, and
+                // allocating the overhang would widen the bar.
                 let row = ui.available_rect_before_wrap();
                 let overhang = if fit.cta { 0.0 } else { fit.trigger.inset() };
                 let mut actions = ui.new_child(
@@ -2466,6 +2465,7 @@ impl Gallery {
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
                 {
+                    // The child, under the name the controls below use.
                     let ui = &mut actions;
                     if fit.cta {
                         Button::new(copy::START_A_PROJECT)
@@ -2503,6 +2503,7 @@ impl Gallery {
                                 .ui(ui, theme, &flags);
                         });
                 }
+                // The row claims its own rect, not the overhang.
                 ui.advance_cursor_after_rect(row);
             });
         });
