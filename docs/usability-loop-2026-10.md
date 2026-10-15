@@ -200,3 +200,207 @@ Device re-verification of the four fixes (build `a4dfc7f`, both targets):
   Foundations restores its own offset after leaving it.
 
 Iteration 1 closed. Its fixes are green in the suites and verified on Android.
+
+### Iteration 2: Components panel
+
+Testers: Android (Components walk, interactions, pressed state, focus, top bar,
+known-item re-checks) and iOS (taps only). Screenshots are under
+`build/usability-audit/iter-2/`. Build: `a4dfc7f` plus the ledger commits.
+
+Confirmed working: the Android pass found checkbox (tri-state), radio, toggle,
+and chip all change state on tap, on the control and on its label. The chip
+dismiss and Restore both work. The pressed look appears on hold. Known items
+from iteration 1: the lone "1" in the 60/30/10 captions is fixed, and the photo
+captions wrap inside their tiles.
+
+Findings and dispositions:
+
+- **2-I1, major, Feedback snackbar.** The "Saved." snackbar stays past its 6 s
+  until the next touch. It was still up at 7 s, 9 s and 17 s idle, and a touch
+  cleared it. Likely a missing timed repaint, so the timer expires without a
+  frame to draw it. **Fix: task 5.**
+- **2-A1, major, Components metric cards.** Card 2 breaks mid-word, card 3 puts
+  one letter on each line, and the tall card sets the row height, leaving about
+  320 pt blank. **Fix: task 6.**
+- **2-A2, major, Components text inputs.** The text has no left padding, and the
+  search magnifier overlaps the placeholder. **Fix: task 7.**
+- **2-A3, major, Components select popover.** The popover stays open after an
+  outside tap, reproduced three times. **Fix: task 8.**
+- **1-A4 and 2-I2, minor, Brand swatch seams.** Still present in both passes.
+  **Fix: task 9.**
+- **1-A5, 2-A5 and 2-I3, minor, top-bar wordmark.** The wordmark sits about
+  10 pt above the bar's centre line, and the trailing gap is wider than the
+  leading gap. **Fix: task 10.**
+- **2-I4, minor, wordmark rendering.** The wordmark's edges are hard, with no
+  anti-aliasing, unlike other text. Deferred to iteration 6 (rendering and
+  contrast).
+- **2-A4, minor, blank strip after the keyboard closes.** The bottom of the page
+  stays empty until the next scroll. Deferred to iteration 5.
+- **2-A6, minor, interactive controls below 44 pt.** Filter chips are 31 pt,
+  radio rows are 32 pt apart, checkbox rows 35 pt, select options 33 pt, and the
+  "Filter results" Small button 36 pt. Deferred to iteration 5 (layout and touch
+  targets).
+- **2-A7, minor, focus ring and tab order.** The ring is clipped at the left edge
+  of the Brand tab and merges with the underline. The tab order runs Theme, then
+  Search, the reverse of the visual order. Deferred to iteration 3 (chrome and
+  popovers).
+- **2-A8, minor, Tab-to-me pill.** About 17 pt tall, with the label touching its
+  outline. This is the 1-A13 item. Deferred to iteration 5.
+- **2-A9 and 2-I5, nit, low-contrast labels.** "Disabled" is 1.1:1 against its
+  fill, which is the documented 38%. "Sending…" is an active state and reads
+  about 1.2:1, which is a problem. Deferred to iteration 6 (contrast).
+- **2-A10, minor, cards.** `.card--filled` has no visible surface. Card widths
+  vary, and none fill the page width. Deferred to iteration 5.
+- **2-A11, minor, right gutter.** The right gutter is 6 to 7 pt against 16 pt on
+  the left. Inputs and paragraphs run past the bar's right edge at 1296 px.
+  Deferred to iteration 5.
+- **1-A6 and 2-A12, minor, Brand single column.** Columns are narrow, and the
+  right third is empty. Deferred to iteration 5.
+- **2-A13, nit, glass specimens.** The primary glass tile runs off its edge, and
+  shapes spill outside their tiles. Deferred to iteration 5.
+- **2-I8, minor, bottom clip on iOS.** Content is hard-clipped at about 816 pt,
+  leaving a blank strip, and the snackbar's corners look notched. This is the
+  safe-area clip from the iteration-1 mapping. Deferred to iteration 9.
+- **2-I9, minor, bar edge and gap on iOS.** The bar's bottom edge fuses with the
+  full-width divider, and about 55 pt sits empty between the bar and the tab
+  labels. This is the 1-I5 chrome item. Deferred to iteration 9.
+- **Not a defect.** The "Start a project" button in Components gives no visible
+  response to a tap. It is a demo button with no action, and its pressed look is
+  the feedback. The state tiles in Foundations are painted specimens by design.
+- **Residual from iteration 1.** On Brand, the caption "After-hours debug ·
+  Gothenburg HQ" ends one line with a trailing "·". The fix is to join the middle
+  dot to its neighbours with non-breaking spaces. Deferred to iteration 5 (copy
+  and layout).
+
+Fix batch for iteration 2: tasks 5 to 10 (findings 2-I1, 2-A1, 2-A2, 2-A3,
+1-A4 and 1-A5), run one at a time under `subagent-driven-development`, with a
+spec review and then a quality review for each.
+
+Progress on the batch (each commit verified green by the coordinator):
+
+- **Task 5, snackbar (2-I1): `d64bb06`, test follow-up `a4a986b`.** The
+  mechanism was not the hypothesised missing request. A timed request existed.
+  The frame that crosses the deadline paints the snackbar, the tick then drops
+  it, and the timed request after that is skipped, so nothing asks for the
+  frame that clears the screen. The fix requests that frame, and a held clock
+  asks for no timed repaint. The follow-up made the deadline guard able to fail,
+  which was verified by mutation. **Open:** the iOS timed wake is unverified off
+  the device. Re-check the snackbar on the simulator in the iteration-2
+  verification.
+- **Task 6, metric cards (2-A1): `688e280`.** The floor is 208 pt: 160 pt content
+  plus 24 pt padding each side. Cards no longer squeeze, and the row scrolls.
+  **Residual, deferred to iteration 5:** at 384 pt, card 1 is about 163 pt tall
+  and cards 2 and 3 about 196 pt, so the heights differ. The reviewer accepted
+  this as the unavoidable result of the floor. Quality nits are deferred to the
+  test-quality sweep (see below).
+- **Task 7, text fields (2-A2): `43bc8c8`.** The cause is confirmed in egui 0.36.2:
+  an explicit `TextEdit::frame(..)` replaces the builder's margin. The margin
+  now lives in `Frame::inner_margin`. Insets are 14 pt without a leading icon,
+  44 pt with one, and 12 pt vertically for the textarea. The test-strength items
+  are deferred to the sweep: assert the wrap width directly, and ADD the
+  right-inset check that does not rely on word-wrap luck.
+- **Task 8, select (2-A3): `0ac89f8`, test follow-up `c9988e6`.** The premise was
+  corrected. This is **not** a touch bug. A mouse click outside the open list
+  fails the same way, and the existing outside-click test only covers the pure
+  state machine, so it could not catch the bug. The cause: the popover was built
+  with `Popup::from_response` and no `open_memory`, so egui treats it as always
+  open and never applies the close. The fix is `.open_memory(None)`, and the
+  mouse test now opens and closes by mouse only, verified by mutation.
+- **New finding 2-A15, major, Components select.** Tapping to open the Region
+  select scrolls the page about 96 pt. The cause is unknown. A likely suspect is
+  `scroll_to_rect(row, Center)` in the popup rows. Found by the implementer,
+  pre-existing, and not part of the select fix. **Deferred to iteration 3**
+  (chrome and popovers).
+
+Test-quality backlog, to be taken in the iteration-10 sweep, all test-only and
+none blocking:
+
+- Metric cards: the `MIN_WIDTH` padding round-trip (add a comment or a
+  `CONTENT_MIN_WIDTH` constant), the "148px" doc figure that no test pins, a
+  `build` helper for the repeated card-building block, and the gallery test's
+  "window's edge" wording (it means the page's content edge).
+- Text fields: the wrap-width assertion, `painted_box` moved to `typography.rs`
+  as `pub(crate)`, one helper for the three single-line blocks, named `EPS` and
+  `NARROW_WIDTH` constants, and renaming the multiline test "top, left and right".
+- Snackbar: none beyond what was fixed.
+
+### Iteration 2 closed
+
+Build for the device pass: `1b38fca` (Android installed, iOS simulator
+installed from `373819f`; the simulator's wordmark and snackbar checks were
+on the fixes as they then stood).
+
+Fixed and verified:
+
+- **2-I1 snackbar auto-dismiss.** `d64bb06`, follow-up `a4a986b`. Verified on
+  Android (gone by about 7.5 s) and on the iOS simulator (on screen at 5.7 s,
+  gone at 6.7 s, no touch). This closes the open iOS wake question.
+- **2-A1 metric cards.** `688e280`. The floor is 208 pt. Verified on Android:
+  whole words, the row scrolls. The uneven heights (about 163 against 196 pt)
+  are accepted as the result of the floor, and they are a layout item for
+  iteration 5.
+- **2-A2 text inputs.** `43bc8c8`. Verified on Android: insets of 14 pt, and
+  44 pt in the search field, with no overlap by the magnifier.
+- **2-A3 select outside tap.** `0ac89f8`, follow-ups `c9988e6`. The premise was
+  not touch-specific: a mouse click failed the same way. Verified on Android:
+  the list closes on a tap outside, and the value is unchanged.
+- **1-A4 swatch band, right edge.** `e47784b`, docs `cdc464d`. The band now
+  fills the column. Verified on iOS and Android (the right edges match).
+  **The hairlines are kept, as a documented design element.** See decision D2.
+- **1-A5 top-bar wordmark.** `373819f`, follow-up `ec159c1`, focus fix `747dcfd`,
+  naming `1b38fca`. The wordmark is on the centre line, verified on iOS (within
+  1 px) and Android. **Trade-off, see decision D3.**
+- **Keyboard focus ring on the Theme trigger (a regression I introduced).**
+  The overhang had clipped it. `747dcfd` keeps 4 pt clear of the edge, and
+  `1b38fca` names the constant once. Verified on Android: the ring is whole,
+  with a 9 px gap.
+
+Open decisions for you (the loop does not wait on them):
+
+- **D1, relaunch freeze after Back (K3, blocker).** The gallery freezes on
+  relaunch after Back at its root. The options are to end the process when the
+  activity finishes at the root, which makes every launch fresh and changes the
+  cached-process behaviour that the README describes; or to investigate the
+  android-activity re-entry directly. Until you decide, the testers avoid Back.
+- **D2, swatch hairlines.** Three surface-coloured rules cross the band. The
+  module doc and a test assert them as the "ruled stock" design element, from the
+  source brand preview. I kept them and closed the seam part of 1-A4 as by design.
+  Say the word and the three `hline` calls go, in one small commit.
+- **D3, the trailing gap.** The labelled Theme trigger's chevron now sits 28 pt
+  from the pane edge, against 24 pt for the wordmark (box terms), and about 33 pt
+  against 24 pt in ink terms. The 4 pt keeps its focus ring inside the bar. The
+  equal-gap intent cannot hold for this control with the kit's 20-pt button
+  padding. The options are to accept this, to give the bar's trigger its own
+  smaller padding (a kit design change), or to let the ring paint outside the
+  pane clip.
+- **D4, the wordmark reads "Vnatix" at a glance.** The "y" tucks into the V
+  monogram. It matches the large logo on the Brand tab, so I treated it as
+  intentional. Confirm that, or flag it for the brand.
+- **D5, a personal iPhone has the gallery installed.** My baseline run installed
+  the Vynatix Gallery on your connected iPhone 17 Pro (`Räddad iPhone`,
+  `07DBE8D0-DEAC-50B8-AE9B-492146EE6B11`). It was never launched. It is still
+  there. Say the word and I will remove it with `xcrun devicectl device uninstall
+  app`.
+
+Moved to later iterations, with the reason:
+
+- Iteration 3 (chrome, popovers and focus): the Brand tab's focus ring is clipped
+  on its left edge by the tab strip (Android, verified). Tab order runs Theme,
+  then Search, the reverse of the visual order. The Region select opening scrolls
+  the page about 96 pt (2-A15). The bottom hairline on the top bar runs past its
+  rounded corners. The snackbar floats over its own trigger row (cosmetic).
+  Theme and search popover placement, and the theme-menu row spacing (1-I4).
+- Iteration 5 (layout and touch targets): the Components right gutter (6 to 7 pt
+  against 16 pt on the left, 2-A11). Controls below 44 pt (2-A6). Card surfaces
+  and widths (2-A10). The Brand single column (1-A6). The keyboard-dismiss blank
+  strip (2-A4). The glass specimen spill (2-A13). The Tab-to-me pill (2-A8). The
+  metric heights (accepted, see above). The residual trailing "·" in a caption.
+- Iteration 6 (rendering and contrast): wordmark anti-aliasing (2-I4). Disabled and
+  "Sending…" labels (2-A9 and 2-I5).
+- Iteration 9 (iOS pass): the bottom clip and notched snackbar corners (2-I8), and
+  the bar's edge and gap on iOS (2-I9).
+- Test-quality sweep (iteration 10): the items in the backlog above.
+
+Harness notes, for future passes: `idb ui tap` needs `--duration 0.15` for the
+Save trigger, because default-length taps were missed. Gestures do not reach the
+iOS apps, so iOS passes can only check what is reachable by taps.
