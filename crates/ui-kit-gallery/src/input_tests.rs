@@ -363,8 +363,9 @@ fn sideways_touch_drag_scrolls_a_specimen_row() {
     let mut h = Harness::phone();
     h.app.gallery.tab = 1;
     h.idle(3);
-    // The pressed tile's caption sits mid-row: on screen before the
-    // swipe and after it.
+    // The tiles are as wide as their labels, so the pressed tile's
+    // caption starts near the phone's right edge: on screen before the
+    // swipe, and pulled left, still on screen after it.
     let caption = copy::STATE_CAPTIONS[2];
     let before = h
         .scroll_to(caption, 250.0..600.0)
@@ -403,12 +404,15 @@ fn vertical_touch_drag_on_a_specimen_row_scrolls_the_page() {
         .expect("the state tiles scroll into view");
     let page = h.page_offset().y;
     // The tiles are as wide as their labels, so the pressed tile's
-    // caption starts near a phone's right edge: swipe down the window's
-    // centre line instead, where the wheel left the pointer. The touch's
-    // first delta is then purely vertical; one that jumped sideways
-    // would move the row before the gesture picks its axis.
+    // caption starts near the phone's right edge and its centre is off
+    // screen: press on the window's centre line instead. First park the
+    // pointer 186pt to its left, so the touch's first delta jumps 186pt
+    // sideways, as a press on the caption's centre did. That jump runs
+    // rightward and the row sits at its left end, so the row cannot
+    // follow it; the axis must come from the travel since the press.
     let x = h.window.x / 2.0;
     let y = before.center().y;
+    h.frame(vec![egui::Event::PointerMoved(egui::pos2(x - 186.0, y))]);
     h.swipe(egui::pos2(x, y), egui::pos2(x, y - 200.0), 10);
     h.idle(30);
     assert!(

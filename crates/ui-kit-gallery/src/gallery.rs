@@ -2943,6 +2943,16 @@ mod tests {
                 "{theme:?}: one label per state tile"
             );
             for (index, (label, body)) in pairs.iter().enumerate() {
+                // The body is the tile's own fill: a focus ring around it
+                // is taller than the tile, so one picked up here would
+                // make the containment below too easy to meet.
+                assert!(
+                    body.height() <= spacing::SPACE_10 + 0.5,
+                    "{theme:?}, tile {index}: the {}pt body is taller than the \
+                     {}pt tile, so it is not the tile's fill",
+                    body.height(),
+                    spacing::SPACE_10,
+                );
                 assert!(
                     body.contains_rect(*label),
                     "{theme:?}, tile {index}: the {}pt label at x {}..{} runs outside \
