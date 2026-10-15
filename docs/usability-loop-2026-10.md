@@ -1,6 +1,8 @@
 # Framework usability loop — October 2026
 
-Status: in progress. Ten iterations of usability test → triage → fix → verify.
+Status: paused at iteration 5, task 20, at the user's request. Iterations 1 to 4
+are closed and pushed. See "Status and handoff" at the end of this file for the
+progress, the left-over work, and how to resume.
 
 Branch `feat/framework-usability-iterations`, cut from `feat/design-notes-fixes`
 (draft PR #23, tip `7918329`). This loop's PR stacks on #23.
@@ -673,3 +675,239 @@ Revised schedule for the rest of the loop:
 Still open from earlier: the relaunch freeze after Back (D1, the blocker), the swatch
 hairlines (D2), the personal iPhone install (D5), the wordmark's legibility (D4), and
 the decisions D6 to D10.
+
+### Iteration 5: layout, touch targets and large text
+
+Testers: Android (the right gutter, the touch-target heights, the Tab-to-me pill,
+the Brand column, the caption dot, the navigation, the keyboard-dismiss strip, and
+font scale 1.3) and iOS (the first screens, taps only). Font scale was restored to
+1.0 and read back. Screenshots are under `build/usability-audit/iter-5/`. Build:
+`f34b2ee`, with the iOS simulator rebuilt from the same head.
+
+Confirmed working: the keyboard-dismiss strip (Android, two runs, no blank band
+after an option is chosen, mid-page), the Tab-to-me pill's label clears its
+outline, the Do and Don't cards fill the column, the top bar has no duplicated
+navigation in portrait, and the top bar keeps its controls at font scale 1.3.
+
+Triage. Four majors and one minor ship in this iteration:
+
+- **5-A1, major, the Components right gutter.** The text fields and the horizontal
+  scrollers (Metrics, Editorial, Glass) run to 1323 px, past the top bar's
+  right edge at 1295 px. The left margin is 16 pt, and the right is about 7 pt. The
+  Android tester measured a 9-pt overhang. iOS measured 3 pt, which is marginal.
+  **Fix: task 20.**
+- **5-A2, major, the selected tab at font scale 1.3.** The fourth tab, Feedback, is
+  cut mid-glyph at the strip's right edge. Tapping it selects it, but the strip does
+  not scroll it into view. **Fix: task 21.**
+- **5-A3, major, the Brand column.** The theme cards use about 71% of the column,
+  the voice cards 44%, the photo tiles 39% (the large Volvo tile 72%), and the cards
+  inset from the content's left edge. The Do and Don't cards fill the column. The
+  iOS tester measured the first screen's band at 100%, so this is visible below the
+  fold. **Fix: task 22.**
+- **5-E1, minor, the photo caption's dot.** "After-hours debug ·" ends a line with a
+  stray middle dot. **Fix: task 23.**
+
+Decisions for you, new in this iteration:
+
+- **D11, the touch floor.** The kit defines a 44-pt touch floor, and several
+  interactive controls sit below it: the filter chips at about 32 pt, the Small
+  "Filter results" button at 36 pt, the checkbox rows at 35 pt pitch with a hit area
+  of about 22 to 35 pt, the radio rows at 32 pt pitch with a hit area of about 20 to
+  30 pt, and the toggle rows at 41 pt pitch. Raising the default hit height of these
+  kit controls to 44 pt would make the Components page denser or looser. Raise them
+  all, or leave the Small button and the checkbox and radio rows as specimens?
+- **D12, the Components cards.** The `.card` specimens use about 73% of the column,
+  and the filled card has no visible surface. Fill the column, or keep the specimen
+  widths?
+
+Deferred, with the reason:
+
+- **The blank band above the gesture bar** (about 33 pt, on Android and iOS) and the
+  hard clip at the bottom inset (the iOS 816-pt line). This is the safe-area clip
+  from the mapping. Iteration 9, which is the planned iOS pass, but it also needs an
+  Android check.
+- **The Foundations elevation specimens** are staggered, with gaps of about 100 pt.
+  Iteration 6, with the rest of the specimen review.
+- **The Tab-to-me pill** is 18 pt tall, with about 3 pt of padding around its label.
+  It is clear, but cramped. Iteration 6.
+- **The Components page's glass specimen** spill, and the "Restore the banners" link
+  with no affordance, are carried from iteration 5's earlier list.
+
+Fix batch for iteration 5: tasks 20 to 23, run one at a time.
+
+## Status and handoff
+
+Paused at the user's request during iteration 5, task 20. Nothing has been
+discarded. The partial task-20 edits are uncommitted and unverified.
+
+### Where things stand
+
+- **Branch:** `feat/framework-usability-iterations`, pushed. The committed tip is
+  `f34b2ee` (the iteration-4 ledger close). The range `7918329..f34b2ee` holds
+  every fix, test and ledger commit of this loop.
+- **Draft PR:** https://github.com/osama-raddad/rustnotes/pull/24, stacked on the
+  draft PR #23 branch `feat/design-notes-fixes`. Its body describes iterations 1
+  to 4. It does not yet mention iteration 5 or this pause.
+- **Iterations 1 to 4:** closed, pushed, and verified on the devices that can
+  reach them. Iteration 1 covered the baseline, iteration 2 the Components panel,
+  iteration 3 the chrome, popovers and focus, and iteration 4 landscape.
+- **Iteration 5:** triaged. Task 20 was stopped mid-work. Tasks 21 to 23 have not
+  started.
+
+### Uncommitted in the worktree (partial, do not commit as-is)
+
+- `crates/ui-kit-gallery/src/gallery.rs`: about 17 lines changed, the start of the
+  Components right-gutter fix (task 20). Unverified.
+- `crates/ui-kit-gallery/src/input_tests.rs`: about 166 lines added. The stopped
+  implementer was replacing a probe with the real regression test. It has not
+  been run, and it may not compile.
+- `docs/usability-loop-2026-10.md`: this ledger, which is being committed now.
+
+To resume task 20, either finish the regression test from this diff (red first,
+then green), or review `git diff` on the two source files and revert them with
+`git checkout -- <file>`. Revert only after checking that the diff is task 20's.
+
+### Left-over work, in order
+
+**Iteration 5 (layout, touch targets and large text), remaining:**
+
+- Task 20, the Components right gutter (finding 5-A1). Partial, see above.
+- Task 21, the selected tab is scrolled into view at font scale 1.3 (5-A2). The
+  Feedback tab is cut at the strip's edge, and the strip does not scroll it into
+  view when it is selected by a tap.
+- Task 22, the Brand cards fill the column (5-A3). The theme cards use about 71%
+  of the column, the voice cards 44%, the photo tiles 39%.
+- Task 23, the photo caption's middle dot (5-E1). "After-hours debug ·" ends a
+  line.
+- Decision D11, the touch floor, and decision D12, the Components card widths.
+  Both need your answer before the touch-target sweep.
+
+**Iteration 6 (rendering and contrast):**
+
+- Night mode across the six themes.
+- The wordmark's anti-aliasing (2-I4).
+- The low-contrast "Disabled" and "Sending…" labels (2-A9 and 2-I5).
+- The colour swatches that are invisible without an outline, and the eyebrow's
+  "1.4545455" (1-A12). Also the Teal Light card.
+- The Foundations elevation specimens, which are staggered (5-C1).
+- The Tab-to-me pill, which is clear but cramped (about 3 pt of padding).
+
+**Iteration 7 (Rust Notes touch flows and the keyboard):**
+
+- List, create, edit, swipe-to-delete, pull-to-refresh, the two-tap delete, the
+  editor's hold-to-select, and the autosave.
+- The keyboard covers the editor in landscape, leaving about one and a half lines
+  (4-A4).
+- The delete cross and "+" button sizes in Rust Notes (1-A13 for Rust Notes).
+- The date's alignment in the note row (1-I9).
+- The Rust Notes Settings tab, which has not been checked.
+
+**Iteration 8 (size classes):**
+
+- The tablet AVDs (`Snakebyte_Tablet`, `Snakebyte_Tablet_Design`) for the two-pane
+  layout, and the phone landscape single pane.
+- The two-pane surface colour on a tablet with a side inset (from the `0de8ad4`
+  review). It is unreachable on the Pixel.
+
+**Iteration 9 (the iOS pass and the bottom clip):**
+
+- The blank band above the gesture bar, about 33 pt on both Android and iOS. This
+  is the safe-area clip from the mapping, and the Android pass also saw it.
+- The iOS hard clip at about 816 pt.
+- The bar's edge and gap on iOS (2-I9).
+- The iOS keyboard inset path, and iOS gestures, which cannot be driven from here.
+
+**Iteration 10 (the regression sweep and the test-quality backlog):**
+
+- `just test`, `just lint`, `just check`, `tools/emu-touch.sh`, and a re-screenshot
+  of everything the earlier iterations touched.
+- A review of the whole branch diff.
+- The test-quality backlog. The golden tables and their re-recording notes. The
+  shape walkers, which repeat across the test files: `painted_strings`,
+  `painted_meshes`, `painted_rects`, `painted_segments`, `bar_pane`, and
+  `flat_shapes`. The metric card's `MIN_WIDTH` padding round-trip, and its stale
+  "148px" doc. The text-field wrap-width assertion, and the right-inset check that
+  does not rely on word-wrap luck. The minor doc and naming items from each
+  iteration's reviews.
+
+### Decisions for you
+
+- **D1, the relaunch freeze after Back (blocker).** The gallery freezes when it is
+  relaunched after Back at its root. Options: end the process when the activity
+  finishes at the root, so each launch is fresh; or investigate the NativeActivity
+  re-entry directly. Testers avoid Back until you decide.
+- **D2, the swatch hairlines.** Kept as a documented design element. Remove the
+  three `hline` calls if you do not want them.
+- **D3, the trailing gap.** The labelled Theme trigger's chevron sits 28 pt from
+  the pane edge, against 24 pt for the wordmark (box terms), and about 33 pt against
+  24 pt in ink terms. The 4 pt keeps the focus ring inside the bar.
+- **D4, the wordmark's legibility.** "Vnatix" at a glance. Treated as the intended
+  monogram.
+- **D5, a personal iPhone has the gallery installed.** The baseline run put the
+  Vynatix Gallery on your connected iPhone 17 Pro (`Räddad iPhone`,
+  `07DBE8D0-DEAC-50B8-AE9B-492146EE6B11`). It was never launched, and it is still
+  there. Remove it with
+  `xcrun devicectl device uninstall app --device 07DBE8D0-DEAC-50B8-AE9B-492146EE6B11 com.osamaraddad.vynatixgallery.ios`.
+- **D6, the search popover covers the tab strip** on a phone. Close it on a tab
+  change, or leave the strip uncovered?
+- **D7, the Theme chevron does not flip** when the menu opens.
+- **D8, the toggle glyphs.** The toggle knobs sit about 24 pt left of the radio
+  circles, to align the labels. Accept, or give them their own inset?
+- **D9, the held search popover.** It is held against the bar's left edge on a
+  phone. Accept, or anchor it on the bar's right edge?
+- **D10, full-bleed bars in landscape.** The bars stop at the mirrored rect, so a
+  light-mode landscape shows white bars with canvas gutters. Extend them?
+- **D11, the touch floor (44 pt), kit-wide.** These are below it: the filter chips
+  (about 32 pt), the Small "Filter results" button (36 pt), the checkbox rows (35 pt
+  pitch, with hit zones of about 22 to 35 pt), the radio rows (32 pt pitch, hit
+  zones of about 20 to 30 pt), and the toggle rows (41 pt pitch). Raise them all to
+  44 pt, or keep the Small button and the checkbox and radio rows as specimens?
+- **D12, the Components card widths.** The `.card` specimens use about 73% of the
+  column, and the filled card has no visible surface. Fill the column, or keep the
+  specimen widths?
+
+### Known gaps and caveats
+
+- **K1, a rightward pointer jump** in the first touch frame moves a specimen row.
+  Real touches should not produce it, because they send `PointerGone` between
+  fingers. Not fixed.
+- **K2, the axis-lock coverage** of the jump test is argued from the code, not
+  verified by a mutation run.
+- **Devices.** Android is the Pixel 10 Pro XL emulator (`emulator-5554`, 3 px per
+  pt). iOS is the iPhone 16 Pro simulator (`1F96BFA0-C3BF-4C38-BBF5-1A9CADCA0C9D`).
+  iOS gestures cannot be driven from here, so iOS passes check only taps. iOS
+  landscape cannot be rotated from here.
+- **Rust Notes data.** The sample note on the emulator has a "ZZ" prefix left from
+  an earlier test pass. It is device data, not code.
+- **Commit trailers.** Every commit on the branch carries the Haiku trailer. One
+  Sonnet trailer was amended to Haiku.
+
+### Resume here
+
+1. Decide the partial task-20 diff, as described above.
+2. Answer D11 and D12, or defer them. They block the touch-target sweep.
+3. Run tasks 21, 22 and 23, one at a time: an implementer, then a spec review,
+   then a quality review, then any follow-up commits. Implementers are not run in
+   parallel.
+4. Continue with iterations 6 to 10 in the order above.
+5. At the end, refresh PR #24's body, which still describes iterations 1 to 4.
+
+### Working notes for whoever resumes
+
+- **Worktree:** `/Users/osamaraddad/rustnotes/.claude/worktrees/framework-usability`
+  on `feat/framework-usability-iterations`. The keystores are copied into its root
+  (they are gitignored), and its `build/target` links to the main checkout's target
+  directory.
+- **Building:** use `just ios-run app=...` for the simulator. Do not use
+  `just run-ios`, because it prefers a connected iPhone. Use `just run-android
+  app=...` for the emulator. Do not use `just android-x` or `android-run`.
+- **Gates:** `just test`, `just lint`, and `just check` before any ledger close.
+- **Devices:** Back at the gallery's root freezes on relaunch, so testers use
+  `am force-stop` between runs and never press Back there. Rotation was restored
+  to `user_rotation 0`. `accelerometer_rotation` was 0 when the pass began, and it
+  is 0 now. `font_scale` was restored to 1.0.
+- **Screenshots:** `build/usability-audit/iter-N/` in the worktree. Those files are
+  gitignored, so they stay on this machine.
+- **Subagent process:** per fix, one implementer (sonnet), then a spec review and
+  a quality review (sonnet), then follow-up commits for the review items. Test-only
+  and comment-only follow-ups are verified by the coordinator with `cargo test`.
