@@ -3552,16 +3552,6 @@ fn the_brand_cards_keep_their_desktop_widths() {
     assert!(off.is_empty(), "{}", off.join("\n"));
 }
 
-/// `fg` painted over the opaque `bg`: egui's colours are premultiplied,
-/// so what shows through is `bg` scaled by the alpha the paint leaves.
-fn over(fg: egui::Color32, bg: egui::Color32) -> egui::Color32 {
-    let [r, g, b, a] = fg.to_array();
-    let kept = 255 - u16::from(a);
-    let mix =
-        |paint: u8, under: u8| (u16::from(paint) + u16::from(under) * kept / 255).min(255) as u8;
-    egui::Color32::from_rgb(mix(r, bg.r()), mix(g, bg.g()), mix(b, bg.b()))
-}
-
 /// WCAG relative luminance of an opaque colour.
 fn relative_luminance(c: egui::Color32) -> f64 {
     let channel = |v: u8| {
@@ -3585,13 +3575,17 @@ fn contrast_ratio(a: egui::Color32, b: egui::Color32) -> f64 {
 const OUTLINE_MIN_CONTRAST: f64 = 3.0;
 
 /// The Foundations colour-role grid: every role's swatch, as it paints.
-/// The eight roles that sit close to the canvas (the surfaces, the
-/// glass tints) are invisible without an edge, so each swatch carries a
-/// 1px outline that holds 3:1 against the canvas the page sits on, in
-/// every theme (finding 1-A12). The swatch keeps its own colour: the
-/// outline is drawn outside its rect.
+/// Depending on the theme, 5 to 12 of the 54 roles sit under 1.05:1 on
+/// the canvas and 20 to 27 under 1.5:1, so they vanish without an edge.
+/// Every swatch, whatever its role, carries a 1px outline that holds 3:1
+/// against the canvas the page sits on, in all six themes (finding
+/// 1-A12). The outline is stroked outside the swatch's rect
+/// (`StrokeKind::Outside`), so it never paints over the swatch's own
+/// colour, and the clip rect it paints under does not cut it sideways.
 #[test]
 fn every_colour_role_swatch_keeps_a_visible_outline() {
+    use ui_kit::states::composite_over;
+
     let swatch_radius = egui::CornerRadius::same(ui_kit::tokens::radii::RADIUS_XS as u8);
     let mut off = Vec::new();
     for theme in ThemeId::ALL {
@@ -3627,24 +3621,48 @@ fn every_colour_role_swatch_keeps_a_visible_outline() {
                 colors.role(role),
                 "{theme:?}: the swatches run in role order, each in its own colour"
             );
-            let fill = contrast_ratio(over(shape.fill, canvas), canvas);
+            let fill = contrast_ratio(composite_over(shape.fill, canvas), canvas);
+            // The strongest edge painted at the swatch's rect, with the
+            // clip it paints under.
             let edge = rects
                 .iter()
-                .map(|(edge, _)| edge)
-                .filter(|edge| edge.rect == shape.rect && edge.stroke.width >= 1.0)
-                .map(|edge| contrast_ratio(over(edge.stroke.color, canvas), canvas))
-                .fold(None, |best: Option<f64>, ratio| {
-                    Some(best.map_or(ratio, |b| b.max(ratio)))
-                });
-            match edge {
-                None => off.push(format!(
+                .filter(|(edge, _)| edge.rect == shape.rect && edge.stroke.width >= 1.0)
+                .map(|(edge, clip)| {
+                    let ratio = contrast_ratio(composite_over(edge.stroke.color, canvas), canvas);
+                    (ratio, edge, clip)
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0));
+            let Some((ratio, edge, clip)) = edge else {
+                off.push(format!(
                     "{theme:?} {role}: no outline (the fill alone is {fill:.2}:1 on the canvas)"
-                )),
-                Some(ratio) if ratio < OUTLINE_MIN_CONTRAST => off.push(format!(
+                ));
+                continue;
+            };
+            if ratio < OUTLINE_MIN_CONTRAST {
+                off.push(format!(
                     "{theme:?} {role}: outline {ratio:.2}:1 on the canvas, under \
                      {OUTLINE_MIN_CONTRAST}:1 (the fill alone is {fill:.2}:1)"
-                )),
-                Some(_) => {}
+                ));
+            }
+            if edge.stroke_kind != egui::StrokeKind::Outside {
+                off.push(format!(
+                    "{theme:?} {role}: the outline is stroked {:?}, over the swatch's colour",
+                    edge.stroke_kind
+                ));
+            }
+            // The page scrolls vertically and these swatches sit below
+            // the fold, so the clip (the scroll viewport) cuts them
+            // vertically until they are scrolled in: only its sides say
+            // whether the gutter shaves the outline.
+            let outer = edge.rect.expand(edge.stroke.width);
+            if outer.left() < clip.left() || clip.right() < outer.right() {
+                off.push(format!(
+                    "{theme:?} {role}: the outline spans {:.1} to {:.1}, past its clip's {:.1} to {:.1}",
+                    outer.left(),
+                    outer.right(),
+                    clip.left(),
+                    clip.right()
+                ));
             }
         }
     }

@@ -21,7 +21,8 @@
 //! disabled the 38% content over a 12% container where the emphasis has
 //! a container, and busy that same disabled look with the label at
 //! `on-surface`, so the status a person waits on ("Sending…") stays
-//! legible while the button takes no click. The label is set in the theme's body face at weight 600
+//! legible while the button takes no click. The label is set in the
+//! theme's body face at weight 600
 //! ([`crate::typography::body_semibold_family`]), 13/14/16px by size,
 //! tracked open at the CSS's `letter-spacing: 0.01em`
 //! ([`LABEL_TRACKING_EM`]), and icons ride at [`IconSize::Md`], with
@@ -278,12 +279,16 @@ pub fn emphasis_look(emphasis: ButtonEmphasis, state: &WidgetState, theme: Theme
 }
 
 /// The paints of a busy button: an action is running, so it is the
-/// disabled look (the same 12% container, the same border, no click, no
-/// focus) with the label lifted to `on-surface`. Disabled's 38% label is
-/// exempt from the contrast floors as an inactive component; a busy
-/// label ("Sending…") is the status the person is waiting on, so it
-/// reads at body strength: `on-surface` clears 4.5:1 on every busy
-/// container in all six themes, where 38% on-primary reads 1.0 to 1.2:1.
+/// disabled look (the same 12% container where the emphasis has one,
+/// the same border where it has one, no click, no focus) with the label
+/// lifted to `on-surface`. Primary and tertiary have a container;
+/// secondary and ghost have none, so they stay transparent (secondary
+/// keeps its faded border) and only the label changes. Disabled's 38%
+/// label is exempt from the contrast floors as an inactive component; a
+/// busy label ("Sending…") is the status the person is waiting on, so
+/// it reads at body strength: `on-surface` clears 4.5:1 on every busy
+/// container in all six themes, where 38% on-primary reads 1.0 to
+/// 1.2:1.
 pub fn busy_look(emphasis: ButtonEmphasis, theme: ThemeId) -> ButtonLook {
     let mut look = emphasis_look(
         emphasis,
@@ -440,7 +445,9 @@ impl<'a> Button<'a> {
     /// Mark the button busy: an action is running. A busy button
     /// neither clicks nor takes focus, like a disabled one, but its
     /// label stays at body strength ([`busy_look`]). Name the work in
-    /// the label ("Sending…").
+    /// the label ("Sending…"). Busy outranks disabled: a button that is
+    /// both, in either call order (`.disabled().busy()` or
+    /// `.busy().disabled()`), paints the busy look.
     pub const fn busy(mut self) -> Self {
         self.busy = true;
         self
@@ -622,7 +629,7 @@ mod tests {
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
     use crate::tokens::{radii, spacing, type_scale};
-    use crate::typography::{assert_painted_inside, paint_pass};
+    use crate::typography::{assert_painted_inside, paint_pass, painted_text};
 
     use super::{
         busy_look, emphasis_look, label_job, min_width, Button, ButtonEmphasis, ButtonResponse,
@@ -859,7 +866,72 @@ mod tests {
                 assert_eq!(busy.label, colors.on_surface, "{name} {emphasis:?}: label");
                 assert_ne!(
                     busy.label, disabled.label,
-                    "{name} {emphasis:?}: disabled keeps its 38% label"
+                    "{name} {emphasis:?}: the busy label must differ from disabled's 38% label"
+                );
+            }
+        }
+    }
+
+    /// The colour a painted label shows in, resolved the way epaint's
+    /// tessellator does it: the shape's override, else the galley's own
+    /// colour, else the shape's fallback where the galley leaves the
+    /// colour to the painter (`Color32::PLACEHOLDER`, as the button's
+    /// label job does).
+    fn shown_label_colour(shape: &egui::epaint::TextShape) -> Color32 {
+        let own = shape.galley.job.sections[0].format.color;
+        match shape.override_text_color {
+            Some(over) => over,
+            None if own == Color32::PLACEHOLDER => shape.fallback_color,
+            None => own,
+        }
+    }
+
+    /// `Button::ui` paints the busy look, not just `busy_look` computing
+    /// it: the label a busy button shows is `busy_look`'s, in every
+    /// emphasis and theme, and is not the disabled 38% label. Busy
+    /// outranks disabled in either call order. This ties the paint to
+    /// the contrast floor the token tests assert on `busy_look`.
+    #[test]
+    fn a_busy_button_paints_the_busy_label_through_ui() {
+        let label = "Sending…";
+        for theme in ThemeId::ALL {
+            let ctx = egui::Context::default();
+            install_faces(&ctx, *theme);
+            let flags = UiKitFlags::default();
+            let name = theme.name();
+            for emphasis in ButtonEmphasis::ALL {
+                let busy = busy_look(*emphasis, *theme).label;
+                let disabled = emphasis_look(*emphasis, &state("disabled"), *theme).label;
+                let painted = |button: Button| {
+                    let (_, shapes) =
+                        paint_pass(&ctx, |ui| button.ui(ui, *theme, &flags).response.rect);
+                    shown_label_colour(&painted_text(&shapes, label))
+                };
+                let base = Button::new(label).emphasis(*emphasis);
+                assert_eq!(
+                    painted(base.busy()),
+                    busy,
+                    "{name} {emphasis:?}: a busy button paints busy_look's label"
+                );
+                assert_ne!(
+                    painted(base.busy()),
+                    disabled,
+                    "{name} {emphasis:?}: a busy button must not paint the disabled label"
+                );
+                assert_eq!(
+                    painted(base.disabled()),
+                    disabled,
+                    "{name} {emphasis:?}: a disabled button paints the 38% label"
+                );
+                assert_eq!(
+                    painted(base.disabled().busy()),
+                    busy,
+                    "{name} {emphasis:?}: .disabled().busy() paints busy"
+                );
+                assert_eq!(
+                    painted(base.busy().disabled()),
+                    busy,
+                    "{name} {emphasis:?}: .busy().disabled() paints busy"
                 );
             }
         }
