@@ -846,6 +846,56 @@ the dot, so a row cannot end on it.
 - Review follow-ups (`9611b8a`): the comment and the failure message now say what
   the test checks.
 
+## Iteration 6: rendering and contrast
+
+Scope, from the schedule and the carry-overs: night mode and the WCAG floors, the
+busy label, the swatches, the wordmark, the elevation specimens, and the Tab-to-me
+pill. Each fix had a red test first, one implementer at a time, and the gates
+after it. **No spec or quality review ran for tasks 24 to 29.** Each was checked by
+the gates and by the implementer's own red-then-green record, which the ledger's
+process does not accept as a substitute for the two reviews. Those reviews are owed
+before iteration 6 closes.
+
+- **Task 24, the busy label (2-A9 and 2-I5), `cbd4086`.** The "Sending…" specimen
+  was the disabled look, not a busy state: `Button` had no busy state. A new
+  `Button::busy()` gives the disabled look with the label in `on-surface`. The red
+  ratios were 1.02 to 1.20 across the six themes. The new ratios are 10.26 to
+  12.18. Disabled stays at 38%, as documented. **D15:** `WidgetState` does not
+  distinguish busy from disabled, so a host cannot tell them apart. Add a flag?
+- **Task 25, the swatches and the eyebrow (1-A12), `db7c41b`.** 324 of 324 colour-role
+  swatches had no outline, the Teal Light one at 1.00 to 1.08:1. Each swatch now has
+  a 1px `outline` stroke, which measures 3.62 to 6.14:1. `outline_variant` was not
+  used because it cannot meet 3:1. The eyebrow spec printed the raw float
+  "1.4545455". It now prints "16px".
+- **Task 26, the wordmark (2-I4), `d660dbb`.** The wordmark is a flat mesh, which
+  the tessellator passes through without the feather every other shape gets. The
+  red rasterised test found 0 of 825 ink pixels with partial coverage. A new
+  outline module derives a feathered ring from the triangles. The fix is larger
+  than the finding: 602 lines. It was checked on the Pixel at the top bar: the
+  edges now carry a soft ramp. Not verified: real GPU output, gamma, and a few hair
+  slits in the art.
+- **Task 27, the elevation and spacing specimens (5-C1 and 1-A11), `7e07d9b`.** The
+  stagger came from `horizontal_wrapped`, which centres its tiles. The tops settled
+  in a halving series, 54 to 101pt for the elevation tiles. The tiles now hang from
+  the line's top. The radius caption no longer wraps, and the first swatch's outline
+  is inside its clip. The commit trailer was Sonnet, and was amended to Haiku.
+- **Task 28, the Tab-to-me pill (2-A8), `fb99a5f`.** The pill was 18pt tall, with
+  3pt of padding and 0.5pt top and bottom. It is now 25pt tall, with 7pt sides and
+  4pt top and bottom. The change is local to the gallery's states row.
+- **Task 29, the Teal Light card (iteration 6), `b8d4cb9`.** The card's swatch
+  borders were `outline_variant` at about 14% alpha, 1.31 to 1.45:1 across the
+  themes. They are now `outline`, at 3.96 to 5.78:1. Teal Light is 4.70:1. This is
+  the one fix in the batch that has no device check.
+
+Not done in iteration 6, and open:
+
+- **The night-mode device pass.** The WCAG floors now cover the six themes, and the
+  busy-label test loops all of them. Nothing ran the gallery in each theme on the
+  device, so the night-mode pass is still open.
+- **The Teal Light card, device check.** Task 29 is a headless fix only.
+- **Task 27's trailer.** Amended from Sonnet to Haiku, which rewrites the commit
+  hash but not its content.
+
 ## Status and handoff
 
 Paused at the user's request during iteration 5, task 20. Nothing has been
