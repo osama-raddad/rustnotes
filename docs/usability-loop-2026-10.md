@@ -1,11 +1,9 @@
 # Framework usability loop — October 2026
 
-Status: iteration 5 is closed on its fix tasks. Tasks 20 (5-A1, `b47473f`), 21
-(5-A2, `7f8ed7c` to `53a291b`), 22 (5-A3, `b1c5a6c` to `ee11286`) and 23 (5-E1,
-`1581d7d`, `9611b8a`) are closed. D11 and D12 are still open, and they block the
-touch-target sweep. Iteration 6 is next. Iterations 1 to 4 are closed and pushed. The "Status and handoff"
-section at the end is the handoff as of the pause, and it is now out of date
-for iteration 5 onward.
+Status: iterations 1 to 6 are closed, 7 to 9 are partial, and 10 is closed with open
+items. The head is the commit that adds this line. The current state, the open
+decisions (D1 to D18), the known gaps (K1, K2, K4), and the resume steps are in
+"Status and handoff" at the end of this file.
 
 Branch `feat/framework-usability-iterations`, cut from `feat/design-notes-fixes`
 (draft PR #23, tip `7918329`). This loop's PR stacks on #23.
@@ -894,6 +892,8 @@ pair of commits. Their outcomes are below.
   edges now carry a soft ramp. Not verified: real GPU output, gamma, and a few hair
   slits in the art.
 - **Task 27, the elevation and spacing specimens (5-C1 and 1-A11), `7e07d9b`.** The
+  icons row shares `wrapping_row` and is top-aligned too, which is a disclosed side
+  effect with no test: see **D18** in the handoff. The
   stagger came from `horizontal_wrapped`, which centres its tiles. The tops settled
   in a halving series, 54 to 101pt for the elevation tiles. The tiles now hang from
   the line's top. The radius caption no longer wraps, and the first swatch's outline
