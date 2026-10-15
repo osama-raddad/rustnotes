@@ -115,6 +115,22 @@ impl Harness {
         harness
     }
 
+    /// The app on a phone whose `window` is the screen at the normal text
+    /// size, with the OS font scale `zoom` applied the way Android does
+    /// it: as egui's zoom factor (`android.rs`'s `raw_input_hook`). Zoom
+    /// makes the same screen fewer points wide, so the host's window is
+    /// `window / zoom` points, and the layout runs on that.
+    fn window_zoomed(window: egui::Vec2, zoom: f32) -> Self {
+        let mut harness = Self::window(window / zoom);
+        harness.ctx.set_zoom_factor(zoom);
+        harness.idle(3);
+        assert!(
+            (harness.ctx.zoom_factor() - zoom).abs() < 1e-3,
+            "the zoom must be in force before the test reads the layout"
+        );
+        harness
+    }
+
     /// One frame with `events`, through the app's input filter first,
     /// as the host's `raw_input_hook` runs it.
     fn frame(&mut self, events: Vec<egui::Event>) {
@@ -1605,6 +1621,225 @@ fn tab_strip_rules(h: &Harness, pane: egui::Rect) -> Vec<egui::Rect> {
                 && (rect.right() - pane.right()).abs() <= SLACK
         })
         .collect()
+}
+
+/// The OS font scale of finding 5-A2: the Pixel's "large" step.
+const LARGE_TEXT: f32 = 1.3;
+
+/// The tab strip and one of its tabs as the last frame painted them: the
+/// x range the strip shows (that of its rule, which runs the strip's
+/// whole visible width) and the rect of the tab labelled `label`, which
+/// is its label widened by the tab's own side padding. The tab can lie
+/// partly or wholly outside the strip's range: the strip scrolls
+/// sideways under a clip. A tab scrolled wholly out of the clip has no
+/// painted label (off-screen text is culled), so it is `None`.
+fn strip_and_tab(h: &Harness, label: &str) -> (egui::Rangef, Option<egui::Rect>) {
+    use ui_kit::components::tabs::TAB_PAD_X;
+
+    let pane = bar_pane(h, ThemeId::Light);
+    let rules = tab_strip_rules(h, pane);
+    let [rule] = rules.as_slice() else {
+        panic!("the tab strip must paint one rule as wide as the bar: {rules:?}");
+    };
+    let tab = h
+        .strings
+        .iter()
+        .filter(|(text, rect)| text == label && rect.top() > pane.bottom())
+        .map(|(_, rect)| rect.expand2(egui::vec2(TAB_PAD_X, 0.0)))
+        .min_by(|a, b| a.top().total_cmp(&b.top()));
+    (rule.x_range(), tab)
+}
+
+/// Whether the tab labelled `label` stands whole inside the strip's
+/// visible range, give or take [`PIXEL_SNAP`] (a scrolled row's origin is
+/// rounded to whole device pixels). `Err` says where it stands instead.
+fn tab_in_view(h: &Harness, label: &str) -> Result<(), String> {
+    let (strip, tab) = strip_and_tab(h, label);
+    match tab {
+        Some(tab)
+            if strip.min - PIXEL_SNAP <= tab.left() && tab.right() <= strip.max + PIXEL_SNAP =>
+        {
+            Ok(())
+        }
+        Some(tab) => Err(format!(
+            "the {label} tab spans x {}..{}, outside the strip's {}..{}",
+            tab.left(),
+            tab.right(),
+            strip.min,
+            strip.max
+        )),
+        None => Err(format!(
+            "the {label} tab is scrolled wholly out of the strip's {}..{}",
+            strip.min, strip.max
+        )),
+    }
+}
+
+/// Finding 5-A2. A tab the strip's right edge cuts mid-glyph, when
+/// tapped, was selected but not scrolled into view: it stood on the edge
+/// it was cut by. Tapping it brings it whole into the strip. The tab cut
+/// is Feedback, the last, on the 384pt phone at the normal text size (it
+/// ends 14pt past the strip) and Components, the third, at font scale 1.3,
+/// where the 295pt screen shows 263pt of strip and Feedback lies wholly
+/// beyond it.
+#[test]
+fn a_tapped_tab_the_strip_cuts_scrolls_into_view() {
+    // The font scale, and the tab the strip's right edge cuts at it.
+    let cases = [(1.0, copy::TABS[3]), (LARGE_TEXT, copy::TABS[2])];
+
+    let mut off = Vec::new();
+    for (zoom, label) in cases {
+        let at = format!("at font scale {zoom}");
+        let mut h = Harness::window_zoomed(PHONE, zoom);
+        h.touch_screen();
+
+        let (strip, tab) = strip_and_tab(&h, label);
+        let tab = tab.expect("the tab the strip cuts is painted, in part");
+        assert!(
+            strip.min < tab.left() && tab.left() < strip.max && strip.max < tab.right(),
+            "{at} the {label} tab must run past the strip's right edge: it spans x {}..{}, the \
+             strip {}..{}",
+            tab.left(),
+            tab.right(),
+            strip.min,
+            strip.max
+        );
+
+        // The finger lands on the part of the tab that shows.
+        let visible = egui::Rangef::new(tab.left(), strip.max);
+        h.tap(egui::pos2(visible.center(), tab.center().y));
+        let index = copy::TABS.iter().position(|tab| *tab == label);
+        assert_eq!(
+            Some(h.app.gallery.tab),
+            index,
+            "{at} a tap on {label} switches panels"
+        );
+        h.idle(30);
+
+        if let Err(why) = tab_in_view(&h, label) {
+            off.push(format!("{at}, after a tap on {label}: {why}"));
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// A selection the host moves (the app bar's links, a restored state, a
+/// shortcut) brings its tab into view as a tap does, and back out again:
+/// selecting Feedback scrolls the strip to it, selecting Brand again
+/// scrolls the strip back to the start.
+#[test]
+fn a_tab_the_host_selects_scrolls_into_view_at_large_text() {
+    let (feedback, brand) = (copy::TABS[3], copy::TABS[0]);
+    let mut h = Harness::window_zoomed(PHONE, LARGE_TEXT);
+    assert!(
+        tab_in_view(&h, feedback).is_err(),
+        "at font scale {LARGE_TEXT} Feedback must start out of the strip's view"
+    );
+
+    h.app.gallery.tab = 3;
+    h.idle(30);
+    if let Err(why) = tab_in_view(&h, feedback) {
+        panic!("after the host selected Feedback at font scale {LARGE_TEXT}: {why}");
+    }
+    assert!(
+        tab_in_view(&h, brand).is_err(),
+        "the strip must have scrolled for Feedback: Brand has left the strip's view"
+    );
+
+    h.app.gallery.tab = 0;
+    h.idle(30);
+    if let Err(why) = tab_in_view(&h, brand) {
+        panic!("after the host selected Brand at font scale {LARGE_TEXT}: {why}");
+    }
+}
+
+/// The strip follows the selection when it changes, not on every frame:
+/// after it has followed a tap on Feedback, a swipe that drags it back
+/// to the start stays where the finger left it, the selection still
+/// Feedback.
+#[test]
+fn the_strip_can_be_dragged_away_from_the_selected_tab() {
+    let (feedback, brand) = (copy::TABS[3], copy::TABS[0]);
+    let mut h = Harness::window_zoomed(PHONE, LARGE_TEXT);
+    h.touch_screen();
+    h.app.gallery.tab = 3;
+    h.idle(30);
+    tab_in_view(&h, feedback).expect("the strip follows the selection");
+
+    let (strip, tab) = strip_and_tab(&h, feedback);
+    let press = egui::pos2(strip.center(), tab.expect("the tab is painted").center().y);
+    h.swipe(press, press + egui::vec2(300.0, 0.0), 10);
+    h.idle(60);
+
+    assert_eq!(h.app.gallery.tab, 3, "a swipe is no tap on a tab");
+    if let Err(why) = tab_in_view(&h, brand) {
+        panic!("after a swipe back to the start the strip must stay there: {why}");
+    }
+}
+
+/// A row that fits its strip does not scroll when the selection moves:
+/// at a desktop's width the four tabs sit inside the strip, and neither
+/// the host selecting one nor a tap on another moves the first tab off
+/// the content margin (the scroll area has no room to move, and the
+/// request to centre a tab stops at the row's ends).
+#[test]
+fn a_row_that_fits_the_strip_stays_put_when_the_selection_moves() {
+    use crate::gallery::PAGE_GUTTER;
+
+    let brand = copy::TABS[0];
+    let mut h = Harness::window(egui::vec2(1200.0, 800.0));
+    h.touch_screen();
+    let mut off = Vec::new();
+    let mut check = |h: &Harness, after: &str| {
+        let left = strip_and_tab(h, brand).1.expect("Brand is painted").left();
+        if (left - PAGE_GUTTER).abs() > 0.01 {
+            off.push(format!(
+                "{after}, the Brand tab starts at x {left}, not on the content margin \
+                 {PAGE_GUTTER}"
+            ));
+        }
+    };
+
+    h.app.gallery.tab = 3;
+    h.idle(30);
+    check(&h, "after the host selected Feedback");
+    for label in [copy::TABS[2], copy::TABS[1], copy::TABS[3]] {
+        let tab = strip_and_tab(&h, label).1.expect("the tab is painted");
+        h.tap(tab.center());
+        h.idle(30);
+        check(&h, &format!("after a tap on {label}"));
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// A keyboard moves the selection along the strip with the arrow keys
+/// (the tab holding the focus), and the strip follows it: three presses
+/// of the right arrow from Brand reach Feedback, which lies beyond the
+/// strip at font scale 1.3 and must be in view at the end.
+#[test]
+fn the_arrow_keys_bring_the_next_tab_into_view_at_large_text() {
+    let (brand, feedback) = (copy::TABS[0], copy::TABS[3]);
+    let mut h = Harness::window_zoomed(PHONE, LARGE_TEXT);
+    let mut off = Vec::new();
+    let at = format!("at font scale {LARGE_TEXT}");
+    let rings = tab_to_strip_rings(&mut h, ThemeId::Light, &[brand], &at, &mut off);
+    assert!(
+        off.is_empty() && rings.len() == 1,
+        "Tab presses must land the focus on {brand}: {} rings, {off:?}",
+        rings.len()
+    );
+
+    for _ in 0..3 {
+        h.press(egui::Key::ArrowRight);
+        h.idle(30);
+    }
+    assert_eq!(
+        h.app.gallery.tab, 3,
+        "three right arrows from Brand reach Feedback"
+    );
+    if let Err(why) = tab_in_view(&h, feedback) {
+        panic!("after three right arrows at font scale {LARGE_TEXT}: {why}");
+    }
 }
 
 /// In a short window, such as a phone in landscape, the page keeps at

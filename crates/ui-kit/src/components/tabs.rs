@@ -13,6 +13,12 @@
 //! preview's own focus outline), and the arrow keys move the selection
 //! while any tab of the row holds it, wrapping.
 //!
+//! A row that outgrows its width (a narrow phone, or large text) follows
+//! the selection: a tap on a tab, an arrow key, or the host moving
+//! `selected` scrolls that tab to the middle of the strip, stopping at
+//! the row's ends. Only a move makes it scroll, so the user can still
+//! drag the strip away from the selected tab.
+//!
 //! The ring reaches [`FOCUS_RING_REACH`] past a tab, so the row paints
 //! it under a clip widened by that much at each side (the first tab
 //! stands at the strip's left edge, the last at its right once scrolled
@@ -221,6 +227,19 @@ impl<'a> Tabs<'a> {
         // The visuals move this frame, ahead of the host's state copy.
         let showing = changed.unwrap_or(selected);
 
+        // The strip follows the selection: when the tab it shows moves
+        // (an arrow, or the host setting `selected`), the strip scrolls
+        // that tab into view. A row that outgrows its width would leave
+        // the new tab where the edge cut it, or out of sight. The tab
+        // last shown is kept under the row's id, and only a change of
+        // it makes the strip scroll: following every frame would pull
+        // the strip back from wherever the user dragged it. A fresh
+        // strip stands at its first tab, so on its first frame only a
+        // later selection has anything to scroll to.
+        let shown_key = id.with("shown");
+        let last_shown: Option<usize> = ctx.data(|data| data.get_temp(shown_key));
+        let follow = last_shown.unwrap_or(0) != showing;
+
         // The row: full-width viewport so a row that outgrows the
         // width scrolls sideways rather than wrapping, the tabs held
         // 28px apart at the label's line box plus their 14px paddings.
@@ -275,12 +294,22 @@ impl<'a> Tabs<'a> {
                             ui.allocate_exact_size(Vec2::new(width, tab_height), Sense::hover());
                         row = Some(row.map_or(rect, |so_far| so_far.union(rect)));
                         let response = ui.interact(rect, id.with(index), Sense::click());
-                        if response.clicked() {
+                        let tapped = response.clicked();
+                        if tapped {
                             // A click moves the selection and lands the
                             // focus, the native tab behaviour egui only
                             // gives Tab traversal.
                             changed = Some(index);
                             ctx.memory_mut(|memory| memory.request_focus(id.with(index)));
+                        }
+                        // The tab a tap lands on, or the one the selection
+                        // moved to, comes to the middle of the strip (the
+                        // scroll area stops at the row's ends, so the first
+                        // and last tabs stand at the edges). The strip's
+                        // scroll area takes the request whole, on both axes,
+                        // so a page that scrolls round the row stays put.
+                        if tapped || (follow && active) {
+                            response.scroll_to_me(Some(egui::Align::Center));
                         }
 
                         let painter = ui.painter().clone().with_layer_id(response.layer_id);
@@ -345,8 +374,14 @@ impl<'a> Tabs<'a> {
         // hosts can read the row's geometry back.
         let response = ui.interact(row_rect, id.with("row"), Sense::hover());
 
+        // What this frame ends on is what the strip has shown: a tap's
+        // tab counts now, so the host's copy of it, next frame, is no
+        // new move to follow.
+        let selected = changed.unwrap_or(selected);
+        ctx.data_mut(|data| data.insert_temp(shown_key, selected));
+
         TabsResponse {
-            selected: changed.unwrap_or(selected),
+            selected,
             changed,
             response,
         }
