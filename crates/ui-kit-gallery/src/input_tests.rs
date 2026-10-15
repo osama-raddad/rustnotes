@@ -1148,13 +1148,14 @@ fn bar_controls(h: &Harness) -> Vec<(String, egui::Rect)> {
     controls
 }
 
-/// The widths the bar's focus tests run at, each a different `BarFit`
-/// tier: 320 is the compact bar with the icon trigger, 384 (a phone) the
-/// compact bar with the bare label, 900 the nav links with no call to
-/// action, and 1280 the fullest bar: nav links, the call to action
-/// and the trigger naming the theme. Whether the bar holds the nav links
-/// and the call to action is part of what the tests expect, so that a
-/// breakpoint change cannot drop a tier unseen.
+/// The widths the bar's Tab-order and pinned-rect tests run at, each a
+/// different `BarFit` tier: 320 is the compact bar with the icon
+/// trigger, 384 (a phone) the compact bar with the bare label, 900 the
+/// nav links with no call to action, and 1280 the fullest bar: nav
+/// links, the call to action and the trigger naming the theme. Whether
+/// the bar holds the nav links and the call to action is part of what
+/// the Tab-order test expects (the pinned-rect test finds its controls
+/// by name), so that a breakpoint change cannot drop a tier unseen.
 const BAR_TIERS: [(f32, bool, bool); 4] = [
     // (window width, the nav links, the call to action)
     (320.0, false, false),
@@ -1243,14 +1244,25 @@ fn tab_reaches_the_bars_controls_in_visual_order() {
 /// `the_bar_centres_its_wordmark_and_pads_its_ends`; this pins the
 /// controls' own rects, to a fraction of a point.) The faces are the
 /// kit's own, so the widths are the same on every machine.
+///
+/// `RECORDED` is a golden table, not a derived expectation: it holds
+/// the rects as they stood, and it fails on any move, so a deliberate
+/// change to the bar's geometry (`ACTIONS_GAP`, the button padding, the
+/// faces or their sizes) must re-record it. Do that from this test's
+/// failure output, which prints each control's new rect, in the table's
+/// own form, beside the recorded one: check that the move is the one
+/// intended, then copy the new values in.
 #[test]
 fn the_bars_controls_keep_their_places() {
-    /// Under egui's rounding step (a 32nd of a point): any move shows.
+    /// Below egui's rounding step of a 32nd of a point (about 0.031): it
+    /// absorbs only the three-decimal rounding of the golden table's
+    /// values, and any real move, which is a whole step or more, fails.
     const SLACK: f32 = 0.02;
     const SEARCH: &str = "the search button";
     const TRIGGER: &str = "the theme trigger";
     const CTA: &str = "the call to action";
-    // (window width, control, left, top, right, bottom)
+    // The golden table, in the light theme:
+    // (window width, control, [left, top, right, bottom])
     const RECORDED: [(f32, &str, [f32; 4]); 9] = [
         (320.0, SEARCH, [186.0, 24.0, 230.0, 68.0]),
         (320.0, TRIGGER, [246.0, 24.0, 290.0, 68.0]),
@@ -1267,6 +1279,8 @@ fn the_bars_controls_keep_their_places() {
     for (width, _, _) in BAR_TIERS {
         let mut h = Harness::window(egui::vec2(width, 800.0));
         h.app.gallery.tab = 3;
+        h.app.gallery.theme = ThemeId::Light;
+        crate::gallery::apply_theme(ThemeId::Light, &h.ctx);
         h.idle(2);
         for (name, rect) in bar_controls(&h) {
             let Some((_, _, [l, t, r, b])) = RECORDED
@@ -1280,8 +1294,18 @@ fn the_bars_controls_keep_their_places() {
             if (rect.min - recorded.min).abs().max_elem() > SLACK
                 || (rect.max - recorded.max).abs().max_elem() > SLACK
             {
+                // In the table's own form, to three decimals, so that a
+                // deliberate move can be copied in as it stands.
+                let table = |rect: egui::Rect| {
+                    format!(
+                        "[{:.3}, {:.3}, {:.3}, {:.3}]",
+                        rect.min.x, rect.min.y, rect.max.x, rect.max.y
+                    )
+                };
                 off.push(format!(
-                    "at {width}pt {name} stands at {rect:?}, not where it was recorded {recorded:?}"
+                    "at {width}pt {name} stands at {}, not where it was recorded {}",
+                    table(rect),
+                    table(recorded)
                 ));
             }
         }

@@ -2216,7 +2216,7 @@ fn feedback_section(
 struct BarFit {
     /// The nav links follow the wordmark.
     nav: bool,
-    /// The call to action leads the actions, flush right.
+    /// The call to action ends the actions, flush right.
     cta: bool,
     /// How the theme trigger reads.
     trigger: ThemeTrigger,
@@ -2350,21 +2350,22 @@ impl BarFit {
     }
 
     /// How wide the actions group runs, from the search button's left
-    /// edge to the right edge of the group's last control: the search
-    /// button, the theme trigger and (where the bar has room) the call
-    /// to action, each after the one before it by egui's item spacing
-    /// and the bar's own gap. The group is laid out left to right (see
-    /// `Gallery::app_bar`) from this far in from its right edge, which
-    /// is where the same controls laid out from the right edge would
-    /// have put them.
+    /// edge to the right edge of its last control. It must equal the
+    /// extent of the left-to-right group `Gallery::app_bar` builds: the
+    /// search button, the theme trigger and (where the bar has room) the
+    /// call to action, each after the one before it by egui's item
+    /// spacing and the bar's own `ACTIONS_GAP`. `app_bar` opens the
+    /// group this far in from its right edge, so that the last control
+    /// ends flush with it; a change to what the group holds or to the
+    /// gaps between its controls changes this too.
     fn actions_width(&self, ui: &egui::Ui, theme: ThemeId) -> f32 {
         let between = ui.spacing().item_spacing.x + ACTIONS_GAP;
         let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
-        let trigger = search + between + trigger_button_width(ui, theme, &self.trigger);
+        let through_trigger = search + between + trigger_button_width(ui, theme, &self.trigger);
         if self.cta {
-            trigger + between + cta_button_width(ui, theme)
+            through_trigger + between + cta_button_width(ui, theme)
         } else {
-            trigger
+            through_trigger
         }
     }
 }
@@ -2515,15 +2516,11 @@ impl Gallery {
                 // bar.
                 //
                 // The group is built left to right, in the order its
-                // controls stand, because that is the order the Tab key
-                // visits them in: egui hands focus along in the order
-                // the widgets are created, not the order they are laid
-                // out in, and a group built from the right edge, the
-                // natural way to end a row flush, created the CTA
-                // first and the search last. So that it still ends at
-                // the right edge, the child opens `actions_width` in
-                // from it, which is where the same controls built from
-                // the right would have put them.
+                // controls stand, because egui hands Tab focus along in
+                // creation order, not layout order (built from the
+                // right it ran CTA, theme, search). It still ends at
+                // the right edge: the child opens `actions_width` in
+                // from it.
                 let row = ui.available_rect_before_wrap();
                 let overhang = if fit.cta { 0.0 } else { fit.trigger.overhang() };
                 let right = row.max.x + overhang;
@@ -2563,11 +2560,13 @@ impl Gallery {
                                 .hint(copy::SEARCH_FIELD_HINT)
                                 .ui(ui, theme, &flags);
                         });
+                    // Keep in step with `BarFit::actions_width`.
                     ui.add_space(ACTIONS_GAP);
 
                     self.theme_menu(ui, ctx, fit.trigger);
 
                     if fit.cta {
+                        // Keep in step with `BarFit::actions_width`.
                         ui.add_space(ACTIONS_GAP);
                         Button::new(copy::START_A_PROJECT)
                             .small()
