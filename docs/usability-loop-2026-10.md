@@ -1017,8 +1017,24 @@ Not checked, so iteration 9 is open:
 
 ## Iteration 10: the regression sweep (in progress)
 
-`just check` and `tools/emu-touch.sh` are run from this iteration. The branch diff
-review follows.
+- **`just check`: exit 0**, for the Android and iOS targets of every mobile crate.
+- **`tools/emu-touch.sh emulator-5554`, three runs at HEAD.** Run 1 exited 1:
+  six of seven checks passed, and `unswipe` measured 3.5% against a limit of 2%.
+  The restored row sat about 57pt short of its start. Runs 2 and 3 passed all seven
+  checks, with `unswipe` at 0.0%.
+  - **Cause not established.** Two input-side candidates. The vertical scroll landed
+    at a different height each run (13.3%, 14.4%, 18.6% of pixels changed), so the
+    row probe hit y 1380 in run 1 and y 1470 in run 2. A swipe near the row's edge
+    is as likely as egui's fling. `moved.png` against `restored.png` was not
+    measured, so it is not known whether the reverse swipe undershot or moved far less.
+  - **Not bisected.** Since 162d7e7, only `fb99a5f` touched `states_section`, and
+    its +8pt pill height does not account for 57pt. The `wrapping_row` callers
+    (lines 913, 984, 1031) are not the states row.
+  - **Status: informational.** A single run is not a gate until `unswipe` is
+    deterministic. Backlog: lengthen the reverse swipe (300 to 1300, not 1100), so the
+    row's start clamp guarantees the restore. Recorded as **K4**.
+- The branch diff review (three reviewers, one per area) ran. Its findings are
+  triaged below.
 
 ## Status and handoff
 
