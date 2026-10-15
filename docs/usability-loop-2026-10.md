@@ -883,9 +883,13 @@ before iteration 6 closes.
   3pt of padding and 0.5pt top and bottom. It is now 25pt tall, with 7pt sides and
   4pt top and bottom. The change is local to the gallery's states row.
 - **Task 29, the Teal Light card (iteration 6), `b8d4cb9`.** The card's swatch
-  borders were `outline_variant` at about 14% alpha, 1.31 to 1.45:1 across the
-  themes. They are now `outline`, at 3.96 to 5.78:1. Teal Light is 4.70:1. This is
-  the one fix in the batch that has no device check.
+  borders were `outline_variant`, which measured 1.31 to 1.84:1 on the card surface
+  across the six themes. Only Teal Light draws its outline at about 14% alpha; the
+  others are opaque. They are now `outline`, at 3.96 to 5.78:1, and Teal Light is
+  4.70:1. This is the one fix in the batch that has no device check. **Open:** the
+  card's ratio bar has its own `outline_variant` border, at 1.31:1 on Teal Light, and
+  the Teal Light bar's 60% surface segment is about 1.07:1 against the card. It is
+  not clear the finding meant the bar, so it is open.
 
 Not done in iteration 6, and open:
 
