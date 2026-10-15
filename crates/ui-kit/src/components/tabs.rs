@@ -11,12 +11,13 @@
 //! outgrow the width the row scrolls sideways rather than wrapping.
 //! Keyboard focus draws the shared 2px ring at `radius-xs` (the
 //! preview's own focus outline), and the arrow keys move the selection
-//! while any tab of the row holds it, wrapping. The ring reaches
-//! [`FOCUS_RING_REACH`] past a tab, so the row paints it under a clip
-//! widened by that much at each side (the first tab stands at the
-//! strip's left edge, the last at its right once scrolled to the end);
-//! the host needs to leave that room beside the row, as the gallery's
-//! 16px gutter does.
+//! while any tab of the row holds it, wrapping.
+//!
+//! The ring reaches [`FOCUS_RING_REACH`] past a tab, so the row paints
+//! it under a clip widened by that much at each side (the first tab
+//! stands at the strip's left edge, the last at its right once scrolled
+//! to the end); the host needs to leave that room beside the row, as the
+//! gallery's 16px gutter does.
 //!
 //! Documented deviation: the web system keeps only the selected tab in
 //! the tab order (`tabindex="-1"` on the rest). egui's Tab traversal
@@ -295,14 +296,14 @@ impl<'a> Tabs<'a> {
                         if active {
                             active_rect = Some(rect);
                         }
-                        // The scroll area clips its content to the
-                        // strip's rect, where the first tab starts (and
-                        // the last ends, once scrolled to the end), so
-                        // the ring's reach past the tab would be cut
-                        // there. Paint the ring under a clip widened by
-                        // that reach, no further than the host's own;
-                        // the tabs, labels and scroll range keep the
-                        // strip's clip.
+                        // The scroll area clips on its scroll axis, x, so
+                        // it cuts the ring at the first tab and, once
+                        // scrolled to the end, at the last. Paint the
+                        // ring under a clip widened along x by the ring's
+                        // reach. The other axis is not clipped by the
+                        // scroll area, and the widened clip stays inside
+                        // the host's, so the ring cannot paint beyond
+                        // what the host allows.
                         let strip_clip = ui.clip_rect();
                         ui.set_clip_rect(
                             strip_clip

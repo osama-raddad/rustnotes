@@ -2233,10 +2233,6 @@ enum ThemeTrigger {
     Icon,
 }
 
-/// How far the keyboard focus ring reaches outside a widget's box: the
-/// ring's offset and its outline (the halo lies within them).
-pub(crate) const FOCUS_REACH: f32 = states::FOCUS_RING_REACH;
-
 impl ThemeTrigger {
     /// How far the trigger's box runs past the row's right edge, when
     /// it ends the row, so that its icon stands the bar's padding in
@@ -2247,14 +2243,15 @@ impl ThemeTrigger {
     /// ink, which sits a further 5px in for the chevron and 3px for the
     /// tune icon.
     ///
-    /// The labelled triggers pull back from that by [`FOCUS_REACH`], a
-    /// deliberate trade-off. Overhanging by the whole padding put their
-    /// box 4px from the pane's edge, and their focus ring, which
-    /// reaches [`FOCUS_REACH`] past the box, on the bar's border, where
-    /// it is cut. Now the ring ends where the box would have, 4px in
-    /// from the edge (`BAR_PAD_X` less the padding), and the icon's box
-    /// stands 4px further in than the wordmark (28px against 24px): the
-    /// bar's two ends are unequal, a known limit of the bar.
+    /// The labelled triggers pull back from that by
+    /// [`states::FOCUS_RING_REACH`], a deliberate trade-off.
+    /// Overhanging by the whole padding put their box 4px from the
+    /// pane's edge, and their focus ring, which reaches
+    /// [`states::FOCUS_RING_REACH`] past the box, on the bar's border,
+    /// where it is cut. Now the ring ends where the box would have, 4px
+    /// in from the edge (`BAR_PAD_X` less the padding), and the icon's
+    /// box stands 4px further in than the wordmark (28px against 24px):
+    /// the bar's two ends are unequal, a known limit of the bar.
     ///
     /// That 4px of clearance is `BAR_PAD_X` less the padding whatever
     /// the reach is; it is also the reach, which the focus-ring test
@@ -2263,7 +2260,7 @@ impl ThemeTrigger {
     fn overhang(&self) -> f32 {
         match self {
             ThemeTrigger::Named | ThemeTrigger::Bare => {
-                ButtonSize::Default.padding_x() - FOCUS_REACH
+                ButtonSize::Default.padding_x() - states::FOCUS_RING_REACH
             }
             ThemeTrigger::Icon => {
                 (ui_kit::components::badge::ICON_BUTTON_SIZE - IconSize::Lg.px()) / 2.0
