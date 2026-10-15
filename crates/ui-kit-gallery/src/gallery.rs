@@ -2235,7 +2235,7 @@ enum ThemeTrigger {
 
 /// How far the keyboard focus ring reaches outside a widget's box: the
 /// ring's offset and its outline (the halo lies within them).
-pub(crate) const FOCUS_REACH: f32 = states::FOCUS_RING_OFFSET + states::FOCUS_RING_WIDTH;
+pub(crate) const FOCUS_REACH: f32 = states::FOCUS_RING_REACH;
 
 impl ThemeTrigger {
     /// How far the trigger's box runs past the row's right edge, when

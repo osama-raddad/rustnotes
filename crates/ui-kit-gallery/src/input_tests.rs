@@ -1128,6 +1128,221 @@ fn the_theme_triggers_focus_ring_stays_inside_the_bar() {
     assert!(off.is_empty(), "{}", off.join("\n"));
 }
 
+/// The focus ring round one tab of the tab strip, as the last frame
+/// painted it.
+struct StripRing {
+    /// The tab's label.
+    label: &'static str,
+    /// The ring's outline shape.
+    shape: egui::epaint::RectShape,
+    /// The clip the ring was painted under: the strip's visible area.
+    clip: egui::Rect,
+    /// The tab's label rect, from which the tab's own box follows.
+    label_rect: egui::Rect,
+}
+
+impl StripRing {
+    /// The tab's own box: the label with its 4pt side paddings, and the
+    /// 14pt paddings over and under its line box.
+    fn tab(&self) -> egui::Rect {
+        use ui_kit::components::tabs::{TAB_PAD_X, TAB_PAD_Y, TAB_TEXT_SIZE};
+        use ui_kit::tokens::leading::LEADING_NORMAL;
+
+        egui::Rect::from_center_size(
+            self.label_rect.center(),
+            egui::vec2(
+                self.label_rect.width() + 2.0 * TAB_PAD_X,
+                2.0 * TAB_PAD_Y + TAB_TEXT_SIZE * LEADING_NORMAL,
+            ),
+        )
+    }
+
+    /// Whether the ring is whole: drawn at its full reach round the tab
+    /// (not pulled in to fit) and lying inside the clip it was painted
+    /// under, give or take `slack`. Pushes what is wrong, if anything,
+    /// onto `off`.
+    fn check_whole(&self, at: &str, slack: f32, off: &mut Vec<String>) {
+        use crate::gallery::FOCUS_REACH;
+
+        let outer = self.shape.visual_bounding_rect();
+        let wanted = self.tab().expand(FOCUS_REACH);
+        if (outer.min - wanted.min).abs().max_elem() > 0.5
+            || (outer.max - wanted.max).abs().max_elem() > 0.5
+        {
+            off.push(format!(
+                "{at} the {} tab's focus ring {outer:?} is not drawn at its full reach \
+                 ({FOCUS_REACH}pt) round the tab: {wanted:?}",
+                self.label
+            ));
+        }
+        if !self.clip.expand(slack).contains_rect(outer) {
+            off.push(format!(
+                "{at} the {} tab's focus ring {outer:?} is cut by the strip's clip {:?}",
+                self.label, self.clip
+            ));
+        }
+    }
+}
+
+/// The ring round the strip's tab `label` in the last frame, if one is
+/// painted: the focus-ring stroke whose rect holds the tab's label,
+/// below the bar. (At the wide tiers the bar's nav links carry the same
+/// names, which is why the label is looked for below the bar's pane.)
+fn strip_ring(h: &Harness, theme: ThemeId, label: &'static str) -> Option<StripRing> {
+    let below = bar_pane(h, theme).bottom();
+    let label_rect = h
+        .strings
+        .iter()
+        .filter(|(text, rect)| text == label && rect.top() > below)
+        .map(|(_, rect)| *rect)
+        .min_by(|a, b| a.top().total_cmp(&b.top()))?;
+    let colour = theme.colors().focus_ring;
+    painted_rects(h)
+        .into_iter()
+        .find(|(shape, _)| shape.stroke.color == colour && shape.rect.contains_rect(label_rect))
+        .map(|(shape, clip)| StripRing {
+            label,
+            shape,
+            clip,
+            label_rect,
+        })
+}
+
+/// From a clean start, press Tab (the bar's controls first, then the
+/// strip's tabs left to right) until each of `labels` has been ringed,
+/// and return each tab's ring as it first stood at full strength. A tab
+/// the presses never reached comes back as `None`.
+fn tab_to_strip_rings(
+    h: &mut Harness,
+    theme: ThemeId,
+    labels: &[&'static str],
+) -> Vec<Option<StripRing>> {
+    // The widest bar tier holds seven stops (four nav links, the search,
+    // the theme trigger and the call to action) ahead of the strip.
+    const MOST_PRESSES: usize = 16;
+    let mut rings: Vec<Option<StripRing>> = labels.iter().map(|_| None).collect();
+    for _ in 0..MOST_PRESSES {
+        h.press(egui::Key::Tab);
+        // The ring fades in over 120ms; let it land.
+        h.idle(12);
+        for (label, ring) in labels.iter().zip(&mut rings) {
+            if ring.is_none() {
+                *ring = strip_ring(h, theme, label);
+            }
+        }
+        if rings.iter().all(Option::is_some) {
+            break;
+        }
+    }
+    rings
+}
+
+/// Keyboard focus on the tab strip's first tab, Brand, rings it whole.
+/// The strip is a sideways scroll area, which clips its content to its
+/// own rect, and that rect starts at the content margin, where the
+/// first tab starts: the ring reaches 4pt past the tab (the 2pt offset
+/// and the 2pt outline), so the clip cut the ring's left stroke and
+/// both its left corners off (on a Pixel, from x 48px). The ring must
+/// be drawn at its full reach and lie inside the clip it was painted
+/// under, and the tab must still start on the content margin, where it
+/// stood before. Focus comes from real Tab presses: the bar, first in
+/// the tab order, answers the first of them, the strip follows its
+/// controls. Run at a phone's width and a desktop's, in every theme.
+#[test]
+fn the_tab_strip_keeps_the_first_tabs_focus_ring_whole() {
+    use crate::gallery::PAGE_GUTTER;
+
+    let brand = copy::TABS[0];
+    let mut off = Vec::new();
+    for width in [384.0, 1200.0] {
+        for theme in ThemeId::ALL {
+            let mut h = Harness::window(egui::vec2(width, 800.0));
+            h.app.gallery.theme = *theme;
+            crate::gallery::apply_theme(*theme, &h.ctx);
+            h.idle(2);
+            let at = format!("at {width}pt in {}", theme.name());
+            let Some(ring) = tab_to_strip_rings(&mut h, *theme, &[brand]).pop().flatten() else {
+                off.push(format!(
+                    "{at} no Tab press drew a focus ring round the {brand} tab"
+                ));
+                continue;
+            };
+            ring.check_whole(&at, 0.0, &mut off);
+            // The fix makes room for the ring; it must not move the tab.
+            if (ring.tab().left() - PAGE_GUTTER).abs() > 0.01 {
+                off.push(format!(
+                    "{at} the {brand} tab starts at x {}, not on the content margin {PAGE_GUTTER}",
+                    ring.tab().left()
+                ));
+            }
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// Every tab of the strip rings whole, not only the first. On a desktop
+/// the four tabs sit inside the strip; on a phone the strip outgrows
+/// its width, and at the end of its scroll the last tab, Feedback, is
+/// the one that reaches the clip's right edge (as Brand reaches the
+/// left at the start), so a swipe takes the strip to its end before the
+/// presses, and Feedback is the tab held to that edge. That scroll is
+/// not exact: egui rounds a scrolled row's origin to whole device
+/// pixels, so the last tab can stand up to half a point (a pixel, at
+/// the harness's one-to-one scale) past the strip's edge, and only
+/// that case gets the half point of slack. The 4pt cut the ring once
+/// had is eight times that.
+#[test]
+fn the_tab_strip_rings_every_tab_whole() {
+    /// egui's rounding of a scrolled row's origin: half a device pixel,
+    /// a half point at the harness's scale.
+    const PIXEL_SNAP: f32 = 0.5;
+
+    let mut off = Vec::new();
+    for (width, scrolled) in [(1200.0, false), (384.0, true)] {
+        for theme in ThemeId::ALL {
+            let mut h = Harness::window(egui::vec2(width, 800.0));
+            h.app.gallery.theme = *theme;
+            crate::gallery::apply_theme(*theme, &h.ctx);
+            h.idle(2);
+            let at = format!(
+                "at {width}pt in {}{}",
+                theme.name(),
+                if scrolled {
+                    ", scrolled to the end"
+                } else {
+                    ""
+                }
+            );
+            let labels: Vec<&'static str> = if scrolled {
+                // The tabs scrolled out of sight are not the edge's.
+                vec![copy::TABS[3]]
+            } else {
+                copy::TABS.to_vec()
+            };
+            if scrolled {
+                let press = h
+                    .painted(copy::TABS[2])
+                    .expect("the tab strip is painted")
+                    .center();
+                h.swipe(press, press - egui::vec2(200.0, 0.0), 10);
+                h.idle(30);
+            }
+            let rings = tab_to_strip_rings(&mut h, *theme, &labels);
+            for (label, ring) in labels.iter().zip(rings) {
+                match ring {
+                    Some(ring) => {
+                        ring.check_whole(&at, if scrolled { PIXEL_SNAP } else { 0.0 }, &mut off)
+                    }
+                    None => off.push(format!(
+                        "{at} no Tab press drew a focus ring round the {label} tab"
+                    )),
+                }
+            }
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
 /// What the bar offers a keyboard, each control with its rect and in
 /// the order the eye reads them (by left edge): the nav links where the
 /// row has room for them, the search button, the theme trigger, and the

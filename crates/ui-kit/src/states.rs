@@ -49,6 +49,11 @@ pub const PRESS_DURATION_MS: f32 = 100.0;
 pub const FOCUS_RING_WIDTH: f32 = 2.0;
 /// The outline's 2px offset.
 pub const FOCUS_RING_OFFSET: f32 = 2.0;
+/// How far the whole focus treatment reaches outside a widget's box:
+/// the 2px offset plus the 2px outline (the 4px halo lies within
+/// them). A widget whose box stands at the edge of a clip needs this
+/// much room beyond the edge, or the clip cuts the ring.
+pub const FOCUS_RING_REACH: f32 = FOCUS_RING_OFFSET + FOCUS_RING_WIDTH;
 /// The canvas-coloured halo: a 4px `surface` band filling the offset
 /// gap under the ring, so the ring reads against any fill.
 pub const FOCUS_HALO_WIDTH: f32 = 4.0;
@@ -526,6 +531,11 @@ mod tests {
             geometry.outer_edge(),
             rect.expand(4.0),
             "the treatment ends 4px out: 2px offset plus 2px outline"
+        );
+        assert_eq!(
+            geometry.outer_edge(),
+            rect.expand(FOCUS_RING_REACH),
+            "the reach is the treatment's whole extent"
         );
     }
 

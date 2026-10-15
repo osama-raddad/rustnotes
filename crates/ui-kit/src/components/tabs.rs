@@ -11,7 +11,12 @@
 //! outgrow the width the row scrolls sideways rather than wrapping.
 //! Keyboard focus draws the shared 2px ring at `radius-xs` (the
 //! preview's own focus outline), and the arrow keys move the selection
-//! while any tab of the row holds it, wrapping.
+//! while any tab of the row holds it, wrapping. The ring reaches
+//! [`FOCUS_RING_REACH`] past a tab, so the row paints it under a clip
+//! widened by that much at each side (the first tab stands at the
+//! strip's left edge, the last at its right once scrolled to the end);
+//! the host needs to leave that room beside the row, as the gallery's
+//! 16px gutter does.
 //!
 //! Documented deviation: the web system keeps only the selected tab in
 //! the tab order (`tabindex="-1"` on the rest). egui's Tab traversal
@@ -31,7 +36,7 @@ use egui::scroll_area::{DragScroll, ScrollSource};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Ui, Vec2};
 
 use crate::components::focus_ring::FocusRing;
-use crate::states::UiKitFlags;
+use crate::states::{UiKitFlags, FOCUS_RING_REACH};
 use crate::theme::ThemeId;
 use crate::tokens::{radii, type_scale};
 
@@ -230,6 +235,9 @@ impl<'a> Tabs<'a> {
         let tab_height = 2.0 * TAB_PAD_Y + line_height;
         let mut active_rect: Option<Rect> = None;
         let mut row: Option<Rect> = None;
+        // The clip the host gave the row, before the scroll area narrows
+        // it to the strip.
+        let host_clip = ui.clip_rect();
         let scroll = egui::ScrollArea::horizontal()
             .id_salt(id.with("strip"))
             .scroll_source(ScrollSource {
@@ -287,9 +295,24 @@ impl<'a> Tabs<'a> {
                         if active {
                             active_rect = Some(rect);
                         }
+                        // The scroll area clips its content to the
+                        // strip's rect, where the first tab starts (and
+                        // the last ends, once scrolled to the end), so
+                        // the ring's reach past the tab would be cut
+                        // there. Paint the ring under a clip widened by
+                        // that reach, no further than the host's own;
+                        // the tabs, labels and scroll range keep the
+                        // strip's clip.
+                        let strip_clip = ui.clip_rect();
+                        ui.set_clip_rect(
+                            strip_clip
+                                .expand2(Vec2::new(FOCUS_RING_REACH, 0.0))
+                                .intersect(host_clip),
+                        );
                         FocusRing::new()
                             .radius(radii::RADIUS_XS as u8)
                             .paint(ui, &response, theme, flags);
+                        ui.set_clip_rect(strip_clip);
                     }
                 });
             });
