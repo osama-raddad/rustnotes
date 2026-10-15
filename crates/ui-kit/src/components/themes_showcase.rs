@@ -387,7 +387,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                         .rect_filled(rect, swatch_radius, role.resolve(&colors));
                     // The edge is `outline`, the border role that holds
                     // 3:1 on the card in every theme: `outline-variant`
-                    // is a 1.3 to 1.9:1 hairline, translucent in the
+                    // is a 1.31 to 1.84:1 hairline, translucent in the
                     // Teal themes, and the surface-coloured swatches
                     // vanished into the card behind it.
                     ui.painter().rect_stroke(
@@ -701,7 +701,7 @@ mod tests {
     /// keeps a border that holds 3:1 against the card it sits on, in all
     /// six themes. A role close to the card (the surfaces, on-primary in
     /// Teal Light) vanishes without one, and the hairline `outline-variant`
-    /// (1.3 to 1.9:1, translucent in the Teal themes) is too faint to be
+    /// (1.31 to 1.84:1, translucent in the Teal themes) is too faint to be
     /// the edge. 3:1 is what WCAG 1.4.11 asks of a graphic that carries
     /// meaning.
     #[test]
