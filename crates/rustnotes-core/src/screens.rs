@@ -432,6 +432,19 @@ impl App {
         self.refresh_notes();
     }
 
+    /// One delete request on a row, from its cross or a swipe past the
+    /// threshold. The first arms the row; a second within `DELETE_ARM_WINDOW`
+    /// deletes it. Matched by note id (MED-1), so a reorder between the two
+    /// cannot retarget the delete.
+    fn arm_or_confirm_delete(&mut self, id: i64) {
+        match self.armed_delete.take() {
+            Some((armed_id, t)) if armed_id == id && t.elapsed() < DELETE_ARM_WINDOW => {
+                self.delete_note(id);
+            }
+            _ => self.armed_delete = Some((id, Instant::now())),
+        }
+    }
+
     fn list_body(&mut self, ui: &mut Ui, pal: &Palette, m: &Metrics, selected: Option<i64>) {
         let ctx = ui.ctx().clone();
         let area = ui.max_rect();
@@ -560,7 +573,8 @@ impl App {
             let del_r = 16.0;
             let side_w = 64.0; // reserved for the delete button
 
-            // Releasing a left swipe past the threshold deletes the row.
+            // Releasing a left swipe past the threshold asks for the delete on
+            // that row; the caller arms it, and a second request confirms it.
             if !down {
                 if let Some(s) = swipe.take() {
                     if s.axis == Axis::Horizontal && -s.dx > SWIPE_DELETE_FRACTION * card_w {
@@ -758,23 +772,14 @@ impl App {
         self.list_offset = out.state.offset.y;
         self.swipe = swipe;
 
+        // A swipe past the threshold takes the same two-step confirm as the cross.
         if let Some(id) = swipe_delete {
-            self.delete_note(id);
+            self.arm_or_confirm_delete(id);
             return;
         }
         match action {
             Some(ListAction::Open(id)) => self.cmds.push(Cmd::OpenNote(id)),
-            Some(ListAction::Delete(id)) => {
-                // Two taps within 2 s on the cross confirms the delete,
-                // matched by note id (MED-1) so a reorder between taps
-                // cannot retarget it.
-                match self.armed_delete.take() {
-                    Some((armed_id, t)) if armed_id == id && t.elapsed() < DELETE_ARM_WINDOW => {
-                        self.delete_note(id);
-                    }
-                    _ => self.armed_delete = Some((id, Instant::now())),
-                }
-            }
+            Some(ListAction::Delete(id)) => self.arm_or_confirm_delete(id),
             None => {}
         }
     }
@@ -1011,6 +1016,44 @@ mod tests {
         vec![Event::PointerMoved(pos), button(true), button(false)]
     }
 
+    /// A primary press or release at `pos`, for the swipe helper.
+    fn press(pos: egui::Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// A left swipe across row `id` past the delete threshold, one pass per
+    /// step as the host delivers it: a press inside the card, the finger
+    /// moving left, and the release. Returns the egui time after the release.
+    fn swipe_left_past_threshold(app: &mut App, ctx: &egui::Context, id: i64, mut t: f64) -> f64 {
+        let card = ctx
+            .read_response(Id::new(("row", id)))
+            .expect("the row is laid out")
+            .rect;
+        // Starts clear of the cross, and ends well past 40% of the card.
+        let start = pos2(card.right() - 100.0, card.center().y);
+        let end = pos2(card.left() + 20.0, card.center().y);
+        let steps = 8;
+        run_pass(
+            app,
+            ctx,
+            vec![Event::PointerMoved(start), press(start, true)],
+            t,
+        );
+        for k in 1..=steps {
+            t += 0.016;
+            let p = start + (end - start) * (k as f32 / steps as f32);
+            run_pass(app, ctx, vec![Event::PointerMoved(p)], t);
+        }
+        t += 0.016;
+        run_pass(app, ctx, vec![press(end, false)], t);
+        t
+    }
+
     /// A fresh app listing `bodies` as saved notes, the last one on top
     /// (newest first).
     fn app_with_notes(ctx: &egui::Context, name: &str, bodies: &[&str]) -> App {
@@ -1110,6 +1153,48 @@ mod tests {
         let expired = run_pass(&mut app, &ctx, vec![], 1.3);
         assert_eq!(hints(&expired), 0, "an expired arm shows no hint");
         assert!(app.armed_delete.is_none(), "the expiry drops the arm");
+    }
+
+    /// A left swipe past the threshold does not delete on release. It arms
+    /// the row's delete, the same state the cross sets, and the armed row
+    /// shows the hint in place of its date.
+    #[test]
+    fn swipe_past_threshold_arms_the_delete_instead_of_deleting() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "swipe-arms");
+        let id = app.notes[0].id;
+        run_pass(&mut app, &ctx, vec![], 1.0);
+
+        swipe_left_past_threshold(&mut app, &ctx, id, 1.0);
+
+        assert_eq!(app.notes.len(), 2, "the release does not delete the note");
+        assert_eq!(
+            app.armed_delete.map(|(armed, _)| armed),
+            Some(id),
+            "the release arms the swiped row"
+        );
+        let armed = run_pass(&mut app, &ctx, vec![], 2.0);
+        assert_eq!(hints(&armed), 1, "the armed row shows the delete hint");
+    }
+
+    /// The second swipe past the threshold, inside the window, confirms the
+    /// delete: the same two-step rule the cross follows.
+    #[test]
+    fn second_swipe_within_the_window_deletes_the_note() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "swipe-confirms");
+        let id = app.notes[0].id;
+        run_pass(&mut app, &ctx, vec![], 1.0);
+
+        let t = swipe_left_past_threshold(&mut app, &ctx, id, 1.0);
+        swipe_left_past_threshold(&mut app, &ctx, id, t + 0.1);
+
+        assert_eq!(app.notes.len(), 1, "the second swipe deletes the note");
+        assert!(
+            app.notes.iter().all(|n| n.id != id),
+            "the swiped note is the one gone"
+        );
+        assert_eq!(app.armed_delete, None, "the delete consumes the arm");
     }
 
     /// A note's second line, long enough to run the whole width of its row.
