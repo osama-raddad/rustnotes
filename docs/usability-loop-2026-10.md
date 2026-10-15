@@ -994,6 +994,32 @@ Not checked, so iteration 8 is open:
 - The Snakebyte_Tablet_Design AVD, and a portrait tablet.
 - Phone landscape single-pane was checked in iteration 7 on the Pixel, not here.
 
+## Iteration 9: the iOS pass (taps only, partial)
+
+Device: the iPhone 16 Pro simulator, `1F96BFA0-C3BF-4C38-BBF5-1A9CADCA0C9D`. Built
+with `just ios-run app=rustnotes`, which installs on the simulator and does not
+pick a connected iPhone.
+
+Checked, with taps only:
+- The list renders under the dynamic island, with the "+" and the bottom bar.
+- "+" opens "New note" with the caret in the body. The "<" back arrow returns to
+  the list. The unsaved empty note was not kept, which is correct.
+- The status bar shows iOS's "Vynatix Gallery" back-to-app link at the top left.
+  That is the system's own link from the gallery run, not a Rust Notes defect.
+
+Not checked, so iteration 9 is open:
+- Gestures. The simulator tools here take taps only, and iOS swipes and edge
+  gestures are unverified (as the schedule already says).
+- The bottom clip and the blank band above the gesture bar (about 33pt, from the
+  Android pass), and the iOS 816-pt hard clip.
+- The bar's edge and gap on iOS (2-I9).
+- The keyboard inset path on iOS.
+
+## Iteration 10: the regression sweep (in progress)
+
+`just check` and `tools/emu-touch.sh` are run from this iteration. The branch diff
+review follows.
+
 ## Status and handoff
 
 Paused at the user's request during iteration 5, task 20. Nothing has been
