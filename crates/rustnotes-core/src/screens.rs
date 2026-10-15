@@ -8,7 +8,7 @@
 
 use crate::layout::{
     self, add_button, back_button, bar_title, bottom_nav, icon_notes, icon_settings, BarLine,
-    Metrics, Nav, NavItem, Palette, Scaffold, WindowClass,
+    Metrics, Nav, NavItem, Palette, Scaffold, SizeClass, WindowClass,
 };
 use crate::{debounce, notes, App, DebounceAction, Screen, Tab, DELETE_ARM_WINDOW, EDITOR_ID};
 use egui::{
@@ -146,7 +146,9 @@ impl App {
                 // The stack is borrowed while it draws; routes queue commands
                 // instead of touching it.
                 let mut nav = std::mem::replace(&mut self.nav, Nav::new(Screen::List));
-                nav.show(root, now, |ui, route| self.route_ui(ui, *route, &pal, &m));
+                nav.show(root, now, |ui, route| {
+                    self.route_ui(ui, *route, &pal, &m, class)
+                });
                 self.nav = nav;
             }
         }
@@ -185,7 +187,14 @@ impl App {
     }
 
     /// One route of the single-pane notes flow.
-    fn route_ui(&mut self, ui: &mut Ui, route: Screen, pal: &Palette, m: &Metrics) {
+    fn route_ui(
+        &mut self,
+        ui: &mut Ui,
+        route: Screen,
+        pal: &Palette,
+        m: &Metrics,
+        class: WindowClass,
+    ) {
         match route {
             Screen::List => {
                 let count = self.notes.len();
@@ -206,11 +215,18 @@ impl App {
             Screen::Editor => {
                 let new_note = self.edit_id == 0;
                 let mut back = false;
-                // Not capped: a 640 pt column centred in a landscape window
-                // starts the typed text about 140pt in, while the title sits
-                // at the margin (finding 7-A2).
-                Scaffold::new(pal, m)
-                    .background(pal.surface)
+                // Capped in Medium and Expanded windows (metrics.rs:24). A
+                // landscape phone has Compact height, and there a 640 pt column
+                // centred in the window starts the typed text about 140pt in,
+                // while the title sits at the margin (finding 7-A2), so it is
+                // uncapped. `two_pane_ok` uses the same height test.
+                let scaffold = Scaffold::new(pal, m).background(pal.surface);
+                let scaffold = if class.height != SizeClass::Compact {
+                    scaffold.limit_body_width()
+                } else {
+                    scaffold
+                };
+                scaffold
                     .top_bar(|u| back = editor_bar(u, new_note, true, pal, m))
                     .show(ui, |ui, _| self.editor_body(ui, pal, m));
                 if back {
@@ -1627,6 +1643,39 @@ mod tests {
             near(title_x, CUTOUT + 56.0),
             "the bar is unchanged: title at {title_x}, wanted {}",
             CUTOUT + 56.0
+        );
+    }
+
+    /// `metrics.rs:24`: the body is capped in Medium and Expanded windows. A
+    /// 744 x 1133 pt window is width Medium and height Expanded, so the editor
+    /// keeps its cap: the 640 pt body is centred, and the typed text starts at
+    /// the column's left plus `sp(3)`, not at the full-width margin.
+    #[test]
+    fn medium_editor_keeps_its_body_width_cap() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "editor-cap-medium");
+        let id = app.notes[0].id;
+        app.open_editor(id);
+        app.buffer = "typed text".to_owned();
+        app.nav.settle();
+        let pass = run_pass_insets(
+            &mut app,
+            &ctx,
+            vec2(744.0, 1133.0),
+            Default::default(),
+            vec![],
+            0.0,
+        );
+        let text_x = find(&pass.text, "typed text").rect.left();
+
+        let cap = Metrics::DEFAULT.max_content_width;
+        let margin = Metrics::DEFAULT.sp(3);
+        let column_left = (744.0 - cap) / 2.0;
+        assert!(
+            near(text_x, column_left + margin),
+            "medium editor text at {text_x}, wanted {} (column left {column_left} \
+             + sp(3), body capped at {cap}); the cap is missing",
+            column_left + margin
         );
     }
 }
