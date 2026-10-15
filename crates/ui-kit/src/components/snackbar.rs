@@ -1611,10 +1611,17 @@ mod tests {
         repaint_after: Duration,
     }
 
-    /// Run one pass with `events` as the only input. A pass with no
+    /// Run one frame with `events` as the only input. A frame with no
     /// time of its own advances egui's clock by its predicted frame
     /// time, about 16.7ms, which the host ticks its clocks by.
-    fn pass(
+    ///
+    /// What the frame reports as `repaint_after` is not always the
+    /// host's own ask. A zero-delay repaint request, which egui earns
+    /// from an area's sizing pass or from any input, makes the next
+    /// frame report `Duration::ZERO` once (egui's `outstanding` flag),
+    /// whatever the host asked for. A test that reads the host's ask
+    /// runs that one frame first.
+    fn idle_frame(
         ctx: &egui::Context,
         host: &mut SnackbarHost,
         theme: ThemeId,
@@ -1635,6 +1642,21 @@ mod tests {
             shapes,
             repaint_after,
         }
+    }
+
+    /// A showing `snackbar` whose entrance is over and whose next frame
+    /// reports the host's own repaint ask: [`settled`], the entrance
+    /// ticked off, and the one frame the sizing pass's zero-delay request
+    /// makes report `Duration::ZERO` (see [`idle_frame`]).
+    fn entered(
+        theme: ThemeId,
+        flags: &UiKitFlags,
+        snackbar: Snackbar,
+    ) -> (egui::Context, SnackbarHost) {
+        let (ctx, mut host) = settled(theme, flags, None, snackbar);
+        host.tick(ENTRANCE_MS);
+        idle_frame(&ctx, &mut host, theme, flags, Vec::new());
+        (ctx, host)
     }
 
     /// Whether a frame painted any text containing `needle`: the
@@ -1670,7 +1692,7 @@ mod tests {
         // Idle frames, no touch and no pointer, up to the one that crosses.
         let mut crossing = None;
         for _ in 0..20 {
-            let frame = pass(&ctx, &mut host, theme, &flags, Vec::new());
+            let frame = idle_frame(&ctx, &mut host, theme, &flags, Vec::new());
             if frame.event.is_some() {
                 crossing = Some(frame);
                 break;
@@ -1682,7 +1704,10 @@ mod tests {
 
         // That frame was painted before the tick, so it still shows the
         // snackbar the host has just dropped...
-        painted_text(&crossing.shapes, "Saved.");
+        assert!(
+            paints_text(&crossing.shapes, "Saved."),
+            "the frame that retires the snackbar still paints it"
+        );
         // ...and so it must ask for the frame that shows it gone, or the
         // screen keeps this one until the next touch.
         assert_eq!(
@@ -1690,15 +1715,20 @@ mod tests {
             Duration::ZERO,
             "the frame that retires the snackbar asks for another straight away"
         );
-        let after = pass(&ctx, &mut host, theme, &flags, Vec::new());
+        let after = idle_frame(&ctx, &mut host, theme, &flags, Vec::new());
         assert!(
             !paints_text(&after.shapes, "Saved."),
             "the frame after leaves the screen clear"
         );
     }
 
-    /// A running timer is waited out by a repaint no later than the time
-    /// it has left, for the 6s message and the 10s one with an action.
+    /// A running timer is waited out by a repaint at the time it has
+    /// left, for the 6s message and the 10s one with an action. The delay
+    /// lands a little short of `left_ms`: the host asks 4ms past the
+    /// deadline, and egui takes a predicted frame (about 16.7ms) off any
+    /// wait so as not to overshoot. The 50ms lower bound ties the delay to
+    /// this timer's clock, so a missing request (`Duration::MAX`) and a
+    /// request for now (`Duration::ZERO`) both fail it.
     #[test]
     fn a_running_timer_asks_for_a_repaint_by_its_deadline() {
         let theme = ThemeId::Light;
@@ -1711,58 +1741,63 @@ mod tests {
             ),
         ] {
             let message = snackbar.message.clone();
-            let (ctx, mut host) = settled(theme, &flags, None, snackbar);
-            host.tick(ENTRANCE_MS);
-            let frame = pass(&ctx, &mut host, theme, &flags, Vec::new());
+            // `entered` has spent the frame that reports ZERO, so this
+            // frame reports the host's own ask.
+            let (ctx, mut host) = entered(theme, &flags, snackbar);
+            let frame = idle_frame(&ctx, &mut host, theme, &flags, Vec::new());
             assert_eq!(frame.event, None, "{message}: nothing ends it yet");
             let left_ms = duration - host.visible.as_ref().expect("still up").elapsed_ms;
+            let wait_ms = frame.repaint_after.as_secs_f32() * 1000.0;
             assert!(
-                frame.repaint_after != Duration::MAX
-                    && frame.repaint_after.as_secs_f32() * 1000.0 <= left_ms,
-                "{message}: asks to repaint in {:?}, with {left_ms}ms left",
-                frame.repaint_after
+                (left_ms - 50.0..=left_ms).contains(&wait_ms),
+                "{message}: asks to repaint in {wait_ms}ms, with {left_ms}ms left"
             );
         }
     }
 
-    /// A held clock waits for no repaint of its own. An error never times
-    /// out, and a snackbar the pointer rests on holds its timer, so the
-    /// time it has left stands still; the pointer leaving is input, and
-    /// the frame it brings asks again.
+    /// An error never times out, so it has no clock to wait out: it asks
+    /// for no timed repaint and sits until it is dismissed.
     #[test]
-    fn a_held_clock_asks_for_no_timed_repaint() {
+    fn an_error_asks_for_no_timed_repaint() {
         let theme = ThemeId::Light;
         let flags = UiKitFlags::default();
-
-        let (ctx, mut host) = settled(theme, &flags, None, Snackbar::error("Sync failed"));
-        host.tick(ENTRANCE_MS);
-        pass(&ctx, &mut host, theme, &flags, Vec::new());
-        let quiet = pass(&ctx, &mut host, theme, &flags, Vec::new());
+        // `entered` has spent the frame that reports ZERO, so this frame
+        // reports the host's own ask: none.
+        let (ctx, mut host) = entered(theme, &flags, Snackbar::error("Sync failed"));
+        let quiet = idle_frame(&ctx, &mut host, theme, &flags, Vec::new());
         assert_eq!(
             quiet.repaint_after,
             Duration::MAX,
             "an error sits until dismissed and asks for nothing"
         );
+    }
 
-        // The pointer comes to rest on the snackbar, which holds the clock.
-        let (ctx, mut host) = settled(theme, &flags, None, Snackbar::success("Saved."));
-        host.tick(ENTRANCE_MS);
+    /// A held clock waits for no repaint of its own. A snackbar the
+    /// pointer rests on holds its timer, so the time it has left stands
+    /// still; the pointer leaving is input, and the frame it brings asks
+    /// again.
+    #[test]
+    fn a_held_clock_asks_for_no_timed_repaint() {
+        let theme = ThemeId::Light;
+        let flags = UiKitFlags::default();
+        let (ctx, mut host) = entered(theme, &flags, Snackbar::success("Saved."));
         let (surface, _) = paint_pass(&ctx, |ui| {
             host.paint(ui.ctx(), theme, &flags);
             rect_of(ui, "surface")
         });
-        pass(
+        // The pointer comes to rest on the snackbar, which holds the clock.
+        idle_frame(
             &ctx,
             &mut host,
             theme,
             &flags,
             vec![egui::Event::PointerMoved(surface.center())],
         );
-        // The pointer's own move earns a repaint or two from egui; the
-        // passes after those are the host's alone to ask for.
-        pass(&ctx, &mut host, theme, &flags, Vec::new());
-        pass(&ctx, &mut host, theme, &flags, Vec::new());
-        let held = pass(&ctx, &mut host, theme, &flags, Vec::new());
+        // The move is input, which earns a zero-delay request, so the
+        // frame after it reports ZERO. One frame spends that, and the
+        // frame after it reports the host's own ask.
+        idle_frame(&ctx, &mut host, theme, &flags, Vec::new());
+        let held = idle_frame(&ctx, &mut host, theme, &flags, Vec::new());
         assert!(host.paused, "the pointer on the snackbar holds the timer");
         assert_eq!(
             held.repaint_after,
