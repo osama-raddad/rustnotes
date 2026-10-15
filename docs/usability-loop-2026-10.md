@@ -1,8 +1,9 @@
 # Framework usability loop — October 2026
 
-Status: paused at iteration 5, task 20, at the user's request. Iterations 1 to 4
-are closed and pushed. See "Status and handoff" at the end of this file for the
-progress, the left-over work, and how to resume.
+Status: iteration 5 in progress. Task 20 (5-A1) is closed in `b47473f`; task 21
+is next. Iterations 1 to 4 are closed and pushed. The "Status and handoff"
+section at the end is the handoff as of the pause, and it is now out of date
+for iteration 5 onward.
 
 Branch `feat/framework-usability-iterations`, cut from `feat/design-notes-fixes`
 (draft PR #23, tip `7918329`). This loop's PR stacks on #23.
@@ -734,6 +735,35 @@ Deferred, with the reason:
   with no affordance, are carried from iteration 5's earlier list.
 
 Fix batch for iteration 5: tasks 20 to 23, run one at a time.
+
+**Task 20 closed (5-A1), `b47473f`.** The cause was the chips row's trailing
+`add_space(space-4)`: egui widens the region for a space rather than wrapping,
+so a fourth chip within 16pt of the page's right edge pushed the page's extent
+to x 441.47 at 448pt. The featured chip's gap now rides the row's item spacing,
+which never widens the region; the gap is the same at every width.
+
+- Red, with the fix reverted: both new tests fail. At 448pt the widest rect
+  ends at x 441.47, 9.47pt past the gutter at x 432, which is the Pixel's number.
+- Green: both pass, in 12 s. The sweep samples 432 to 460pt every 4pt and the
+  rest of the phone range every 16pt; a sweep of every width took 35 s of the
+  38 s gallery suite.
+- Gates: `just test` and `just lint` pass at `b47473f`.
+- Device, Pixel 10 Pro XL emulator, portrait 448pt: the Components page's content
+  stops at the bar's right edge, and the Metrics and Editorial rows clip there.
+  Screenshots `build/usability-audit/iter-5-verify/task20-*.png`. The text fields
+  are covered by the headless test only; they were not in the captured frames.
+- **iOS is not claimed.** The iOS tester measured 3pt on the same finding, on an
+  iPhone 16 Pro at 402pt. The fault band the test found is 434 to 456pt, so the
+  iOS overhang may come from a smaller, different cause. Not yet checked.
+- Review follow-ups (`b47473f`): the report's doc comment now says what its checks
+  test; the lists of rects, text and rows fail on empty; the rect and row walks
+  run once; the phone width uses `BREAKPOINT_TABLET`.
+- Left open, for the iteration-10 test-quality backlog: `painted_text` is a
+  near-copy of `painted_strings` and `painted_rects`, and should share one walker;
+  the report counts one sideways row, not the three scrollers, because the
+  rows below the fold are not painted in the 855pt window; and the chips row has
+  no guard against `CHIP_FILTERS` drifting from the filter array, which the gutter
+  tests would catch.
 
 ## Status and handoff
 
