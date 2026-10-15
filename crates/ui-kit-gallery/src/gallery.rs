@@ -2281,23 +2281,13 @@ impl BarFit {
     /// them. `narrow`, the phone layout, goes straight to the compact
     /// bars.
     fn measure(ui: &egui::Ui, theme: ThemeId, narrow: bool) -> BarFit {
-        use ui_kit::components::button::ButtonSize;
-
         // egui spaces each widget from the next by its item spacing,
         // and the bar's own gaps come on top of that.
         let spacing = ui.spacing().item_spacing.x;
         let action = |width: f32| width + spacing + ACTIONS_GAP;
         let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
-        let labelled = |named: bool| {
-            let label = theme_trigger_label(theme, named);
-            action(button_width(ui, theme, ButtonSize::Default, &label, true))
-        };
-        let trigger_width = |trigger: ThemeTrigger| match trigger {
-            ThemeTrigger::Named => labelled(true),
-            ThemeTrigger::Bare => labelled(false),
-            // The icon button, square at the search button's size.
-            ThemeTrigger::Icon => action(search),
-        };
+        let trigger_width =
+            |trigger: ThemeTrigger| action(trigger_button_width(ui, theme, &trigger));
         let row = ui.available_width();
         let logo = Logo::wordmark().height(LOGO_HEIGHT).size().x;
         if !narrow {
@@ -2305,13 +2295,7 @@ impl BarFit {
                 .iter()
                 .map(|label| nav_link_width(ui, theme, label) + spacing + LINK_GAP)
                 .sum();
-            let cta = action(button_width(
-                ui,
-                theme,
-                ButtonSize::Sm,
-                copy::START_A_PROJECT,
-                false,
-            ));
+            let cta = action(cta_button_width(ui, theme));
             let named = trigger_width(ThemeTrigger::Named);
             let bare = trigger_width(ThemeTrigger::Bare);
             // The room left once the wordmark, with the gap after it,
@@ -2364,6 +2348,46 @@ impl BarFit {
             trigger,
         }
     }
+
+    /// How wide the actions group runs, from the search button's left
+    /// edge to the right edge of the group's last control: the search
+    /// button, the theme trigger and (where the bar has room) the call
+    /// to action, each after the one before it by egui's item spacing
+    /// and the bar's own gap. The group is laid out left to right (see
+    /// `Gallery::app_bar`) from this far in from its right edge, which
+    /// is where the same controls laid out from the right edge would
+    /// have put them.
+    fn actions_width(&self, ui: &egui::Ui, theme: ThemeId) -> f32 {
+        let between = ui.spacing().item_spacing.x + ACTIONS_GAP;
+        let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
+        let trigger = search + between + trigger_button_width(ui, theme, &self.trigger);
+        if self.cta {
+            trigger + between + cta_button_width(ui, theme)
+        } else {
+            trigger
+        }
+    }
+}
+
+/// The width of the bar's theme trigger as `kind` reads: the default
+/// button over its label with the chevron beside it, or the kit's icon
+/// button, square at the search button's size.
+fn trigger_button_width(ui: &egui::Ui, theme: ThemeId, kind: &ThemeTrigger) -> f32 {
+    let labelled = |named: bool| {
+        let label = theme_trigger_label(theme, named);
+        button_width(ui, theme, ButtonSize::Default, &label, true)
+    };
+    match kind {
+        ThemeTrigger::Named => labelled(true),
+        ThemeTrigger::Bare => labelled(false),
+        ThemeTrigger::Icon => ui_kit::components::badge::ICON_BUTTON_SIZE,
+    }
+}
+
+/// The width of the bar's call to action, the small button over its
+/// label.
+fn cta_button_width(ui: &egui::Ui, theme: ThemeId) -> f32 {
+    button_width(ui, theme, ButtonSize::Sm, copy::START_A_PROJECT, false)
 }
 
 /// The theme trigger's label: the menu's own, followed by the live
@@ -2478,40 +2502,42 @@ impl Gallery {
                     }
                 }
 
-                // The actions, flush right: the one CTA where the row
-                // has room for it, the theme menu, the search
-                // affordance. With no CTA the theme trigger ends the
-                // row, and its own padding sits inside the bar's, so
-                // its icon would stand that much further in than the
+                // The actions, flush right: the search affordance, the
+                // theme menu, and the one CTA where the row has room
+                // for it. With no CTA the theme trigger ends the row,
+                // and its own padding sits inside the bar's, so its
+                // icon would stand that much further in than the
                 // wordmark does. The group is a child `Ui` that runs
                 // past the row's right edge by the trigger's overhang
                 // (a little less than that padding, to keep its focus
                 // ring inside the bar): `with_layout` would stay inside
                 // the row, and allocating the overhang would widen the
                 // bar.
+                //
+                // The group is built left to right, in the order its
+                // controls stand, because that is the order the Tab key
+                // visits them in: egui hands focus along in the order
+                // the widgets are created, not the order they are laid
+                // out in, and a group built from the right edge, the
+                // natural way to end a row flush, created the CTA
+                // first and the search last. So that it still ends at
+                // the right edge, the child opens `actions_width` in
+                // from it, which is where the same controls built from
+                // the right would have put them.
                 let row = ui.available_rect_before_wrap();
                 let overhang = if fit.cta { 0.0 } else { fit.trigger.overhang() };
+                let right = row.max.x + overhang;
                 let mut actions = ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(Rect::from_min_max(
-                            row.min,
-                            egui::pos2(row.max.x + overhang, row.max.y),
+                            egui::pos2(right - fit.actions_width(ui, theme), row.min.y),
+                            egui::pos2(right, row.max.y),
                         ))
-                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
                 {
                     // The child, under the name the controls below use.
                     let ui = &mut actions;
-                    if fit.cta {
-                        Button::new(copy::START_A_PROJECT)
-                            .small()
-                            .emphasis(ButtonEmphasis::Tertiary)
-                            .ui(ui, theme, &flags);
-                        ui.add_space(ACTIONS_GAP);
-                    }
-
-                    self.theme_menu(ui, ctx, fit.trigger);
-                    ui.add_space(ACTIONS_GAP);
 
                     // The search affordance: the 44px icon button
                     // opening the reused TextField in its popover. The
@@ -2537,6 +2563,17 @@ impl Gallery {
                                 .hint(copy::SEARCH_FIELD_HINT)
                                 .ui(ui, theme, &flags);
                         });
+                    ui.add_space(ACTIONS_GAP);
+
+                    self.theme_menu(ui, ctx, fit.trigger);
+
+                    if fit.cta {
+                        ui.add_space(ACTIONS_GAP);
+                        Button::new(copy::START_A_PROJECT)
+                            .small()
+                            .emphasis(ButtonEmphasis::Tertiary)
+                            .ui(ui, theme, &flags);
+                    }
                 }
                 // The row claims its own rect, not the overhang.
                 ui.advance_cursor_after_rect(row);

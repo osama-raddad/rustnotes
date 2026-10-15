@@ -47,6 +47,10 @@ struct Harness {
     /// Every labelled node of the last frame's accessibility tree: its
     /// role, its label and its widget's rect.
     nodes: Vec<(Role, String, egui::Rect)>,
+    /// The node the last frame's accessibility tree held keyboard focus
+    /// on, with its role, label and rect; `None` while nothing is
+    /// focused. A screen reader is told the same.
+    focus: Option<(Role, String, egui::Rect)>,
     /// The bounds of every mesh the last frame painted.
     meshes: Vec<egui::Rect>,
     /// Every shape the last frame painted, with its clip.
@@ -74,6 +78,7 @@ impl Harness {
             time: 1.0,
             strings: Vec::new(),
             nodes: Vec::new(),
+            focus: None,
             meshes: Vec::new(),
             shapes: Vec::new(),
         };
@@ -95,6 +100,7 @@ impl Harness {
         let out = self.ctx.run_ui(raw, |ui| self.app.ui(ui));
         self.strings = painted_strings(&out.shapes);
         self.nodes = labelled_nodes(&out.platform_output);
+        self.focus = focused_node(&out.platform_output);
         self.meshes = painted_meshes(&out.shapes);
         self.shapes = out.shapes.clone();
         out.drop_without_applying_deltas();
@@ -279,6 +285,20 @@ fn labelled_nodes(output: &egui::PlatformOutput) -> Vec<(Role, String, egui::Rec
             Some((node.role(), node.label()?.to_owned(), rect))
         })
         .collect()
+}
+
+/// The node of a frame's accessibility tree that holds keyboard focus,
+/// with its role, label and rect; `None` when the focus is on no
+/// labelled control (a clean start has it on the window itself).
+fn focused_node(output: &egui::PlatformOutput) -> Option<(Role, String, egui::Rect)> {
+    let update = output.accesskit_update.as_ref()?;
+    let (_, node) = update.nodes.iter().find(|(id, _)| *id == update.focus)?;
+    let bounds = node.bounds()?;
+    let rect = egui::Rect::from_min_max(
+        egui::pos2(bounds.x0 as f32, bounds.y0 as f32),
+        egui::pos2(bounds.x1 as f32, bounds.y1 as f32),
+    );
+    Some((node.role(), node.label()?.to_owned(), rect))
 }
 
 /// The bounds of every mesh a frame painted.
@@ -1033,9 +1053,11 @@ fn the_bar_centres_its_wordmark_and_pads_its_ends() {
 /// compact breakpoint) wide, and the bare label is the one labelled
 /// trigger that ends the row there (the named label comes with the
 /// call to action, which ends it instead); the icon trigger and the
-/// call to action sit further in. Focus comes from one Tab press,
-/// which the bar, first in the tab order, answers with its first
-/// control: the trigger. A second press would move on past it.
+/// call to action sit further in. Focus comes from two Tab presses:
+/// the bar, first in the tab order, answers the first with its leftmost
+/// control, the search button, and the second with the trigger beside
+/// it (`tab_reaches_the_bars_controls_in_visual_order`). A third would
+/// move on past it.
 #[test]
 fn the_theme_triggers_focus_ring_stays_inside_the_bar() {
     use ui_kit::states::FOCUS_RING_OFFSET;
@@ -1071,10 +1093,11 @@ fn the_theme_triggers_focus_ring_stays_inside_the_bar() {
                 })
             };
             h.press(egui::Key::Tab);
+            h.press(egui::Key::Tab);
             h.idle(12);
             let Some((shape, clip)) = around_trigger(&h) else {
                 off.push(format!(
-                    "{at} the first Tab press drew no focus ring round the trigger \
+                    "{at} the second Tab press drew no focus ring round the trigger \
                      {trigger:?}: focus did not reach it, or the ring's geometry \
                      or colour changed"
                 ));
@@ -1102,6 +1125,168 @@ fn the_theme_triggers_focus_ring_stays_inside_the_bar() {
             }
         }
     }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// What the bar offers a keyboard, each control with its rect and in
+/// the order the eye reads them (by left edge): the nav links where the
+/// row has room for them, the search button, the theme trigger, and the
+/// call to action where the row has room for that. The wordmark is not
+/// one: it is a picture, not a control.
+fn bar_controls(h: &Harness) -> Vec<(String, egui::Rect)> {
+    let mut controls = nav_links(h);
+    for (name, label) in [
+        ("the search button", copy::SEARCH_BUTTON_NAME),
+        ("the theme trigger", copy::THEME_MENU),
+        ("the call to action", copy::START_A_PROJECT),
+    ] {
+        if let Some(rect) = h.node(Role::Button, label) {
+            controls.push((name.to_owned(), rect));
+        }
+    }
+    controls.sort_by(|a, b| a.1.left().total_cmp(&b.1.left()));
+    controls
+}
+
+/// The widths the bar's focus tests run at, each a different `BarFit`
+/// tier: 320 is the compact bar with the icon trigger, 384 (a phone) the
+/// compact bar with the bare label, 900 the nav links with no call to
+/// action, and 1280 the fullest bar: nav links, the call to action
+/// and the trigger naming the theme. Whether the bar holds the nav links
+/// and the call to action is part of what the tests expect, so that a
+/// breakpoint change cannot drop a tier unseen.
+const BAR_TIERS: [(f32, bool, bool); 4] = [
+    // (window width, the nav links, the call to action)
+    (320.0, false, false),
+    (384.0, false, false),
+    (900.0, true, false),
+    (1280.0, true, true),
+];
+
+/// Tab walks the bar's controls in the order they stand on the screen,
+/// left to right: from a clean start the first press focuses the first
+/// control on the left and each press moves one control right (on a
+/// phone: the search, then the theme trigger beside it; where the row
+/// has room for them, the nav links first and the call to action last).
+/// egui hands keyboard focus along in the order the widgets are created
+/// in a frame, not the order they stand in, so a bar whose actions were
+/// built from the right (the layout runs right to left, to end the row
+/// flush with its padding) put the theme trigger ahead of the search it
+/// stands beside, and the call to action ahead of both. The wordmark is
+/// not a stop: n presses visit exactly the bar's n controls. Run at
+/// every tier of the bar, in every theme (the label widths change with
+/// the faces).
+#[test]
+fn tab_reaches_the_bars_controls_in_visual_order() {
+    let mut off = Vec::new();
+    for (width, nav, cta) in BAR_TIERS {
+        for theme in ThemeId::ALL {
+            // A clean start: the app as the host creates it, no input
+            // yet, and nothing focused.
+            let mut h = Harness::window(egui::vec2(width, 800.0));
+            h.app.gallery.tab = 3;
+            h.app.gallery.theme = *theme;
+            crate::gallery::apply_theme(*theme, &h.ctx);
+            h.idle(2);
+            let at = format!("at {width}pt in {}", theme.name());
+
+            // What the bar holds at this tier, in the order it stands.
+            let mut wanted: Vec<String> = Vec::new();
+            if nav {
+                wanted.extend(copy::TABS.iter().map(|label| format!("the {label} link")));
+            }
+            wanted.push("the search button".to_owned());
+            wanted.push("the theme trigger".to_owned());
+            if cta {
+                wanted.push("the call to action".to_owned());
+            }
+            let controls = bar_controls(&h);
+            let held: Vec<&str> = controls.iter().map(|(name, _)| name.as_str()).collect();
+            if held != wanted {
+                off.push(format!(
+                    "{at} the bar holds {held:?} from left to right, not the tier's {wanted:?}"
+                ));
+                continue;
+            }
+            if let Some((role, name, _)) = &h.focus {
+                off.push(format!("{at} starts with {role:?} {name:?} focused"));
+                continue;
+            }
+
+            for (stop, (name, rect)) in controls.iter().enumerate() {
+                h.press(egui::Key::Tab);
+                match &h.focus {
+                    Some((_, _, focused))
+                        if (focused.min - rect.min).abs().max_elem() < 0.5
+                            && (focused.max - rect.max).abs().max_elem() < 0.5 => {}
+                    Some((role, label, focused)) => off.push(format!(
+                        "{at} Tab press {} focused {role:?} {label:?} {focused:?}, \
+                         not {name} {rect:?}",
+                        stop + 1
+                    )),
+                    None => off.push(format!(
+                        "{at} Tab press {} focused nothing, not {name} {rect:?}",
+                        stop + 1
+                    )),
+                }
+            }
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// Where the bar's search button, theme trigger and call to action stand
+/// in the light theme at each of the `BAR_TIERS`, as recorded before the
+/// controls were built left to right to put Tab in their visual order:
+/// the order they are created in changed, the places they stand in must
+/// not. (The bar's centring and padding are pinned by
+/// `the_bar_centres_its_wordmark_and_pads_its_ends`; this pins the
+/// controls' own rects, to a fraction of a point.) The faces are the
+/// kit's own, so the widths are the same on every machine.
+#[test]
+fn the_bars_controls_keep_their_places() {
+    /// Under egui's rounding step (a 32nd of a point): any move shows.
+    const SLACK: f32 = 0.02;
+    const SEARCH: &str = "the search button";
+    const TRIGGER: &str = "the theme trigger";
+    const CTA: &str = "the call to action";
+    // (window width, control, left, top, right, bottom)
+    const RECORDED: [(f32, &str, [f32; 4]); 9] = [
+        (320.0, SEARCH, [186.0, 24.0, 230.0, 68.0]),
+        (320.0, TRIGGER, [246.0, 24.0, 290.0, 68.0]),
+        (384.0, SEARCH, [189.281, 24.0, 233.281, 68.0]),
+        (384.0, TRIGGER, [249.281, 24.0, 360.0, 68.0]),
+        (900.0, SEARCH, [705.281, 24.0, 749.281, 68.0]),
+        (900.0, TRIGGER, [765.281, 24.0, 876.0, 68.0]),
+        (1280.0, SEARCH, [858.219, 24.0, 902.219, 68.0]),
+        (1280.0, TRIGGER, [918.219, 24.0, 1113.0, 68.0]),
+        (1280.0, CTA, [1129.0, 28.0, 1240.0, 64.0]),
+    ];
+    let mut off = Vec::new();
+    let mut seen = 0;
+    for (width, _, _) in BAR_TIERS {
+        let mut h = Harness::window(egui::vec2(width, 800.0));
+        h.app.gallery.tab = 3;
+        h.idle(2);
+        for (name, rect) in bar_controls(&h) {
+            let Some((_, _, [l, t, r, b])) = RECORDED
+                .iter()
+                .find(|(w, recorded, _)| *w == width && *recorded == name)
+            else {
+                continue;
+            };
+            seen += 1;
+            let recorded = egui::Rect::from_min_max(egui::pos2(*l, *t), egui::pos2(*r, *b));
+            if (rect.min - recorded.min).abs().max_elem() > SLACK
+                || (rect.max - recorded.max).abs().max_elem() > SLACK
+            {
+                off.push(format!(
+                    "at {width}pt {name} stands at {rect:?}, not where it was recorded {recorded:?}"
+                ));
+            }
+        }
+    }
+    assert_eq!(seen, RECORDED.len(), "every recorded control was found");
     assert!(off.is_empty(), "{}", off.join("\n"));
 }
 
