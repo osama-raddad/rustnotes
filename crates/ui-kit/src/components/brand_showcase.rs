@@ -95,12 +95,8 @@ pub(crate) fn card_columns(available: f32, width: f32, gap: f32, max: usize) -> 
 
 /// The width one card of a [`card_rows`] row takes, given the `available`
 /// column and the card's `fixed` width: under the compact breakpoint the
-/// cards stack one to a row and each takes the whole column, so a phone's
-/// cards run edge to edge whatever its width; above it the card keeps its
-/// `fixed` width, which is what lets several share a line. (Capping the
-/// fixed width at the column instead, which the do and don't tiles did,
-/// leaves a card short of the column wherever the column is wider than the
-/// fixed width and still under the breakpoint: 4pt short on the Pixel.)
+/// cards stack one to a row and each takes the whole column; from it up
+/// the card keeps its `fixed` width, so several share a line.
 pub(crate) fn card_width(available: f32, fixed: f32) -> f32 {
     if available < breakpoints::BREAKPOINT_TABLET {
         available
@@ -112,18 +108,20 @@ pub(crate) fn card_width(available: f32, fixed: f32) -> f32 {
 /// Lay `items` out as cards in rows of [`card_columns`], `gap` apart
 /// and `gap` between the rows, each card placed at its [`card_width`]
 /// (`width` where the cards share a line, the column on a phone) up
-/// front. A card's body takes `ui.available_width()` as its own minimum
-/// width, so the card fills the cell it is given rather than the
-/// constant it was sized by. egui's `horizontal_wrapped` moves a widget
-/// to the next line only when it knows the widget's size before laying it
-/// out, which a card (a child `Ui`) never offers, so a wrapped row of
-/// cards runs on past the window's edge. The up-front width is what lets
-/// the rows break, and it bounds a card whose own rows reach for all the
-/// width they are given (a right-aligned pill, a full-width rule). Rows
-/// hang from their tops, the cards' heights their own. The gap is between
-/// the cards only: a child `Ui` clones its parent's style, so each cell
-/// hands its card the spacing the caller laid out with, and the card's
-/// own rows keep egui's gaps rather than the row's.
+/// front. The `card` closure is handed the cell and must fill it: a
+/// [`Card`] or a frame hugs its content, so its body claims the cell with
+/// `ui.set_min_width(ui.available_width())`, while a tile that allocates
+/// its exact size from `ui.available_width()` already does. egui's
+/// `horizontal_wrapped` moves a widget to the next line only when it knows
+/// the widget's size before laying it out, which a card (a child `Ui`)
+/// never offers, so a wrapped row of cards runs on past the window's edge.
+/// The up-front width is what lets the rows break, and it bounds a card
+/// whose own rows reach for all the width they are given (a right-aligned
+/// pill, a full-width rule). Rows hang from their tops, the cards' heights
+/// their own. The gap is between the cards only: a child `Ui` clones its
+/// parent's style, so each cell hands its card the spacing the caller laid
+/// out with, and the card's own rows keep egui's gaps rather than the
+/// row's.
 pub(crate) fn card_rows<T>(
     ui: &mut Ui,
     width: f32,
@@ -135,7 +133,7 @@ pub(crate) fn card_rows<T>(
     let inner = ui.spacing().item_spacing;
     let available = ui.available_width();
     let per_row = card_columns(available, width, gap, max);
-    let width = card_width(available, width);
+    let cell = card_width(available, width);
     for (index, row) in items.chunks(per_row).enumerate() {
         if index > 0 {
             // The item spacing already rides after the row above.
@@ -145,7 +143,7 @@ pub(crate) fn card_rows<T>(
             ui.spacing_mut().item_spacing.x = gap;
             for item in row {
                 ui.allocate_ui_with_layout(
-                    Vec2::new(width, 0.0),
+                    Vec2::new(cell, 0.0),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.spacing_mut().item_spacing = inner;
@@ -497,7 +495,7 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
-            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
         ui.add_space(spacing::SPACE_2);
         // The four tones in one row where they fit, stacked one to a row
@@ -510,8 +508,7 @@ impl BrandShowcase {
             VOICE_POSITIONS,
             |ui, (label, register, example)| {
                 Card::new().filled().compact().ui(ui, theme, flags, |ui| {
-                    let inner = ui.available_width();
-                    ui.set_min_width(inner);
+                    ui.set_min_width(ui.available_width());
                     // The indicator rule across the card's top, the
                     // preview's 2px border-top.
                     let (rule, _) = ui
@@ -535,7 +532,7 @@ impl BrandShowcase {
                         -0.01,
                         Some(26.0),
                         colors.text_display(),
-                        Some(inner),
+                        None,
                     )));
                     ui.add_space(spacing::SPACE_1);
                     ui.add(egui::Label::new(specimen_job(
@@ -543,7 +540,7 @@ impl BrandShowcase {
                         TypeStyle::Caption,
                         theme,
                         colors.text_body(),
-                        Some(inner),
+                        None,
                     )));
                 });
             },
@@ -584,8 +581,7 @@ impl BrandShowcase {
                     .corner_radius(radii::RADIUS_MD as u8)
                     .inner_margin(spacing::SPACE_4)
                     .show(ui, |ui| {
-                        let inner = ui.available_width();
-                        ui.set_min_width(inner);
+                        ui.set_min_width(ui.available_width());
                         ui.horizontal(|ui| {
                             icon(ui, glyph, IconSize::Sm, ink);
                             ui.add_space(spacing::SPACE_2);
@@ -612,7 +608,7 @@ impl BrandShowcase {
                             -0.01,
                             Some(24.0),
                             ink,
-                            Some(inner),
+                            None,
                         )));
                     });
             },
@@ -628,7 +624,7 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
-            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
         ui.add_space(spacing::SPACE_2);
         let (lead_ground, lead_caption) = PHOTO_TILES[0];
@@ -683,7 +679,7 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
-            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+            None,
         )))
     }
 }

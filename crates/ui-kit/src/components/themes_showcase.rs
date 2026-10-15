@@ -277,7 +277,7 @@ impl ThemesShowcase {
             TypeStyle::Lede,
             theme,
             colors.text_muted(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
         ui.add_space(spacing::SPACE_6);
 
@@ -303,7 +303,7 @@ impl ThemesShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            None,
         )))
     }
 }
@@ -316,7 +316,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
     let colors = card_theme.colors();
     Card::new().compact().ui(ui, card_theme, flags, |ui| {
         // The cell's width less the card's padding: `CARD_WIDTH` where
-        // the cards share a line, the column's on a phone.
+        // the cards share a line, the column less the padding on a phone.
         let inner = ui.available_width();
         ui.set_min_width(inner);
 
@@ -343,7 +343,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                             0.0,
                             None,
                             colors.text_muted(),
-                            Some(inner),
+                            None,
                         )));
                     });
             });
@@ -360,7 +360,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             Some(type_scale::TEXT_BODY_LG * 1.25),
             colors.text_body(),
-            Some(inner),
+            None,
         )));
         ui.add(egui::Label::new(tracked_text(
             copy.character,
@@ -371,7 +371,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             Some(20.0),
             colors.text_muted(),
-            Some(inner),
+            None,
         )));
 
         // The anchor swatches, one a row with its mono label beside:
@@ -400,7 +400,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                         0.0,
                         None,
                         colors.text_muted(),
-                        Some(inner),
+                        None,
                     )));
                     ui.add_space(spacing::SPACE_3);
                 }
@@ -409,10 +409,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
 
         // The ratio bar, bordered, and its legend.
         ui.add_space(spacing::SPACE_1);
-        let (bar, _) = ui.allocate_exact_size(
-            Vec2::new(ui.available_width(), spacing::SPACE_4),
-            Sense::hover(),
-        );
+        let (bar, _) = ui.allocate_exact_size(Vec2::new(inner, spacing::SPACE_4), Sense::hover());
         let total: u32 = copy.ratio.iter().map(|(share, _)| share).sum();
         let mut x = bar.left();
         for &(share, role) in copy.ratio {
@@ -439,7 +436,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             None,
             colors.text_muted(),
-            Some(inner),
+            None,
         )));
 
         // The display specimen in this theme's own faces, on a small
@@ -449,8 +446,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             .filled()
             .compact()
             .ui(ui, card_theme, flags, |ui| {
-                let specimen = ui.available_width();
-                ui.set_min_width(specimen);
+                ui.set_min_width(ui.available_width());
                 ui.add(egui::Label::new(tracked_text(
                     SPECIMEN_LINE,
                     FontId {
@@ -460,7 +456,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                     -0.01,
                     Some(26.0),
                     colors.text_display(),
-                    Some(specimen),
+                    None,
                 )));
                 ui.add(egui::Label::new(tracked_text(
                     copy.faces,
@@ -471,7 +467,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                     0.0,
                     None,
                     colors.text_muted(),
-                    Some(specimen),
+                    None,
                 )));
             });
 
