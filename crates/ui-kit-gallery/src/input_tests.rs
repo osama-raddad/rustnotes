@@ -3345,7 +3345,9 @@ fn card_around(
 ) -> egui::Rect {
     let text = texts
         .iter()
-        .find(|(painted, _, _)| painted == anchor)
+        // A photo caption's middle dot is held to its word by a no-break
+        // space, which reads as the space it looks like.
+        .find(|(painted, _, _)| painted.replace('\u{a0}', " ") == anchor)
         .unwrap_or_else(|| panic!("the Brand page never painted {anchor:?}"))
         .1;
     rects

@@ -721,7 +721,10 @@ fn photo_tile(ui: &mut Ui, theme: ThemeId, ground: PhotoGround, caption: &str, s
 /// a word wider than the line mid-word onto the next row, so such a
 /// word is cut short with an ellipsis first and the rest of the caption
 /// kept: every word then fits, the wrap only ever falls between words,
-/// and no row runs past `max_width`.
+/// and no row runs past `max_width`. A middle dot is held to the word
+/// after it by a no-break space, so the wrap never ends a row on the
+/// dot; the dot may begin a row, with its word, instead. The space
+/// looks the same and the text reads the same.
 fn caption_galley(
     painter: &Painter,
     caption: &str,
@@ -729,6 +732,7 @@ fn caption_galley(
     ink: Color32,
     max_width: f32,
 ) -> Arc<Galley> {
+    let caption = caption.replace("\u{b7} ", "\u{b7}\u{a0}");
     let fits = |text: &str| {
         painter
             .layout_no_wrap(text.to_owned(), font.clone(), ink)
@@ -1004,12 +1008,13 @@ mod tests {
         (tiles, painted)
     }
 
-    /// The rect the painted text `text` covers; a text the layout never
-    /// painted panics.
+    /// The rect the painted text `text` covers, a no-break space (a
+    /// caption's middle dot is held to its word by one) read as the
+    /// space it looks like; a text the layout never painted panics.
     fn painted_rect(painted: &[(String, egui::Rect)], text: &str) -> egui::Rect {
         painted
             .iter()
-            .find(|(seen, _)| seen == text)
+            .find(|(seen, _)| seen.replace('\u{a0}', " ") == text)
             .map(|(_, rect)| *rect)
             .unwrap_or_else(|| panic!("{text:?} was never painted"))
     }
@@ -1092,6 +1097,8 @@ mod tests {
                 .collect();
             assert_eq!(cut.len(), 1, "{theme:?}: one caption, one ellipsis");
             let (text, rect) = cut[0];
+            // The dot's no-break space reads as the space it looks like.
+            let text = &text.replace('\u{a0}', " ");
             assert!(
                 text.starts_with("Anti") && text.ends_with("\u{2026} · Lundby"),
                 "{theme:?}: only the over-wide word is cut, got {text:?}"
@@ -1101,6 +1108,65 @@ mod tests {
                 "{theme:?}: {text:?} paints {rect:?}, outside its {tile:?} tile"
             );
         }
+    }
+
+    /// The rows the caption of a photo tile `width` wide is painted in,
+    /// each row's text as the layout broke it, read off the galley
+    /// `photo_tile` painted.
+    fn caption_rows(theme: ThemeId, caption: &str, width: f32) -> Vec<String> {
+        let camera = Icon::PhotoCamera.as_char().to_string();
+        let mut rows = Vec::new();
+        super::lay_out(width, |ui| {
+            rows.clear();
+            let size = egui::vec2(width, PHOTO_TILE_SMALL.y);
+            super::photo_tile(ui, theme, PhotoGround::SecondaryContainer, caption, size);
+            ui.ctx().graphics(|layers| {
+                let list = layers.get(ui.layer_id()).expect("the tile painted a layer");
+                for clipped in list.all_entries() {
+                    if let egui::Shape::Text(text) = &clipped.shape {
+                        if text.galley.text() != camera {
+                            rows = text.galley.rows.iter().map(|row| row.text()).collect();
+                        }
+                    }
+                }
+            });
+        });
+        rows
+    }
+
+    /// Finding 5-E1: a photo caption's middle dot stays with the word
+    /// after it. The wrap broke "After-hours debug · Gothenburg HQ" at
+    /// the space after the dot, so its first line ended on a stray "·".
+    /// No row of any caption, in any theme's face, at any tile width from
+    /// 120pt (a small tile on a narrow phone at a large font scale) to
+    /// 320pt, ends with the dot.
+    #[test]
+    fn a_photo_captions_middle_dot_is_never_left_ending_a_row() {
+        let mut problems = Vec::new();
+        for theme in ThemeId::ALL {
+            for (_, caption) in PHOTO_TILES {
+                for width in (120..=320).step_by(4) {
+                    let rows = caption_rows(*theme, caption, width as f32);
+                    if rows.iter().any(|row| row.trim_end().ends_with('\u{b7}')) {
+                        problems.push(format!(
+                            "{theme:?}: {caption:?} in a {width}pt tile wraps to {rows:?}"
+                        ));
+                    }
+                    // Only where it may break changes: the words stay.
+                    if rows.concat().replace('\u{a0}', " ") != *caption {
+                        problems.push(format!(
+                            "{theme:?}: {caption:?} in a {width}pt tile reads {rows:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "{} rows end on the middle dot:\n{}",
+            problems.len(),
+            problems.join("\n")
+        );
     }
 
     /// Under the compact breakpoint a card takes the whole column, even a
