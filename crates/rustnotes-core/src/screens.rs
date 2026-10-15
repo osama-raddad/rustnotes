@@ -206,8 +206,9 @@ impl App {
             Screen::Editor => {
                 let new_note = self.edit_id == 0;
                 let mut back = false;
-                // Not capped: a centred 640 pt column pushed the typed text
-                // into a landscape phone's middle (finding 7-A2).
+                // Not capped: a 640 pt column centred in a landscape window
+                // starts the typed text about 140pt in, while the title sits
+                // at the margin (finding 7-A2).
                 Scaffold::new(pal, m)
                     .background(pal.surface)
                     .top_bar(|u| back = editor_bar(u, new_note, true, pal, m))
@@ -1589,7 +1590,7 @@ mod tests {
         let text_x = find(&land.text, "typed text").rect.left();
         let title_x = find(&land.text, "Edit note").rect.left();
 
-        // The same editor and text upright, under the same vertical insets.
+        // The same editor and text upright, with no insets.
         let ctx_up = egui::Context::default();
         let mut upright = app_with_two_notes(&ctx_up, "editor-margin-portrait");
         let up_id = upright.notes[0].id;
