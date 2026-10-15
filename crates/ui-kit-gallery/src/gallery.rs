@@ -181,6 +181,10 @@ struct DragAxis {
 /// insets, about 226px.
 const THEME_MENU_WIDTH: f32 = 248.0;
 
+/// The theme menu's scroll area's id salt, for the window too short to
+/// show the whole menu (see [`bar_popover_room`]).
+const THEME_MENU_SCROLL: &str = "gallery-theme-menu";
+
 /// The x the theme menu's labels start at, in the theme rows and the
 /// flag rows alike: past the toggle's 44px track and its gap. The
 /// toggle's label cannot start sooner, so the radio group is indented
@@ -257,6 +261,25 @@ fn bar_popover<'a>(
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .frame(bar_popover_frame(theme))
         .width(width)
+}
+
+/// The height a popover's content may take under the bar `bar` for the
+/// popover to stay below the bar and inside the window: from the
+/// [`BAR_POPOVER_GAP`] under the bar's bottom edge to the bottom of the
+/// window's content rect (the window less its safe-area insets), less
+/// the frame's own margin and border above and below the content.
+///
+/// egui does not shrink a popup that is too tall for the room under the
+/// bar. It keeps the popup's size and moves the popup up until it fits
+/// the content rect (`Area` constrains to it), over the bar, and where
+/// the popup is taller than the whole content rect it stands the popup
+/// at the rect's top and clips the rest. So a popup that can outgrow the
+/// room, as the theme menu does in a landscape phone, scrolls its
+/// content inside this height instead. A popup that fits is left where
+/// [`bar_popover`] put it.
+fn bar_popover_room(ctx: &egui::Context, bar: Rect, theme: ThemeId) -> f32 {
+    let under_bar = ctx.content_rect().bottom() - (bar.bottom() + BAR_POPOVER_GAP);
+    (under_bar - bar_popover_frame(theme).total_margin().sum().y).max(0.0)
 }
 
 /// Apply `theme` with the gallery's own style on top: labels are not
@@ -2676,8 +2699,10 @@ impl Gallery {
     /// the bare label where it has room for that, and on the narrowest
     /// phones the kit's 44px icon button with the tune icon, the search
     /// button's twin. The popover hangs under the bar `bar`
-    /// ([`bar_popover`], as the search popover does), closes on a tap
-    /// outside it, and opening it closes the search popover.
+    /// ([`bar_popover`], as the search popover does), scrolls where the
+    /// room under the bar is shorter than the menu ([`bar_popover_room`]),
+    /// closes on a tap outside it, and opening it closes the search
+    /// popover.
     fn theme_menu(
         &mut self,
         ui: &mut egui::Ui,
@@ -2710,9 +2735,33 @@ impl Gallery {
         // The open state is the Gallery's own: the popover clears it
         // when a tap lands outside it (or on Escape).
         let mut open = self.theme_open;
+        let room = bar_popover_room(ctx, bar, theme);
         bar_popover(&trigger, bar, THEME_MENU_WIDTH, theme)
             .open_bool(&mut open)
-            .show(|ui| self.theme_menu_content(ui, ctx));
+            .show(|ui| {
+                // Taller than the room under the bar (a landscape phone),
+                // the menu scrolls inside it, a finger dragging it on
+                // [`drag_scroll`]'s terms; where it fits, the area
+                // shrinks to the content and changes nothing.
+                //
+                // The popup's `Ui` is as tall as the popup was last
+                // frame (400pt, egui's default area height, while the
+                // popup is first sized). Plain content overflows that,
+                // and the popup measures the overflow; a scroll area takes
+                // no more than its `Ui` offers, so left at that it would
+                // hold the menu at 400pt less the frame, cutting its last
+                // rows off in a window with room for them. The `Ui` is
+                // given the room itself.
+                ui.set_max_height(room);
+                egui::ScrollArea::vertical()
+                    .id_salt(THEME_MENU_SCROLL)
+                    .max_height(room)
+                    .scroll_source(ScrollSource {
+                        drag: drag_scroll(),
+                        ..ScrollSource::default()
+                    })
+                    .show(ui, |ui| self.theme_menu_content(ui, ctx));
+            });
         self.theme_open = open;
     }
 

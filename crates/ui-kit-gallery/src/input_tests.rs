@@ -62,6 +62,9 @@ struct Harness {
     frames: usize,
     /// How many of those frames took a second pass.
     multipass_frames: usize,
+    /// The safe-area insets the host reports with every frame: the
+    /// status bar, the navigation bar, a cutout. `None` reports none.
+    insets: Option<egui::SafeAreaInsets>,
 }
 
 impl Harness {
@@ -91,6 +94,7 @@ impl Harness {
             passes: 0,
             frames: 0,
             multipass_frames: 0,
+            insets: None,
         };
         harness.idle(3);
         harness
@@ -104,6 +108,7 @@ impl Harness {
             events,
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.window)),
             time: Some(self.time),
+            safe_area_insets: self.insets,
             ..Default::default()
         };
         self.app.filter_input(&mut raw);
@@ -1009,6 +1014,239 @@ fn the_bars_popovers_open_below_the_bar_and_hang_from_their_triggers() {
         ));
     }
     assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// The theme popover's size where the window has room for all of it, as
+/// measured before its content was given a scroll area, and as it stays.
+/// The width is the widest row (the "Reduced transparency" toggle) and
+/// the frame, in every window: `THEME_MENU_WIDTH` (248pt) is only a
+/// ceiling, and the area shrinks to its content. The height is the
+/// legend, the six theme rows, the gap, the two flag rows and the frame.
+const THEME_POPOVER_SIZE: egui::Vec2 = egui::vec2(226.156, 440.0);
+
+/// The theme popover's eight rows, in reading order: the six themes
+/// and the two flags, each with the rect it registered for interaction.
+fn theme_rows(h: &Harness) -> Vec<(&'static str, egui::Rect)> {
+    let radios = ThemeId::ALL
+        .iter()
+        .map(|theme| (theme.name(), Role::RadioButton));
+    let toggles =
+        [copy::REDUCED_MOTION, copy::REDUCED_TRANSPARENCY].map(|name| (name, Role::CheckBox));
+    radios
+        .chain(toggles)
+        .map(|(name, role)| {
+            let rect = h
+                .node(role, name)
+                .unwrap_or_else(|| panic!("the open menu has no {role:?} row {name:?}"));
+            (name, rect)
+        })
+        .collect()
+}
+
+/// A finger swipe up through the open popover, from near its bottom
+/// edge to near its top, then time for the fling to settle: the gesture
+/// that scrolls it on a phone.
+fn swipe_up_through(h: &mut Harness, popover: egui::Rect) {
+    let x = popover.center().x;
+    h.swipe(
+        egui::pos2(x, popover.bottom() - 24.0),
+        egui::pos2(x, popover.top() + 24.0),
+        8,
+    );
+    h.idle(60);
+}
+
+/// In a window too short for all of it, the Theme popover fits the room
+/// under the bar and scrolls (finding 4-A1, the Pixel in landscape).
+///
+/// The room is the window's content rect (the window less its safe-area
+/// insets) under the bar's bottom edge and the `BAR_POPOVER_GAP`. The
+/// popover's top stays at the gap under the bar; its bottom stays inside
+/// the content rect; and a finger swipe on it scrolls the rows up until
+/// the last one (Reduced transparency) is whole inside the popover, where
+/// a tap flips it. The popover once laid out at its full height, which
+/// egui then moved up to fit the window: its top rose over the bar, and
+/// its bottom was clipped at the safe-area inset, through the middle of a
+/// row, with no scroll area to reach the rows below the cut. Each window
+/// is run bare and with a bottom inset (the Pixel's navigation bar).
+#[test]
+fn the_theme_popover_fits_a_short_window_and_scrolls() {
+    use crate::gallery::{BAR_POPOVER_GAP, BAR_POPOVER_PAD};
+
+    // Painted to the pixel, laid out in whole points: a point's slack.
+    const SLACK: f32 = 1.0;
+    // The kit popover frame's 1pt border.
+    const BORDER: f32 = 1.0;
+    let last = copy::REDUCED_TRANSPARENCY;
+    let first_theme = ThemeId::ALL[0].name();
+
+    let mut off = Vec::new();
+    let mut scrolled = 0;
+    for (window, bottom) in [
+        (egui::vec2(900.0, 400.0), 0.0),
+        (egui::vec2(900.0, 400.0), 24.0),
+        (egui::vec2(900.0, 360.0), 24.0),
+    ] {
+        let mut h = Harness::window(window);
+        h.insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+            bottom,
+            ..Default::default()
+        }));
+        // The Feedback panel paints no theme names or flag labels of its
+        // own, and no popover of its own.
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        h.touch_screen();
+        let at = format!(
+            "at {}x{}pt with a {bottom}pt bottom inset",
+            window.x, window.y
+        );
+        let pane = bar_pane(&h, ThemeId::Light);
+        let room = h.ctx.content_rect();
+        let trigger = h
+            .node(Role::Button, copy::THEME_MENU)
+            .expect("the bar's theme trigger");
+
+        h.tap(trigger.center());
+        h.idle(2);
+        let popover = open_popover(&h);
+        let at = format!(
+            "{at}, the popover {popover:?} (the bar ends at y {})",
+            pane.bottom()
+        );
+
+        // Below the bar, a gap clear of its border, and inside the room.
+        if popover.top() < pane.bottom() - SLACK {
+            off.push(format!("{at} rises over the bar"));
+        } else if (popover.top() - pane.bottom() - BAR_POPOVER_GAP).abs() > SLACK {
+            off.push(format!(
+                "{at} starts {}pt under the bar, not {BAR_POPOVER_GAP}pt",
+                popover.top() - pane.bottom()
+            ));
+        }
+        if popover.bottom() > room.bottom() + SLACK {
+            off.push(format!(
+                "{at} ends at y {}, past the room's bottom edge {}",
+                popover.bottom(),
+                room.bottom()
+            ));
+        }
+        // Its width is its tall-window width: a scroll bar takes none.
+        if (popover.width() - THEME_POPOVER_SIZE.x).abs() > SLACK {
+            off.push(format!(
+                "{at} is {}pt wide, not {}pt",
+                popover.width(),
+                THEME_POPOVER_SIZE.x
+            ));
+        }
+
+        // Swipe up through it: the rows move, the last one ends up whole
+        // inside the popover's content and painted, and a tap on it flips
+        // its flag. Swiping picks no theme.
+        let theme = h.app.gallery.theme;
+        let before = h.node(Role::RadioButton, first_theme).map(|r| r.top());
+        for _ in 0..3 {
+            swipe_up_through(&mut h, popover);
+        }
+        let after = h.node(Role::RadioButton, first_theme).map(|r| r.top());
+        scrolled += usize::from(before != after);
+        if h.app.gallery.theme != theme {
+            off.push(format!("{at}: a swipe on the popover picked a theme"));
+        }
+        let row = h
+            .node(Role::CheckBox, last)
+            .unwrap_or_else(|| panic!("{at}: the open menu has no {last:?} row"));
+        let content = open_popover(&h).shrink(BAR_POPOVER_PAD + BORDER);
+        if !content.expand(SLACK).contains_rect(row) || !room.expand(SLACK).contains_rect(row) {
+            off.push(format!(
+                "{at}: after scrolling, the {last:?} row {row:?} is not whole inside the \
+                 popover's content {content:?} and the room {room:?}"
+            ));
+        }
+        if h.painted(last).is_none() {
+            off.push(format!(
+                "{at}: after scrolling, the {last:?} row is clipped away"
+            ));
+        }
+        let transparent = h.app.gallery.flags.reduced_transparency;
+        h.tap(row.center());
+        if h.app.gallery.flags.reduced_transparency == transparent {
+            off.push(format!(
+                "{at}: a tap on the scrolled {last:?} row ({row:?}) did not flip it"
+            ));
+        }
+
+        // The window grows (the phone turns upright): the menu opens out
+        // to its full size under the bar, with nothing left to scroll.
+        h.window = egui::vec2(window.x, 900.0);
+        h.idle(3);
+        let grown = open_popover(&h);
+        if (grown.size() - THEME_POPOVER_SIZE).abs().max_elem() > SLACK
+            || (grown.top() - pane.bottom() - BAR_POPOVER_GAP).abs() > SLACK
+        {
+            off.push(format!(
+                "{at}: in a 900pt tall window the popover is {grown:?}, not \
+                 {THEME_POPOVER_SIZE:?} under the bar"
+            ));
+        }
+    }
+    if scrolled < 3 {
+        off.push(format!(
+            "the swipe scrolled the popover in {scrolled} of 3 short windows"
+        ));
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// In a tall window the Theme popover is as it was: the same size, the
+/// same eight rows inside it, and nothing to scroll. Its size before the
+/// popover was given a scroll area is pinned in [`THEME_POPOVER_SIZE`],
+/// at the phone (384 by 855pt) and at a desktop, and a swipe on it moves
+/// no row.
+#[test]
+fn the_theme_popover_keeps_its_size_in_a_tall_window() {
+    const SLACK: f32 = 0.5;
+
+    for window in [PHONE, egui::vec2(1280.0, 900.0)] {
+        let mut h = Harness::window(window);
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        h.touch_screen();
+        let trigger = h
+            .node(Role::Button, copy::THEME_MENU)
+            .expect("the bar's theme trigger");
+        h.tap(trigger.center());
+        h.idle(2);
+
+        let popover = open_popover(&h);
+        assert!(
+            (popover.size() - THEME_POPOVER_SIZE).abs().max_elem() <= SLACK,
+            "at {}pt the popover is {:?}, not {THEME_POPOVER_SIZE:?}",
+            window.x,
+            popover.size()
+        );
+        let rows = theme_rows(&h);
+        assert!(
+            rows.iter().all(|(_, row)| popover.contains_rect(*row)),
+            "at {}pt every row is inside the popover {popover:?}: {rows:?}",
+            window.x
+        );
+
+        // Nothing to scroll: a swipe through the popover moves no row.
+        swipe_up_through(&mut h, popover);
+        assert_eq!(
+            theme_rows(&h),
+            rows,
+            "at {}pt a swipe on a popover that fits scrolls it",
+            window.x
+        );
+        assert_eq!(
+            open_popover(&h),
+            popover,
+            "at {}pt a swipe moves or resizes it",
+            window.x
+        );
+    }
 }
 
 /// The bar keeps its working controls clear of the rest of its row
