@@ -100,6 +100,21 @@ impl Harness {
         harness
     }
 
+    /// The app in a `window`-sized viewport whose host reports `top`,
+    /// `bottom` and `left` safe-area insets (a status bar, a gesture
+    /// bar, a cutout), warmed again once they are in.
+    fn window_with_insets(window: egui::Vec2, top: f32, bottom: f32, left: f32) -> Self {
+        let mut harness = Self::window(window);
+        harness.insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 {
+            top,
+            bottom,
+            left,
+            ..Default::default()
+        }));
+        harness.idle(3);
+        harness
+    }
+
     /// One frame with `events`, through the app's input filter first,
     /// as the host's `raw_input_hook` runs it.
     fn frame(&mut self, events: Vec<egui::Event>) {
@@ -1578,6 +1593,244 @@ fn the_tab_strip_keeps_its_place_under_the_bar() {
                  not one: {rules:?}",
                 rules.len()
             )),
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// The tab strip's rule as the last frame painted it: the 1pt-tall rect
+/// as wide as the bar under it (`the_tab_strip_keeps_its_place_under_the_bar`
+/// finds the strip's place by the same rect). One when the strip is
+/// there.
+fn tab_strip_rules(h: &Harness, pane: egui::Rect) -> Vec<egui::Rect> {
+    const SLACK: f32 = 0.02;
+    painted_rects(h)
+        .into_iter()
+        .map(|(shape, _)| shape.rect)
+        .filter(|rect| {
+            (rect.height() - 1.0).abs() <= SLACK
+                && rect.top() > pane.bottom()
+                && (rect.left() - pane.left()).abs() <= SLACK
+                && (rect.right() - pane.right()).abs() <= SLACK
+        })
+        .collect()
+}
+
+/// In a short window, such as a phone in landscape, the page keeps at
+/// least half of the window's height (finding 4-A2). On the Pixel in
+/// landscape (997 by 448pt) the page's scroll area was 109pt, 24% of the
+/// screen: the status bar's 52pt and the gesture bar's 24pt are the
+/// host's, the bar 68pt and the tab strip 49pt are the chrome's, and the
+/// rest, 146pt, was the three-line description under the strip (54pt)
+/// and the gaps between the parts (92pt). In a short window the
+/// description goes, and so do most of the gaps: those under the bar
+/// shrink to 4pt and the margin below the page goes (the page keeps
+/// 230pt). The bar, its clearance above it and the strip stay as they
+/// are, so the strip's rule lies 57pt under the bar, not 85pt.
+///
+/// The page's visible area is the scroll output's `inner_rect`
+/// (`Gallery::page_rect`), checked against the clip rect the page's
+/// content paints under. The insets are those a phone reports: the
+/// first, the Pixel's, are read off the audit's screenshot (the bar
+/// stands 64pt from the top and 69pt from the left, which is its 12pt
+/// and 16pt clearances and the 52pt status bar and 53pt cutout), the
+/// others the common ones.
+#[test]
+fn a_short_window_keeps_half_its_height_for_the_page() {
+    const SLACK: f32 = 0.5;
+
+    // The window, and the top, bottom and left insets the host reports.
+    let phones = [
+        (
+            "the Pixel in landscape",
+            egui::vec2(997.0, 448.0),
+            52.0,
+            24.0,
+            53.0,
+        ),
+        (
+            "a phone with a slim status bar",
+            egui::vec2(997.0, 448.0),
+            24.0,
+            24.0,
+            48.0,
+        ),
+        (
+            "an iPhone in landscape",
+            egui::vec2(844.0, 390.0),
+            0.0,
+            21.0,
+            47.0,
+        ),
+        (
+            "a short window with no insets",
+            egui::vec2(997.0, 448.0),
+            0.0,
+            0.0,
+            0.0,
+        ),
+        (
+            "a window a point under the threshold",
+            egui::vec2(997.0, crate::gallery::SHORT_WINDOW_HEIGHT - 1.0),
+            52.0,
+            24.0,
+            53.0,
+        ),
+    ];
+    let mut off = Vec::new();
+    for (name, window, top, bottom, left) in phones {
+        let mut h = Harness::window_with_insets(window, top, bottom, left);
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        let at = format!(
+            "{name}, {}x{}pt with insets {top}/{bottom}/{left}",
+            window.x, window.y
+        );
+        let page = h
+            .app
+            .gallery
+            .page_rect
+            .expect("the chrome has shown the page");
+
+        if page.height() < window.y / 2.0 {
+            off.push(format!(
+                "{at}: the page's scroll area {page:?} is {}pt, {:.0}% of the window, under half",
+                page.height(),
+                100.0 * page.height() / window.y
+            ));
+        }
+        // The page's content paints under that rect: it is what is seen.
+        let clipped_to_it = h.shapes.iter().any(|clipped| {
+            (clipped.clip_rect.top() - page.top()).abs() <= SLACK
+                && (clipped.clip_rect.bottom() - page.bottom()).abs() <= SLACK
+        });
+        if !clipped_to_it {
+            off.push(format!(
+                "{at}: nothing paints under the page's rect {page:?}"
+            ));
+        }
+        // The page clears the home indicator's inset.
+        if page.bottom() > window.y - bottom + SLACK {
+            off.push(format!(
+                "{at}: the page {page:?} runs into the bottom inset"
+            ));
+        }
+        // The description is what gives way, not the strip: the strip's
+        // rule is still under the bar.
+        if h.painted(copy::TABS_NOTE).is_some() {
+            off.push(format!("{at}: the tab description is still painted"));
+        }
+        let pane = bar_pane(&h, ThemeId::Light);
+        if tab_strip_rules(&h, pane).len() != 1 {
+            off.push(format!("{at}: the tab strip's rule is not under the bar"));
+        }
+        // The bar stands where it stands in any window: 12pt under the
+        // status bar, and the popovers hang from it.
+        let above = pane.top() - top;
+        if (above - 12.0).abs() > SLACK {
+            off.push(format!(
+                "{at}: the bar stands {above}pt under the top inset, not 12pt"
+            ));
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// A window that is not short keeps the chrome it had, the description
+/// and every gap: the portrait phone and the desktop window lay out
+/// exactly as they did before a short window compacted its chrome. The
+/// golden values are the full chrome's, recorded before the change: the
+/// bar's clearance above is 12pt over the status bar, the tab strip's
+/// rule lies 85pt under the bar (the other half of
+/// `the_tab_strip_keeps_its_place_under_the_bar`), the page's top lies
+/// `under_bar` under the bar's bottom edge (the strip, the description
+/// where the window is wide enough to show one, and the gaps), and the
+/// page ends 24pt above the bottom inset.
+#[test]
+fn a_window_that_is_not_short_keeps_its_full_chrome() {
+    const SLACK: f32 = 0.02;
+
+    // The window and its top, bottom and left insets; whether the
+    // description shows; how far under the bar's bottom edge the page
+    // starts.
+    let windows = [
+        ("the portrait phone", PHONE, 47.0, 34.0, 0.0, false, 102.0),
+        (
+            "the desktop window",
+            egui::vec2(1200.0, 800.0),
+            0.0,
+            0.0,
+            0.0,
+            true,
+            141.0,
+        ),
+        (
+            "a tablet in portrait",
+            egui::vec2(768.0, 1024.0),
+            24.0,
+            20.0,
+            0.0,
+            true,
+            159.0,
+        ),
+        (
+            "a window as tall as the short ones are not",
+            egui::vec2(997.0, crate::gallery::SHORT_WINDOW_HEIGHT),
+            24.0,
+            24.0,
+            48.0,
+            true,
+            159.0,
+        ),
+    ];
+    let mut off = Vec::new();
+    for (name, window, top, bottom, left, described, under_bar) in windows {
+        let mut h = Harness::window_with_insets(window, top, bottom, left);
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        let at = format!("{name}, {}x{}pt", window.x, window.y);
+        let pane = bar_pane(&h, ThemeId::Light);
+        let page = h
+            .app
+            .gallery
+            .page_rect
+            .expect("the chrome has shown the page");
+
+        let above = pane.top() - top;
+        if (above - 12.0).abs() > SLACK {
+            off.push(format!(
+                "{at}: the bar stands {above}pt under the top inset, not 12pt"
+            ));
+        }
+        match tab_strip_rules(&h, pane).as_slice() {
+            [rule] => {
+                let under = rule.top() - pane.bottom();
+                if (under - 85.0).abs() > SLACK {
+                    off.push(format!(
+                        "{at}: the strip's rule lies {under}pt under the bar, not 85pt"
+                    ));
+                }
+            }
+            rules => off.push(format!("{at}: {} strip rules, not one", rules.len())),
+        }
+        if h.painted(copy::TABS_NOTE).is_some() != described {
+            off.push(format!(
+                "{at}: the description is {}, it should be {}",
+                if described { "missing" } else { "painted" },
+                if described { "painted" } else { "missing" }
+            ));
+        }
+        let under = page.top() - pane.bottom();
+        if (under - under_bar).abs() > SLACK {
+            off.push(format!(
+                "{at}: the page starts {under}pt under the bar, not {under_bar}pt"
+            ));
+        }
+        let below = window.y - bottom - page.bottom();
+        if (below - 24.0).abs() > SLACK {
+            off.push(format!(
+                "{at}: the page ends {below}pt above the bottom inset, not 24pt"
+            ));
         }
     }
     assert!(off.is_empty(), "{}", off.join("\n"));

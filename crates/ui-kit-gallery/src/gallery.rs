@@ -145,6 +145,32 @@ fn content_margin() -> egui::Margin {
     }
 }
 
+/// The window height under which the gallery's chrome compacts, for the
+/// phone in landscape (finding 4-A2): the tab description is dropped (as
+/// it is on a phone in portrait) and the chrome's vertical gaps give way
+/// to [`SHORT_GAP`]. The full chrome, the bar and the tab strip
+/// included, is 245pt tall with the description on two lines and 263pt
+/// on three, before the system bars' insets, so it leaves the page half
+/// of the window only from 490 to 526pt up. Landscape phones are 360 to
+/// 448pt tall (the Pixel 448, iPhones 375 to 440), under 500; a portrait
+/// phone is 568pt or more and a landscape tablet 600pt or more, over it.
+/// The window's height is the root `Ui`'s, the insets included.
+pub(crate) const SHORT_WINDOW_HEIGHT: f32 = 500.0;
+
+/// Each of the chrome's vertical gaps under the bar in a short window
+/// (see [`SHORT_WINDOW_HEIGHT`]): the bar's clearance below, the content
+/// panel's margin above the tab strip, and the space between the strip
+/// and the page. `space-1`, because the room is tight: on the Pixel in
+/// landscape the host's insets take 76pt of the 448, the bar with its
+/// clearance above 80pt and the tab strip 49pt more, and half the window
+/// is the page's, which leaves 19pt for the three gaps and the bar's
+/// separator room (1pt). They take 13pt of it, and the page keeps 230pt,
+/// 51% of the window. The bar's clearance above stays as it is, so the
+/// bar, and the popovers that hang from it, stand where they stand in a
+/// window of any height; the content panel's margin below the page goes
+/// (there is `page`'s own 24pt of space at the end of its scroll).
+const SHORT_GAP: f32 = spacing::SPACE_1;
+
 /// A drag on a sideways row picks its axis once it has travelled this
 /// far: a mostly vertical gesture scrolls the page, a mostly horizontal
 /// one scrolls the row, never both.
@@ -306,6 +332,7 @@ impl Gallery {
             choices: ChoiceDemos::populated(),
             tab: 0,
             page_scroll_id: None,
+            page_rect: None,
             banners: BannerDemos::populated(),
             snackbar: SnackbarHost::new(),
             search: String::new(),
@@ -521,6 +548,11 @@ pub struct Gallery {
     /// it from the content panel's nested `Ui`s salted with
     /// `page_scroll_salt`, so a rebuild would re-trace the chrome's nesting.
     pub(crate) page_scroll_id: Option<egui::Id>,
+    /// Test support, read only by the input tests: where the page
+    /// scroll area showed its content as of the last frame (the
+    /// scroll output's `inner_rect`, the visible page). The app never
+    /// reads it.
+    pub(crate) page_rect: Option<egui::Rect>,
     /// Which of the dismissible banner demos still hold their
     /// banners; the warning and the error stay until resolved.
     banners: BannerDemos,
@@ -3010,11 +3042,28 @@ impl Gallery {
         // landscape phone would otherwise push the whole chrome to the
         // other side, so both gutters grow to the larger of the two.
         let side = insets.left.max(insets.right);
+        // A short window (a phone in landscape) keeps most of its height
+        // for the page: the gaps under the bar shrink to `SHORT_GAP`, and
+        // the tab description below the strip goes.
+        let short = root.available_height() < SHORT_WINDOW_HEIGHT;
+        let gap = |full: f32| if short { SHORT_GAP } else { full };
         let chrome_margin = |top: f32, bottom: f32| egui::Margin {
             left: (PAGE_GUTTER + side) as i8,
             right: (PAGE_GUTTER + side) as i8,
             top: (spacing::SPACE_3 + top) as i8,
-            bottom: (spacing::SPACE_3 + bottom) as i8,
+            bottom: (gap(spacing::SPACE_3) + bottom) as i8,
+        };
+        // The content panel's margin: the gutter at each side as ever.
+        // The 24px rhythm above the strip and below the page is what the
+        // short window gives up, the page's foot altogether.
+        let panel_margin = if short {
+            egui::Margin {
+                top: SHORT_GAP as i8,
+                bottom: 0,
+                ..content_margin()
+            }
+        } else {
+            content_margin()
         };
         // On a phone-width window the bar carries the brand, the theme
         // menu and the search affordance only: the nav links and the
@@ -3053,7 +3102,7 @@ impl Gallery {
             }))
             .show(root, |ui| {
                 egui::Frame::default()
-                    .inner_margin(content_margin())
+                    .inner_margin(panel_margin)
                     .show(ui, |ui| {
                         // The Tabs strip: the widget's own real demo, the
                         // gallery's panel switcher. It stays above the
@@ -3068,8 +3117,11 @@ impl Gallery {
                         }
                         // The caption explains the panels and the arrow
                         // keys: on a phone it is noise above the content,
-                        // and it names keys the phone does not have.
-                        if !narrow {
+                        // and it names keys the phone does not have. A
+                        // short window has no room for it either: three
+                        // lines under the strip took a quarter of the
+                        // Pixel's screen in landscape.
+                        if !narrow && !short {
                             ui.add(egui::Label::new(specimen_job(
                                 copy::TABS_NOTE,
                                 TypeStyle::Caption,
@@ -3079,9 +3131,10 @@ impl Gallery {
                             )));
                         }
 
-                        ui.add_space(spacing::SPACE_4);
+                        ui.add_space(gap(spacing::SPACE_4));
                         let page = self.page(ui);
                         self.page_scroll_id = Some(page.id);
+                        self.page_rect = Some(page.inner_rect);
                     });
             });
 
