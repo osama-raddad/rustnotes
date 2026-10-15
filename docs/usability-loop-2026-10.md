@@ -1015,7 +1015,7 @@ Not checked, so iteration 9 is open:
 - The bar's edge and gap on iOS (2-I9).
 - The keyboard inset path on iOS.
 
-## Iteration 10: the regression sweep (in progress)
+## Iteration 10: the regression sweep (closed, with open items)
 
 - **`just check`: exit 0**, for the Android and iOS targets of every mobile crate.
 - **`tools/emu-touch.sh emulator-5554`, three runs at HEAD.** Run 1 exited 1:
@@ -1033,182 +1033,132 @@ Not checked, so iteration 9 is open:
   - **Status: informational.** A single run is not a gate until `unswipe` is
     deterministic. Backlog: lengthen the reverse swipe (300 to 1300, not 1100), so the
     row's start clamp guarantees the restore. Recorded as **K4**.
-- The branch diff review (three reviewers, one per area) ran. Its findings are
-  triaged below.
+- **Branch diff review** (three read-only reviewers, one per area, over `7918329..HEAD`):
+  - *ui-kit:* no blockers or majors. Minor: the tab strip's scroll ignores reduced
+    motion (a glide still runs). Two comments are wrong, not the code: outline.rs:26
+    (the quarter-unit size) and logo.rs:260 (feather 0 paints the snapped outline, not the
+    hard-edged triangles). Backlog.
+  - *gallery:* one major, the icons row's top alignment from `7e07d9b`, which no test
+    covers. **Recorded as D18**, not fixed, because the alignment is a design choice.
+    Minors, backlog: the harness paints only the first 855pt, so the gutter tests
+    cover the first screen only. The popover's width ceiling (`THEME_MENU_WIDTH`,
+    248pt) can let the popover pass its trigger's right edge at about 265 to 295pt
+    windows (not run). The tab-strip test's doc says it follows a tap, but it sets
+    the host's selection.
+  - *core and host:* one major, the editor cap removed from every single-pane window
+    (fixed in `458f343`, see D16). Minors, backlog: the swipe hint can be tapped and
+    opens the note, dropping the arm (**D17**); a two-pane detail can paint a stale
+    frame after a cross delete (predates the branch, not run on a device); the
+    detail surface's right edge may not match the mirrored bar edge in a left-only
+    inset (low reachability).
+- **Verdict:** `just check` is green. `emu-touch.sh` is informational (K4). The
+  branch review has no open blocker. The one major that is a design question is D18,
+  and the other is D16, now fixed with the user's question recorded.
 
 ## Status and handoff
 
-Paused at the user's request during iteration 5, task 20. Nothing has been
-discarded. The partial task-20 edits are uncommitted and unverified.
+This is the handoff as of iteration 10. It replaces the pause handoff from the
+start of iteration 5, which is no longer accurate.
 
 ### Where things stand
 
-- **Branch:** `feat/framework-usability-iterations`, pushed. The committed tip is
-  `f34b2ee` (the iteration-4 ledger close). The range `7918329..f34b2ee` holds
-  every fix, test and ledger commit of this loop.
-- **Draft PR:** https://github.com/osama-raddad/rustnotes/pull/24, stacked on the
-  draft PR #23 branch `feat/design-notes-fixes`. Its body describes iterations 1
-  to 4. It does not yet mention iteration 5 or this pause.
-- **Iterations 1 to 4:** closed, pushed, and verified on the devices that can
-  reach them. Iteration 1 covered the baseline, iteration 2 the Components panel,
-  iteration 3 the chrome, popovers and focus, and iteration 4 landscape.
-- **Iteration 5:** triaged. Task 20 was stopped mid-work. Tasks 21 to 23 have not
-  started.
+- **Closed:** iterations 1 to 6. Each fix has a red test, a gate run, and a review.
+  Iteration 5's fix batch (20 to 23) and iteration 6's batch (24 to 29) are closed
+  in the iteration entries above.
+- **Iteration 7 (Rust Notes, partial):** checked on the Pixel: list, create, back,
+  reopen, two-tap delete, Settings, pull-to-refresh. Fixed and device-checked:
+  7-A1 (swipe-delete, `beeec62`) and 7-A2 (landscape editor text, `32b3f86`, with
+  its cap scope in progress, see D16). Open: hold-to-select, autosave timing, and
+  the measured sizes of the delete cross and "+" (1-A13).
+- **Iteration 8 (tablet, partial):** the two-pane layout and editor on
+  `Snakebyte_Tablet`. Open: the two-pane surface inset, the design AVD, a portrait tablet.
+- **Iteration 9 (iOS, partial):** taps only. Open: gestures (not drivable here), the
+  bottom clip and blank band, the bar's edge on iOS (2-I9), the iOS keyboard inset.
+- **Iteration 10 (regression sweep, in progress):** `just check` exits 0. The
+  emulator touch script exited 1 once in three runs (K4, not established as a
+  regression). The branch diff review ran (three reviewers), and its findings are
+  triaged below.
 
-### Uncommitted in the worktree (partial, do not commit as-is)
+### Branch review, triaged
 
-- `crates/ui-kit-gallery/src/gallery.rs`: about 17 lines changed, the start of the
-  Components right-gutter fix (task 20). Unverified.
-- `crates/ui-kit-gallery/src/input_tests.rs`: about 166 lines added. The stopped
-  implementer was replacing a probe with the real regression test. It has not
-  been run, and it may not compile.
-- `docs/usability-loop-2026-10.md`: this ledger, which is being committed now.
+- **Gallery, major:** the icons row is top-aligned by a change to `wrapping_row`
+  in `7e07d9b`, and nothing tests it. Recorded as **D18**. Not fixed: it needs a
+  choice between top and bottom alignment.
+- **Core, major:** the editor cap was removed for every single-pane window, which
+  contradicts the documented intent (metrics.rs:24). Being fixed by scoping the cap
+  to non-Compact heights. D16 stays open for the user, with the documented default.
+- **UI, minor:** the tab strip's scroll ignores reduced motion. Backlog.
+- **Gallery, minor:** the harness does not paint below the first 855pt, so the
+  gutter tests cover the first screen only. Backlog. The popover's width ceiling
+  (`THEME_MENU_WIDTH`) can let the popover pass its trigger's right edge at some
+  widths. Backlog, not run.
+- **Core, minor:** the swipe hint can be tapped and opens the note (D17). The
+  two-pane detail can paint a stale frame after a cross delete (predates the branch,
+  not run on a device). Backlog.
 
-To resume task 20, either finish the regression test from this diff (red first,
-then green), or review `git diff` on the two source files and revert them with
-`git checkout -- <file>`. Revert only after checking that the diff is task 20's.
+### Open decisions
 
-### Left-over work, in order
-
-**Iteration 5 (layout, touch targets and large text), remaining:**
-
-- Task 20, the Components right gutter (finding 5-A1). Partial, see above.
-- Task 21, the selected tab is scrolled into view at font scale 1.3 (5-A2). The
-  Feedback tab is cut at the strip's edge, and the strip does not scroll it into
-  view when it is selected by a tap.
-- Task 22, the Brand cards fill the column (5-A3). The theme cards use about 71%
-  of the column, the voice cards 44%, the photo tiles 39%.
-- Task 23, the photo caption's middle dot (5-E1). "After-hours debug ·" ends a
-  line.
-- Decision D11, the touch floor, and decision D12, the Components card widths.
-  Both need your answer before the touch-target sweep.
-
-**Iteration 6 (rendering and contrast):**
-
-- Night mode across the six themes.
-- The wordmark's anti-aliasing (2-I4).
-- The low-contrast "Disabled" and "Sending…" labels (2-A9 and 2-I5).
-- The colour swatches that are invisible without an outline, and the eyebrow's
-  "1.4545455" (1-A12). Also the Teal Light card.
-- The Foundations elevation specimens, which are staggered (5-C1).
-- The Tab-to-me pill, which is clear but cramped (about 3 pt of padding).
-
-**Iteration 7 (Rust Notes touch flows and the keyboard):**
-
-- List, create, edit, swipe-to-delete, pull-to-refresh, the two-tap delete, the
-  editor's hold-to-select, and the autosave.
-- The keyboard covers the editor in landscape, leaving about one and a half lines
-  (4-A4).
-- The delete cross and "+" button sizes in Rust Notes (1-A13 for Rust Notes).
-- The date's alignment in the note row (1-I9).
-- The Rust Notes Settings tab, which has not been checked.
-
-**Iteration 8 (size classes):**
-
-- The tablet AVDs (`Snakebyte_Tablet`, `Snakebyte_Tablet_Design`) for the two-pane
-  layout, and the phone landscape single pane.
-- The two-pane surface colour on a tablet with a side inset (from the `0de8ad4`
-  review). It is unreachable on the Pixel.
-
-**Iteration 9 (the iOS pass and the bottom clip):**
-
-- The blank band above the gesture bar, about 33 pt on both Android and iOS. This
-  is the safe-area clip from the mapping, and the Android pass also saw it.
-- The iOS hard clip at about 816 pt.
-- The bar's edge and gap on iOS (2-I9).
-- The iOS keyboard inset path, and iOS gestures, which cannot be driven from here.
-
-**Iteration 10 (the regression sweep and the test-quality backlog):**
-
-- `just test`, `just lint`, `just check`, `tools/emu-touch.sh`, and a re-screenshot
-  of everything the earlier iterations touched.
-- A review of the whole branch diff.
-- The test-quality backlog. The golden tables and their re-recording notes. The
-  shape walkers, which repeat across the test files: `painted_strings`,
-  `painted_meshes`, `painted_rects`, `painted_segments`, `bar_pane`, and
-  `flat_shapes`. The metric card's `MIN_WIDTH` padding round-trip, and its stale
-  "148px" doc. The text-field wrap-width assertion, and the right-inset check that
-  does not rely on word-wrap luck. The minor doc and naming items from each
-  iteration's reviews.
-
-### Decisions for you
-
-- **D1, the relaunch freeze after Back (blocker).** The gallery freezes when it is
-  relaunched after Back at its root. Options: end the process when the activity
-  finishes at the root, so each launch is fresh; or investigate the NativeActivity
-  re-entry directly. Testers avoid Back until you decide.
-- **D2, the swatch hairlines.** Kept as a documented design element. Remove the
-  three `hline` calls if you do not want them.
-- **D3, the trailing gap.** The labelled Theme trigger's chevron sits 28 pt from
-  the pane edge, against 24 pt for the wordmark (box terms), and about 33 pt against
-  24 pt in ink terms. The 4 pt keeps the focus ring inside the bar.
-- **D4, the wordmark's legibility.** "Vnatix" at a glance. Treated as the intended
-  monogram.
-- **D5, a personal iPhone has the gallery installed.** The baseline run put the
-  Vynatix Gallery on your connected iPhone 17 Pro (`Räddad iPhone`,
-  `07DBE8D0-DEAC-50B8-AE9B-492146EE6B11`). It was never launched, and it is still
-  there. Remove it with
+- **D1 (K3), relaunch freeze after Back.** The gallery freezes when relaunched after
+  Back at its root. Testers use `am force-stop`.
+- **D2, swatch hairlines.** Kept as a documented element.
+- **D3, the trailing gap** on the Theme trigger.
+- **D4, the wordmark's legibility.** Treated as the monogram.
+- **D5, the Vynatix Gallery is still installed on your personal iPhone.** Remove it with
   `xcrun devicectl device uninstall app --device 07DBE8D0-DEAC-50B8-AE9B-492146EE6B11 com.osamaraddad.vynatixgallery.ios`.
-- **D6, the search popover covers the tab strip** on a phone. Close it on a tab
-  change, or leave the strip uncovered?
-- **D7, the Theme chevron does not flip** when the menu opens.
-- **D8, the toggle glyphs.** The toggle knobs sit about 24 pt left of the radio
-  circles, to align the labels. Accept, or give them their own inset?
-- **D9, the held search popover.** It is held against the bar's left edge on a
-  phone. Accept, or anchor it on the bar's right edge?
-- **D10, full-bleed bars in landscape.** The bars stop at the mirrored rect, so a
-  light-mode landscape shows white bars with canvas gutters. Extend them?
-- **D11, the touch floor (44 pt), kit-wide.** These are below it: the filter chips
-  (about 32 pt), the Small "Filter results" button (36 pt), the checkbox rows (35 pt
-  pitch, with hit zones of about 22 to 35 pt), the radio rows (32 pt pitch, hit
-  zones of about 20 to 30 pt), and the toggle rows (41 pt pitch). Raise them all to
-  44 pt, or keep the Small button and the checkbox and radio rows as specimens?
-- **D12, the Components card widths.** The `.card` specimens use about 73% of the
-  column, and the filled card has no visible surface. Fill the column, or keep the
-  specimen widths?
+- **D6 to D10, the search popover, the chevron, the toggle glyphs, the held popover,
+  full-bleed landscape bars.**
+- **D11, the 44-pt touch floor, kit-wide.** Blocks the touch-target sweep.
+- **D12, the Components card widths.** Blocks the touch-target sweep.
+- **D13, phone photo tiles:** one per row (chosen) or two-up.
+- **D14, a caption's dot can start a line** after the no-break fix.
+- **D15, `WidgetState` cannot tell busy from disabled.**
+- **D16, the editor width cap.** Fixed in `458f343`. The cap is kept at any width
+  unless the window has Compact height, which is the landscape phone case (7-A2).
+  `medium_editor_keeps_its_body_width_cap` pins it. Device check on the tablet in
+  portrait (800 px, Medium width): the text starts at x 96, a centred 640 column plus
+  the 16pt margin, and the title at x 56 is uncapped (`build/usability-audit/iter-10-tablet-portrait-editor.png`).
+  One fact from the review: an Expanded-width window never reaches the single-pane
+  route, it goes two-pane, which never capped. So the "Expanded" half of
+  metrics.rs:24 has never applied. A backlog item fixes that doc line.
+  **Question for the user:** keep the reading width on Medium portrait (current), or
+  go full width?
+- **D17, the swipe hint.** After a swipe, the hint reads "Tap again to delete". It does
+  not name the swipe, and tapping it opens the note and drops the arm. Wording and
+  behaviour are for the user to choose.
+- **D18, the icons row's alignment.** Top-aligned, so the captions step down with the
+  glyph size (`build/usability-audit/iter-10-icons-sizes.png`). Bottom alignment would
+  put the glyphs on a shared baseline with one caption line. Choose one.
+- **Open:** the Teal Light card's ratio bar border, at 1.31:1 on Teal Light.
 
-### Known gaps and caveats
+### Known gaps
 
-- **K1, a rightward pointer jump** in the first touch frame moves a specimen row.
-  Real touches should not produce it, because they send `PointerGone` between
-  fingers. Not fixed.
-- **K2, the axis-lock coverage** of the jump test is argued from the code, not
-  verified by a mutation run.
-- **Devices.** Android is the Pixel 10 Pro XL emulator (`emulator-5554`, 3 px per
-  pt). iOS is the iPhone 16 Pro simulator (`1F96BFA0-C3BF-4C38-BBF5-1A9CADCA0C9D`).
-  iOS gestures cannot be driven from here, so iOS passes check only taps. iOS
-  landscape cannot be rotated from here.
-- **Rust Notes data.** The sample note on the emulator has a "ZZ" prefix left from
-  an earlier test pass. It is device data, not code.
-- **Commit trailers.** Every commit on the branch carries the Haiku trailer. One
-  Sonnet trailer was amended to Haiku.
+- **K1:** a rightward pointer jump in the first touch frame moves a specimen row.
+- **K2:** the axis-lock mutation has not been run.
+- **K4:** the emulator touch script's `unswipe` check failed once in three runs at
+  HEAD. Cause not established: the row probe position varied, or the swipe landed
+  near the row's edge. Not bisected. Informational until the reverse swipe is
+  lengthened so the clamp guarantees the restore.
 
 ### Resume here
 
-1. Decide the partial task-20 diff, as described above.
-2. Answer D11 and D12, or defer them. They block the touch-target sweep.
-3. Run tasks 21, 22 and 23, one at a time: an implementer, then a spec review,
-   then a quality review, then any follow-up commits. Implementers are not run in
-   parallel.
-4. Continue with iterations 6 to 10 in the order above.
-5. At the end, refresh PR #24's body, which still describes iterations 1 to 4.
+1. Finish the D16 scoped fix and its review, then close it in the iteration 10 entry.
+2. Refresh PR #24's title and body. It should name the iterations, the `bdd9607` commit
+   (which also carries a task-25 hunk), D1 to D18, and K1 to K4.
+3. Re-run the trailer check over `162d7e7..HEAD` (every commit should carry the Haiku
+   trailer).
+4. Decide D11 to D18. Then the touch-target sweep can run.
+5. Finish iteration 7's open checks, iteration 8's, and iteration 9's gesture-free items.
 
-### Working notes for whoever resumes
+### Working notes
 
-- **Worktree:** `/Users/osamaraddad/rustnotes/.claude/worktrees/framework-usability`
-  on `feat/framework-usability-iterations`. The keystores are copied into its root
-  (they are gitignored), and its `build/target` links to the main checkout's target
-  directory.
-- **Building:** use `just ios-run app=...` for the simulator. Do not use
-  `just run-ios`, because it prefers a connected iPhone. Use `just run-android
-  app=...` for the emulator. Do not use `just android-x` or `android-run`.
-- **Gates:** `just test`, `just lint`, and `just check` before any ledger close.
-- **Devices:** Back at the gallery's root freezes on relaunch, so testers use
-  `am force-stop` between runs and never press Back there. Rotation was restored
-  to `user_rotation 0`. `accelerometer_rotation` was 0 when the pass began, and it
-  is 0 now. `font_scale` was restored to 1.0.
-- **Screenshots:** `build/usability-audit/iter-N/` in the worktree. Those files are
-  gitignored, so they stay on this machine.
-- **Subagent process:** per fix, one implementer (sonnet), then a spec review and
-  a quality review (sonnet), then follow-up commits for the review items. Test-only
-  and comment-only follow-ups are verified by the coordinator with `cargo test`.
+- **Worktree:** `/Users/osamaraddad/rustnotes/.claude/worktrees/framework-usability` on
+  `feat/framework-usability-iterations`.
+- **Devices:** the Pixel is `emulator-5554` (portrait 448pt, font scale 1.0). The tablet is
+  `emulator-5556` (`Snakebyte_Tablet`, 1280 by 800). Both are running. Every adb command needs
+  `-s <serial>` while both are attached.
+- **Install:** `just run-android app=...` picks the first emulator, which is the Pixel. For the
+  tablet use `just android-install rustnotes emulator-5556 native`.
+- **iOS:** `just ios-run app=rustnotes` (the simulator, never a connected iPhone).
+- **Gates:** `just test`, `just lint`, `just check`. Run one implementer in the worktree at a
+  time: staged hunks share the index, and `bdd9607` came from two implementers sharing it.
+- **Touch script:** `zsh tools/emu-touch.sh <serial>`. Informational until K4 is fixed.
