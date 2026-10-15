@@ -456,9 +456,12 @@ impl<'a, T: Copy + Eq> Select<'a, T> {
         if interaction.is_open() {
             Popup::open_id(&ctx, popup_id);
             // `from_response` alone is an always-open popup, which never
-            // acts on its close behavior; kept in egui's popup memory it
-            // closes itself on a click outside (a tap too, which egui
-            // reads as a click) and the sync above follows.
+            // acts on its close behavior; `open_memory` keeps its open
+            // state in egui's popup memory, where it closes itself on a
+            // click outside (a tap too, which egui reads as a click) and
+            // the select's sync with popup memory follows. The open
+            // command is `None` because the select opens the popup itself,
+            // with the `Popup::open_id` call just above.
             let popup = Popup::from_response(&response)
                 .id(popup_id)
                 .open_memory(None)
@@ -1070,7 +1073,7 @@ mod tests {
         text: Rect,
         button: Rect,
         field: Rect,
-        boxed: Rect,
+        select_box: Rect,
         /// The option rows' rects, while the list is open.
         rows: Vec<Rect>,
     }
@@ -1089,7 +1092,7 @@ mod tests {
                 text: Rect::NOTHING,
                 button: Rect::NOTHING,
                 field: Rect::NOTHING,
-                boxed: Rect::NOTHING,
+                select_box: Rect::NOTHING,
                 rows: Vec::new(),
             };
             for _ in 0..3 {
@@ -1133,7 +1136,7 @@ mod tests {
                 .drop_without_applying_deltas();
             let (text, button, field, picked) = seen.expect("the frame ran");
             (self.text, self.button, self.field) = (text, button, field);
-            self.boxed = picked.response.rect;
+            self.select_box = picked.response.rect;
             self.open = picked.open;
             self.rows = if picked.open { rows } else { Vec::new() };
             if let Some(value) = picked.committed {
@@ -1186,32 +1189,60 @@ mod tests {
             self.frame(Vec::new());
         }
 
+        /// Open the list with a mouse click on the box: no touch event.
+        fn open_by_click(&mut self) {
+            self.click(self.select_box.center());
+            self.assert_opened("a click");
+        }
+
         /// Open the list with a tap on the box.
         fn open_by_tap(&mut self) {
-            self.tap(self.boxed.center());
-            assert!(self.open, "a tap on the box opens the list");
+            self.tap(self.select_box.center());
+            self.assert_opened("a tap");
+        }
+
+        /// The list is open, with its rows laid out, after `by` on the box.
+        fn assert_opened(&self, by: &str) {
+            assert!(self.open, "{by} on the box opens the list");
             assert_eq!(self.rows.len(), REGIONS.len(), "and lays out its rows");
         }
     }
 
-    /// A click anywhere outside the open list, on plain text, a button or
-    /// a field, closes it without committing, and the current value stays.
-    /// The select used to open its popover as always open, so the popover
-    /// never closed itself: a click outside left it up.
-    #[test]
-    fn a_mouse_click_outside_closes_the_open_list_without_committing() {
+    /// Open the list with `open`, press outside it with `press` on each of
+    /// three targets (plain text, a button and a multiline field), and
+    /// check that every press closes the list without committing and
+    /// leaves the value alone. The rig comes back so a test can check what
+    /// egui saw of the input.
+    fn closes_on_outside_press(open: fn(&mut Rig), press: fn(&mut Rig, Pos2)) -> Rig {
         let mut rig = Rig::new();
         for (name, target) in [
             ("plain text", rig.text.center()),
             ("a button", rig.button.center()),
             ("a field", rig.field.center()),
         ] {
-            rig.open_by_tap();
-            rig.click(target);
-            assert!(!rig.open, "a click on {name} closes the list");
+            open(&mut rig);
+            press(&mut rig, target);
+            assert!(!rig.open, "a press on {name} closes the list");
             assert!(rig.commits.is_empty(), "{name} commits nothing");
             assert_eq!(rig.region, Some(Region::Nordics), "the value stays");
         }
+        rig
+    }
+
+    /// A click anywhere outside the open list, on plain text, a button or
+    /// a field, closes it without committing, and the current value stays.
+    /// The select used to open its popover as always open, so the popover
+    /// never closed itself: a click outside left it up. The list is both
+    /// opened and closed by the mouse alone, and egui never sees a touch,
+    /// which the last assertion pins: this is the desktop case, apart from
+    /// the touch one below.
+    #[test]
+    fn a_mouse_click_outside_closes_the_open_list_without_committing() {
+        let rig = closes_on_outside_press(Rig::open_by_click, Rig::click);
+        assert!(
+            !rig.ctx.input(|input| input.has_touch_screen()),
+            "no touch reached egui, so the sequence was mouse-only"
+        );
     }
 
     /// The device case: a tap outside the open list, as a finger from a
@@ -1220,23 +1251,17 @@ mod tests {
     /// as well as on a button or a field that takes the focus.
     #[test]
     fn a_touch_tap_outside_closes_the_open_list_without_committing() {
-        let mut rig = Rig::new();
-        for (name, target) in [
-            ("plain text", rig.text.center()),
-            ("a button", rig.button.center()),
-            ("a field", rig.field.center()),
-        ] {
-            rig.open_by_tap();
-            rig.tap(target);
-            assert!(!rig.open, "a tap on {name} closes the list");
-            assert!(rig.commits.is_empty(), "{name} commits nothing");
-            assert_eq!(rig.region, Some(Region::Nordics), "the value stays");
-        }
+        let rig = closes_on_outside_press(Rig::open_by_tap, Rig::tap);
+        assert!(
+            rig.ctx.input(|input| input.has_touch_screen()),
+            "egui saw the touches, which is what tells this case from the mouse one"
+        );
     }
 
-    /// A tap on an option still chooses it and closes the list.
+    /// A guard, not a regression test: a tap on an option chose it and
+    /// closed the list before the outside-close fix, and still does.
     #[test]
-    fn a_touch_tap_on_an_option_commits_it_and_closes_the_list() {
+    fn guards_a_touch_tap_on_an_option_commits_it_and_closes_the_list() {
         let mut rig = Rig::new();
         rig.open_by_tap();
         rig.tap(rig.rows[2].center());
@@ -1245,13 +1270,14 @@ mod tests {
         assert_eq!(rig.region, Some(Region::Global), "and becomes the value");
     }
 
-    /// A second tap on the box toggles the open list shut, as a click on
-    /// the box did before: it neither commits nor reopens the list.
+    /// A guard, not a regression test: a second tap on the box toggled the
+    /// open list shut before the outside-close fix, and still does. It
+    /// neither commits nor reopens the list.
     #[test]
-    fn a_second_tap_on_the_box_closes_the_open_list() {
+    fn guards_a_second_tap_on_the_box_closes_the_open_list() {
         let mut rig = Rig::new();
         rig.open_by_tap();
-        rig.tap(rig.boxed.center());
+        rig.tap(rig.select_box.center());
         assert!(!rig.open, "the second tap closes the list");
         assert!(rig.commits.is_empty(), "and commits nothing");
         rig.frame(Vec::new());

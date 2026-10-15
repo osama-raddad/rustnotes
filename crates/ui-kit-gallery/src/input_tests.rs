@@ -829,11 +829,18 @@ fn the_theme_trigger_names_the_live_theme_on_a_wide_window() {
 }
 
 /// The Region select on the Components panel, scrolled into the window's
-/// upper half: its box's rect, a field gap under its label and 44pt tall.
+/// upper half: its box's rect, a field gap under its label and
+/// `CONTROL_HEIGHT` tall.
 fn region_select(h: &mut Harness) -> egui::Rect {
     h.app.gallery.tab = 2;
     h.idle(3);
     h.touch_screen();
+    // The band for the label's top edge, in the 855pt phone window. The
+    // box ends about 66pt under the label's top, so at the band's lower
+    // edge (420pt) it ends near 486pt, leaving over 350pt under it: room
+    // for the popover (three rows of `OPTION_HEIGHT` and a small gap) to
+    // open below the box. Its upper edge (280pt) keeps the label well
+    // clear of the bar and the tab strip at the top.
     let label = h
         .scroll_to(copy::SELECT_REGION_LABEL, 280.0..420.0)
         .expect("the Region select scrolls into view");
@@ -866,18 +873,18 @@ fn shows_value(h: &Harness, value: &str, box_left: f32) -> bool {
 #[test]
 fn a_touch_tap_on_plain_text_closes_the_open_select() {
     let mut h = Harness::phone();
-    let boxed = region_select(&mut h);
+    let select_box = region_select(&mut h);
     assert!(
         !egui::Popup::is_any_open(&h.ctx),
         "the select starts closed"
     );
 
     assert!(
-        shows_value(&h, "Nordics", boxed.left()),
+        shows_value(&h, "Nordics", select_box.left()),
         "the select starts on Nordics"
     );
 
-    h.tap(boxed.center());
+    h.tap(select_box.center());
     h.idle(2);
     assert!(
         egui::Popup::is_any_open(&h.ctx),
@@ -900,7 +907,7 @@ fn a_touch_tap_on_plain_text_closes_the_open_select() {
         "a tap on plain text outside the popover closes it"
     );
     assert!(
-        shows_value(&h, "Nordics", boxed.left()),
+        shows_value(&h, "Nordics", select_box.left()),
         "closing by a tap outside leaves the choice alone"
     );
 }
