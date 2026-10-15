@@ -9,7 +9,10 @@
 //! `on-primary` when on, carrying `shadow-l1`, and slides over 200ms
 //! on the house curve `cubic-bezier(0.2, 0.8, 0.2, 1)`. The label sits
 //! beside the track in the 14px body face with a 12px gap, and a click
-//! on the words flips the switch too.
+//! on the words flips the switch too. A host that needs a touch target
+//! can grow the row with [`Toggle::min_row_height`]; the track and
+//! label stay centred on it, and a toggle that sets nothing is the
+//! spec's 26px row.
 //!
 //! Motion inside egui's per-frame model: the slide is remembered per
 //! widget id as (from, target, started-at) in context data and driven
@@ -305,6 +308,7 @@ pub struct Toggle<'a> {
     label: &'a str,
     checked: bool,
     enabled: bool,
+    min_row_height: f32,
 }
 
 impl Default for Toggle<'_> {
@@ -320,6 +324,7 @@ impl<'a> Toggle<'a> {
             label,
             checked: false,
             enabled: true,
+            min_row_height: 0.0,
         }
     }
 
@@ -341,6 +346,16 @@ impl<'a> Toggle<'a> {
         self.enabled(false)
     }
 
+    /// Grow the row to at least `height` tall, the rect it registers
+    /// for interaction (a touch target's height); the track and label
+    /// stay centred on it. A `height` under the row's natural one (the
+    /// 26px track, or a taller label) changes nothing, and that is the
+    /// default.
+    pub const fn min_row_height(mut self, height: f32) -> Self {
+        self.min_row_height = height;
+        self
+    }
+
     /// Show the toggle and hand back its typed response: the row's
     /// egui response, the state a flip landed on (if any), and the
     /// knob's position along its slide this frame (0 off, 1 on).
@@ -353,7 +368,7 @@ impl<'a> Toggle<'a> {
             fonts.layout_delayed_color(self.label.to_owned(), font_id, f32::INFINITY)
         });
 
-        let height = TRACK_H.max(galley.size().y);
+        let height = TRACK_H.max(galley.size().y).max(self.min_row_height);
         let size = Vec2::new(TRACK_W + LABEL_GAP + galley.size().x, height);
         let id = ui.next_auto_id().with("vynatix-toggle");
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -880,6 +895,40 @@ mod tests {
             "starts at x {} but after the track and its gap is {after_track}",
             pos.x
         );
+    }
+
+    /// A toggle is the spec's 26px row unless asked to be taller:
+    /// `min_row_height` grows the rect the row registers for interaction,
+    /// the track and the label stay on its midline, and a minimum under
+    /// the track's own height changes nothing.
+    #[test]
+    fn the_row_defaults_to_the_track_and_grows_on_request() {
+        let theme = ThemeId::Light;
+        let flags = UiKitFlags::default();
+        for (minimum, expected) in [(0.0, TRACK_H), (10.0, TRACK_H), (44.0, 44.0)] {
+            let ctx = egui::Context::default();
+            install_faces(&ctx, theme);
+            let (row, shapes) = paint_pass(&ctx, |ui| {
+                Toggle::new("Reduced motion")
+                    .min_row_height(minimum)
+                    .ui(ui, theme, &flags)
+                    .response
+                    .rect
+            });
+            assert_eq!(row.height(), expected, "a minimum of {minimum}");
+
+            assert_painted_inside(&shapes, "Reduced motion", row);
+            let look = toggle_look(false, &WidgetState::default(), theme);
+            let track = flat_shapes(&shapes)
+                .into_iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Rect(rect) if rect.fill == look.track => Some(rect.rect),
+                    _ => None,
+                })
+                .expect("the track was painted");
+            assert_eq!(track, track_rect(row), "a minimum of {minimum}: the track");
+            assert_eq!(track.center().y, row.center().y, "the track is centred");
+        }
     }
 
     /// Run a press then a release at `pos`, returning what `widget`

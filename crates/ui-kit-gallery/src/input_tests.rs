@@ -653,6 +653,118 @@ fn the_theme_menu_switches_themes_and_closes_on_a_tap_outside() {
     );
 }
 
+/// The theme popover's rows are touch targets, and its two groups read
+/// as one list. Each of the six theme rows and the two flag rows
+/// registers a rect for interaction at least the 44pt touch floor
+/// tall (read off the accessibility tree, which carries each widget's
+/// own rect, not its glyph), the rows stack at least 44pt apart so no
+/// two targets overlap, and the radio labels and the toggle labels
+/// start at one x. The rows once registered the kit's 20pt radio row
+/// (a 32pt pitch with its 12pt gap) and 26pt toggle row (about 41pt
+/// apart), and the toggle labels sat 28pt right of the radio labels.
+/// A tap at the edge of each reported rect lands, so the rect is the
+/// live target and not only a number.
+#[test]
+fn the_theme_popovers_rows_are_44pt_and_their_labels_align() {
+    use ui_kit::components::button::TOUCH_TARGET_MIN;
+
+    // Both layouts: the phone, and a desktop window where the bar
+    // shows the named trigger.
+    let mut off = Vec::new();
+    for window in [PHONE, egui::vec2(1280.0, 900.0)] {
+        let mut h = Harness::window(window);
+        // The Feedback panel paints no theme names or flag labels of its
+        // own, so every one on screen is the menu's.
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        h.touch_screen();
+        let at = format!("at {}pt", window.x);
+
+        let trigger = h
+            .node(Role::Button, copy::THEME_MENU)
+            .expect("the bar's theme trigger");
+        h.tap(trigger.center());
+        h.idle(2);
+
+        // The six theme rows then the two flag rows, in reading order,
+        // each with the rect it registered and the x its label painted
+        // at.
+        let radios = ThemeId::ALL.iter().map(|theme| theme.name());
+        let toggles = [copy::REDUCED_MOTION, copy::REDUCED_TRANSPARENCY];
+        let mut rows: Vec<(&str, egui::Rect, f32, bool)> = Vec::new();
+        for (name, role, is_radio) in radios
+            .map(|name| (name, Role::RadioButton, true))
+            .chain(toggles.map(|name| (name, Role::CheckBox, false)))
+        {
+            let rect = h
+                .node(role, name)
+                .unwrap_or_else(|| panic!("{at}: the open menu has no {role:?} row {name:?}"));
+            let label = h
+                .painted(name)
+                .unwrap_or_else(|| panic!("{at}: the open menu paints no {name:?}"));
+            rows.push((name, rect, label.left(), is_radio));
+        }
+
+        for (name, rect, _, _) in &rows {
+            if rect.height() < TOUCH_TARGET_MIN - 0.01 {
+                off.push(format!(
+                    "{at}: the {name:?} row registers {}pt tall, under the {TOUCH_TARGET_MIN}pt \
+                     touch floor ({rect:?})",
+                    rect.height()
+                ));
+            }
+        }
+        for pair in rows.windows(2) {
+            let ((above, a, _, _), (below, b, _, _)) = (&pair[0], &pair[1]);
+            let pitch = b.top() - a.top();
+            if pitch < TOUCH_TARGET_MIN - 0.01 {
+                off.push(format!(
+                    "{at}: {above:?} and {below:?} sit {pitch}pt apart, under the \
+                     {TOUCH_TARGET_MIN}pt touch floor"
+                ));
+            }
+        }
+        let radio_x = rows[0].2;
+        for (name, _, x, is_radio) in &rows {
+            if (x - radio_x).abs() > 0.01 {
+                off.push(format!(
+                    "{at}: the {} label {name:?} starts at x {x}, not the radio labels' x \
+                     {radio_x}",
+                    if *is_radio { "radio" } else { "toggle" }
+                ));
+            }
+        }
+
+        // The rect's edges are live: a tap 2pt inside the top of a theme
+        // row picks it, and 2pt inside the bottom of a flag row flips
+        // it.
+        let dark = rows
+            .iter()
+            .find(|row| row.0 == ThemeId::Dark.name())
+            .expect("the Dark row");
+        h.tap(egui::pos2(dark.1.center().x, dark.1.top() + 2.0));
+        if h.app.gallery.theme != ThemeId::Dark {
+            off.push(format!(
+                "{at}: a tap 2pt inside the top of the {:?} row ({:?}) did not pick it",
+                dark.0, dark.1
+            ));
+        }
+        h.idle(2);
+        let motion = h
+            .node(Role::CheckBox, copy::REDUCED_MOTION)
+            .expect("the Reduced motion row");
+        let reduced = h.app.gallery.flags.reduced_motion;
+        h.tap(egui::pos2(motion.center().x, motion.bottom() - 2.0));
+        if h.app.gallery.flags.reduced_motion == reduced {
+            off.push(format!(
+                "{at}: a tap 2pt inside the bottom of the Reduced motion row ({motion:?}) \
+                 did not flip it"
+            ));
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
 /// The bar's search popover closes on a tap outside it, as the theme
 /// menu's does, and the bar holds one popover open at a time: opening
 /// either one closes the other.

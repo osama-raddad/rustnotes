@@ -75,12 +75,12 @@ use ui_kit::components::button::{self, Button, ButtonEmphasis, ButtonSize};
 use ui_kit::components::checkbox::{Checkbox, CheckboxState};
 use ui_kit::components::chip::{Chip, ChipEvent};
 use ui_kit::components::liquid_glass::{glass_recipe, paint_glass, GlassThickness, GlassTint};
-use ui_kit::components::radio::{option, RadioGroup, RadioOption};
+use ui_kit::components::radio::{self, option, RadioGroup, RadioOption};
 use ui_kit::components::select::{popup_frame, Select};
 use ui_kit::components::snackbar::{Snackbar, SnackbarEvent, SnackbarHost};
 use ui_kit::components::tabs::Tabs;
 use ui_kit::components::text_field::{hint_row, label_row, TextField};
-use ui_kit::components::toggle::Toggle;
+use ui_kit::components::toggle::{self, Toggle};
 use ui_kit::components::top_app_bar::{
     NavLink, TopAppBar, ACTIONS_GAP, CONTENT_HEIGHT, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
 };
@@ -164,6 +164,17 @@ struct DragAxis {
 /// The theme menu's popover width: the longest toggle row ("Reduced
 /// transparency" beside its 44px track) and the frame's insets.
 const THEME_MENU_WIDTH: f32 = 248.0;
+
+/// The x the theme menu's labels start at, in the theme rows and the
+/// flag rows alike: past the toggle's 44px track and its gap. The
+/// toggle's label cannot start sooner, so the radio group is indented
+/// to meet it ([`THEME_MENU_RADIO_INSET`]).
+const THEME_MENU_LABEL_X: f32 = toggle::TRACK_W + toggle::LABEL_GAP;
+
+/// How far the theme menu's radio group is indented so its labels,
+/// which the kit sets a circle and a gap from the row's left, start
+/// at [`THEME_MENU_LABEL_X`]. The group's legend rides along with it.
+const THEME_MENU_RADIO_INSET: f32 = THEME_MENU_LABEL_X - (radio::CIRCLE_SIZE + radio::LABEL_GAP);
 
 /// Apply `theme` with the gallery's own style on top: labels are not
 /// selectable. A gallery is not a document, and a drag that starts on
@@ -2588,10 +2599,23 @@ impl Gallery {
         let flags = self.flags;
         let names: Vec<&'static str> = ThemeId::ALL.iter().map(|id| id.name()).collect();
         let themes = radio_options(ThemeId::ALL, &names);
-        let choice = RadioGroup::new(copy::THEME_MENU)
-            .options(&themes)
-            .selected(Some(theme))
-            .ui(ui, theme, &flags);
+        // Every row is a touch target: the kit's rows are 20 and 26px
+        // tall, so each is grown to the touch floor, and the theme rows
+        // meet with no gap between them (the toggles keep the column's
+        // own 3px item spacing). The radio group is indented so its
+        // labels start where the toggles' do.
+        let mut group = ui.available_rect_before_wrap();
+        group.min.x += THEME_MENU_RADIO_INSET;
+        let choice = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(group), |ui| {
+                RadioGroup::new(copy::THEME_MENU)
+                    .options(&themes)
+                    .selected(Some(theme))
+                    .min_row_height(button::TOUCH_TARGET_MIN)
+                    .row_gap(0.0)
+                    .ui(ui, theme, &flags)
+            })
+            .inner;
         if let Some(picked) = choice.committed {
             self.theme = picked;
             install(picked, ctx);
@@ -2601,14 +2625,15 @@ impl Gallery {
         ui.add_space(spacing::SPACE_5);
         if let Some(on) = Toggle::new(copy::REDUCED_MOTION)
             .checked(flags.reduced_motion)
+            .min_row_height(button::TOUCH_TARGET_MIN)
             .ui(ui, theme, &flags)
             .toggled
         {
             self.flags.reduced_motion = on;
         }
-        ui.add_space(ui_kit::components::checkbox::ROW_GAP);
         if let Some(on) = Toggle::new(copy::REDUCED_TRANSPARENCY)
             .checked(flags.reduced_transparency)
+            .min_row_height(button::TOUCH_TARGET_MIN)
             .ui(ui, theme, &flags)
             .toggled
         {
