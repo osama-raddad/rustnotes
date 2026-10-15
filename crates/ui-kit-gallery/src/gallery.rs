@@ -82,7 +82,7 @@ use ui_kit::components::tabs::Tabs;
 use ui_kit::components::text_field::{hint_row, label_row, TextField};
 use ui_kit::components::toggle::Toggle;
 use ui_kit::components::top_app_bar::{
-    NavLink, TopAppBar, ACTIONS_GAP, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
+    NavLink, TopAppBar, ACTIONS_GAP, CONTENT_HEIGHT, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
 };
 use ui_kit::components::{
     BrandShowcase, Card, Cover, EditorialCard, FocusRing, Grid, LiquidGlass, MetricCard,
@@ -2222,6 +2222,21 @@ enum ThemeTrigger {
     Icon,
 }
 
+impl ThemeTrigger {
+    /// How far inside its own box the trigger's content sits, at the
+    /// end of the row: the default button's horizontal padding for the
+    /// two labelled triggers (the label and the chevron), and for the
+    /// icon button the room between its 44px circle and its icon.
+    fn inset(&self) -> f32 {
+        match self {
+            ThemeTrigger::Named | ThemeTrigger::Bare => ButtonSize::Default.padding_x(),
+            ThemeTrigger::Icon => {
+                (ui_kit::components::badge::ICON_BUTTON_SIZE - IconSize::Lg.px()) / 2.0
+            }
+        }
+    }
+}
+
 impl BarFit {
     /// The fullest bar that fits the row `ui` is about to lay out. The
     /// widths are measured before anything is placed, in the widgets'
@@ -2397,6 +2412,13 @@ impl Gallery {
         let flags = self.flags;
         TopAppBar::new().ui(ui, theme, &flags, |ui| {
             ui.horizontal(|ui| {
+                // The row is the bar's content height, so everything in
+                // it centres on the bar's centre line. `horizontal` opens
+                // the row at egui's 18px interact height, and an item
+                // placed first and taller than that (the 24px wordmark,
+                // the nav links, the call to action) is pinned to the
+                // row's top, short of the 44px controls' centre line.
+                ui.set_height(CONTENT_HEIGHT);
                 let fit = BarFit::measure(ui, theme, narrow);
 
                 // The brand: the wordmark at its 24px chrome height,
@@ -2423,8 +2445,28 @@ impl Gallery {
 
                 // The actions, flush right: the one CTA where the row
                 // has room for it, the theme menu, the search
-                // affordance.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // affordance. With no CTA the theme trigger ends the
+                // row, and it is a ghost button (or a bare icon): at
+                // rest what shows of it is its icon, not its box. The
+                // group therefore runs on past the row's right edge by
+                // the trigger's inset, so that the icon, like the
+                // wordmark on the left, stands the bar's padding in
+                // from the bar's edge. The box overhangs into the bar's
+                // own padding, short of the pane's edge by what is left
+                // of it, and the row still claims no more than its
+                // width, so the bar stays as wide as its panel.
+                let row = ui.available_rect_before_wrap();
+                let overhang = if fit.cta { 0.0 } else { fit.trigger.inset() };
+                let mut actions = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(Rect::from_min_max(
+                            row.min,
+                            egui::pos2(row.max.x + overhang, row.max.y),
+                        ))
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                );
+                {
+                    let ui = &mut actions;
                     if fit.cta {
                         Button::new(copy::START_A_PROJECT)
                             .small()
@@ -2460,7 +2502,8 @@ impl Gallery {
                                 .hint(copy::SEARCH_FIELD_HINT)
                                 .ui(ui, theme, &flags);
                         });
-                });
+                }
+                ui.advance_cursor_after_rect(row);
             });
         });
     }

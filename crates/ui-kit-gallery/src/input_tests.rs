@@ -49,6 +49,8 @@ struct Harness {
     nodes: Vec<(Role, String, egui::Rect)>,
     /// The bounds of every mesh the last frame painted.
     meshes: Vec<egui::Rect>,
+    /// Every shape the last frame painted, with its clip.
+    shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl Harness {
@@ -73,6 +75,7 @@ impl Harness {
             strings: Vec::new(),
             nodes: Vec::new(),
             meshes: Vec::new(),
+            shapes: Vec::new(),
         };
         harness.idle(3);
         harness
@@ -93,6 +96,7 @@ impl Harness {
         self.strings = painted_strings(&out.shapes);
         self.nodes = labelled_nodes(&out.platform_output);
         self.meshes = painted_meshes(&out.shapes);
+        self.shapes = out.shapes.clone();
         out.drop_without_applying_deltas();
     }
 
@@ -749,6 +753,102 @@ fn the_bar_keeps_its_controls_clear_of_the_nav_links_and_the_wordmark() {
     assert!(crowded.is_empty(), "{}", crowded.join("\n"));
 }
 
+/// The bar's content sits on one centre line and the bar pads both ends
+/// alike. The wordmark, the nav links, the call to action and the two
+/// controls each centre on the pane's centre line, and the first thing
+/// the bar shows on its left (the wordmark) and the last thing on its
+/// right (the call to action's fill, or the theme trigger's icon where
+/// the call to action is shed) each stand the bar's own padding in from
+/// the pane's edge, from the narrowest phone to a wide desktop in every
+/// theme. The row once began at egui's 18pt interact height, so the
+/// 24pt wordmark, placed first, was pinned to the row's top and sat
+/// 10pt above the 44pt controls' centre line; and the ghost theme
+/// trigger kept its own button padding (20pt, the icon button's 10pt)
+/// inside the bar's, so its icon stood that much further in than the
+/// wordmark does. The icon is its painted box, the 20pt or 24pt cell
+/// the glyph sits in; the glyph's ink sits a few points inside that.
+#[test]
+fn the_bar_centres_its_wordmark_and_pads_both_ends_alike() {
+    use ui_kit::components::top_app_bar::{bar_height, BAR_PAD_X, CONTENT_HEIGHT};
+    use ui_kit::icons::Icon;
+
+    // Painted to the pixel, laid out in whole points: a point's slack.
+    const SLACK: f32 = 1.0;
+    let mut off = Vec::new();
+    let mut h = Harness::window(egui::vec2(320.0, 800.0));
+    h.app.gallery.tab = 3;
+    for width in [320.0, 384.0, 600.0, 1024.0, 1440.0] {
+        h.window = egui::vec2(width, 800.0);
+        for theme in ThemeId::ALL {
+            h.app.gallery.theme = *theme;
+            crate::gallery::apply_theme(*theme, &h.ctx);
+            h.idle(2);
+            let at = format!("at {width}pt in {}", theme.name());
+            let pane = bar_pane(&h, *theme);
+            let trigger = h
+                .node(Role::Button, copy::THEME_MENU)
+                .expect("the bar's theme trigger");
+            let search = h
+                .node(Role::Button, copy::SEARCH_BUTTON_NAME)
+                .expect("the bar's search button");
+            let mark = wordmark(&h, trigger);
+            let cta = h.node(Role::Button, copy::START_A_PROJECT);
+
+            if pane.height() != bar_height(CONTENT_HEIGHT) {
+                off.push(format!("{at} the bar is {}pt tall", pane.height()));
+            }
+
+            // One centre line.
+            let line = pane.center().y;
+            let mut centred = vec![
+                ("the wordmark".to_owned(), mark),
+                ("the theme trigger".to_owned(), trigger),
+                ("the search button".to_owned(), search),
+            ];
+            centred.extend(cta.map(|rect| ("the call to action".to_owned(), rect)));
+            centred.extend(nav_links(&h));
+            for (name, rect) in centred {
+                if (rect.center().y - line).abs() > SLACK {
+                    off.push(format!(
+                        "{at} {name} {rect:?} is centred on y {}, not the bar's {line}",
+                        rect.center().y
+                    ));
+                }
+            }
+
+            // Both ends.
+            let leading = mark.left() - pane.left();
+            let trailing = match cta {
+                // A filled button: its fill is what shows.
+                Some(cta) => pane.right() - cta.right(),
+                // A ghost button or a bare icon: the icon is what shows.
+                None => {
+                    let icons =
+                        [Icon::ExpandMore, Icon::Tune].map(|icon| icon.as_char().to_string());
+                    let icon = h
+                        .strings
+                        .iter()
+                        .filter(|(text, rect)| {
+                            icons.contains(text) && trigger.expand(SLACK).contains_rect(*rect)
+                        })
+                        .map(|(_, rect)| *rect)
+                        .max_by(|a, b| a.right().total_cmp(&b.right()))
+                        .expect("the theme trigger paints its icon");
+                    pane.right() - icon.right()
+                }
+            };
+            for (end, gap) in [("leading", leading), ("trailing", trailing)] {
+                if (gap - BAR_PAD_X).abs() > SLACK {
+                    off.push(format!(
+                        "{at} the {end} gap is {gap}pt, not the bar's {BAR_PAD_X}pt padding"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
 /// The bar's nav links: the `Link` nodes named after the panels, each
 /// with its rect.
 fn nav_links(h: &Harness) -> Vec<(String, egui::Rect)> {
@@ -776,6 +876,37 @@ fn wordmark(h: &Harness, row: egui::Rect) -> egui::Rect {
         "the bar paints one mesh, the wordmark: {level:?}"
     );
     level[0]
+}
+
+/// The bar's pane: the topmost rect the last frame painted with the
+/// bar's 1px `outline-variant` border at `radius-lg`.
+fn bar_pane(h: &Harness, theme: ThemeId) -> egui::Rect {
+    fn walk(shape: &egui::Shape, border: egui::Stroke, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Rect(rect)
+                if rect.stroke == border
+                    && rect.corner_radius
+                        == egui::CornerRadius::same(ui_kit::tokens::radii::RADIUS_LG as u8) =>
+            {
+                out.push(rect.rect);
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, border, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let border = ui_kit::components::top_app_bar::bar_border(theme);
+    let mut panes = Vec::new();
+    for clipped in &h.shapes {
+        walk(&clipped.shape, border, &mut panes);
+    }
+    panes
+        .into_iter()
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+        .expect("the frame paints the bar's pane")
 }
 
 /// On the narrowest phones the theme trigger is its icon alone, named
