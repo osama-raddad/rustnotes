@@ -1,7 +1,8 @@
 # Framework usability loop — October 2026
 
-Status: iteration 5 in progress. Tasks 20 (5-A1, `b47473f`) and 21 (5-A2,
-`7f8ed7c` to `53a291b`) are closed; task 22 is next. Iterations 1 to 4 are closed and pushed. The "Status and handoff"
+Status: iteration 5 in progress. Tasks 20 (5-A1, `b47473f`), 21 (5-A2,
+`7f8ed7c` to `53a291b`) and 22 (5-A3, `b1c5a6c` to `ee11286`) are closed; task
+23 is next. Iterations 1 to 4 are closed and pushed. The "Status and handoff"
 section at the end is the handoff as of the pause, and it is now out of date
 for iteration 5 onward.
 
@@ -790,6 +791,37 @@ A drag still moves the strip, because only a tap or a move makes it follow.
   tap or a move follows. Not tested. The harness warms up at zoom 1.0 before it
   sets the zoom, while Android applies it from the first frame. The item-spacing
   margin is read from egui's source, not measured.
+
+**Task 22 closed (5-A3), `b1c5a6c`, `d3d2903`, `4e64d17`, `ee11286`.** The
+Brand theme cards, voice cards, photo tiles and Do/Don't cards now fill the
+column. Measured at 448pt (a 416pt column) before the fix: theme 71.2%, voice
+51.9%, lead tile 72.1%, small tiles 38.5%, Do/Don't 99.0%. A fourth group, the
+governing-principle card, was 98.4%, found on the device and closed in
+`4e64d17`. The fill test measures every group at 320, 384, 448 and 631pt.
+
+- **The left edge did not reproduce.** The cards' left edges were already at
+  the column's left (x 16). The 16pt inset the tester saw is the cards' own
+  padding. The 44% voice figure is 184 of 416pt, the content width without that
+  padding.
+- **The text constants never took effect.** egui's `Label` overwrites a job's
+  wrap width with the `Ui`'s available width, so the `CARD_WIDTH - 32` and
+  `VOICE_CARD_WIDTH - 32` wraps were inert. `ee11286` removed them. Rendering was
+  unchanged, checked by a snapshot of every painted string and rect on the Brand
+  tab at six widths, taken before and after.
+- **Decision for you, D13: the small photo tiles on a phone.** They now stack one
+  per row at the full column width, 104pt tall. Two-up was tried first and rejected,
+  because the finding's 39% is per tile, and two-up left each tile at about 49%. The
+  cost is two more rows of page. The other option is two-up, with the column
+  filled by the pair. Keep one per row, or go back to two-up?
+- **Desktop unchanged above 600pt.** The test checks the card widths at 1152pt
+  against their constants.
+- **Device, Pixel 10 Pro XL emulator, portrait, font scale 1.0.** The theme cards,
+  the governing-principle card, the lead tile and the Do/Don't cards each run the
+  full column. The small tiles were not captured on the device. Screenshots in
+  `build/usability-audit/iter-5-verify/task22-*.png`.
+- Review follow-ups (`ee11286`): the dead wrap constants, a test that checked
+  nothing the fix changed (deleted), a redundant loop in the desktop test, the
+  doc comments, and the names.
 
 ## Status and handoff
 
