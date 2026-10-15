@@ -155,6 +155,16 @@ const AXIS_LOCK_DISTANCE: f32 = 6.0;
 /// frame, so the hand-off lags one frame.
 const PAGE_FORWARD: &str = "gallery-page-forward";
 
+/// The content height the page laid out last frame, in egui's temp
+/// memory under the page's own id (so one height per panel, as the
+/// scroll state is). `page` compares it with this frame's to tell a page
+/// that changed height from one the reader only scrolled.
+const PAGE_HEIGHT: &str = "gallery-page-height";
+
+/// How far a content height or an offset may differ and still count as
+/// the same: half a point, under the layout's own pixel rounding.
+const PAGE_HEIGHT_TOLERANCE: f32 = 0.5;
+
 /// One drag gesture on a sideways row: the axis it picked (`true` for
 /// vertical), `None` until its travel passes [`AXIS_LOCK_DISTANCE`].
 #[derive(Clone, Copy, Default)]
@@ -2850,6 +2860,20 @@ impl Gallery {
     /// terms: on a phone from the very first touch, the page following
     /// the finger with the kinetic fling on release. The output's
     /// `content_size` is the panel's laid-out extent.
+    ///
+    /// A panel that grows or shrinks (a banner dismissed or restored,
+    /// the window resized) is laid out again in the same frame when it
+    /// ends up shorter than the offset the frame began at. egui places
+    /// the content at the offset it stored and clamps that offset only
+    /// after the content is placed, so the first frame with the shorter
+    /// panel would be painted over-scrolled: the top of the panel under
+    /// the tab strip and blank space below it. egui does follow that frame
+    /// with one that paints the clamped page, but the Pixel was seen
+    /// keeping the over-scrolled one on screen (finding 3-A9), so the
+    /// frame is made right by itself: its second pass begins at the
+    /// clamped offset, and only that pass reaches the screen. Only a
+    /// changed height asks for it: a reader's own scrolling, the clamp at
+    /// the page's end included, takes one pass.
     fn page(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
         let ctx = ui.ctx().clone();
         let salt = page_scroll_salt(self.tab);
@@ -2865,12 +2889,14 @@ impl Gallery {
                 drag: drag_scroll(),
                 ..ScrollSource::default()
             });
+        let stored =
+            egui::scroll_area::State::load(&ctx, page_id).map_or(0.0, |state| state.offset.y);
         if forwarded != 0.0 {
-            let offset =
-                egui::scroll_area::State::load(&ctx, page_id).map_or(0.0, |state| state.offset.y);
-            area = area.vertical_scroll_offset(offset + forwarded);
+            area = area.vertical_scroll_offset(stored + forwarded);
         }
-        area.show(ui, |ui| {
+        // The offset the area lays the content out at this frame.
+        let began_at = stored + forwarded;
+        let page = area.show(ui, |ui| {
             match self.tab {
                 0 => self.brand_panel(ui),
                 1 => self.foundations_panel(ui),
@@ -2878,7 +2904,22 @@ impl Gallery {
                 _ => self.feedback_panel(ui),
             }
             ui.add_space(spacing::SPACE_6);
-        })
+        });
+
+        let height = page.content_size.y;
+        let height_id = page_id.with(PAGE_HEIGHT);
+        let previous = ctx.data_mut(|d| {
+            let previous = d.get_temp::<f32>(height_id);
+            d.insert_temp(height_id, height);
+            previous
+        });
+        let furthest = (height - page.inner_rect.height()).max(0.0);
+        if previous.is_some_and(|previous| (previous - height).abs() > PAGE_HEIGHT_TOLERANCE)
+            && began_at > furthest + PAGE_HEIGHT_TOLERANCE
+        {
+            ctx.request_discard("the page is shorter than the offset it was laid out at");
+        }
+        page
     }
 
     /// The window's chrome for one frame: the TopAppBar on Liquid Glass

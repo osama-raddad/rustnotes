@@ -55,6 +55,12 @@ struct Harness {
     meshes: Vec<egui::Rect>,
     /// Every shape the last frame painted, with its clip.
     shapes: Vec<egui::epaint::ClippedShape>,
+    /// How many passes the last frame took: one, unless the app asked
+    /// egui to lay the frame out again (`request_discard`).
+    passes: usize,
+    /// Every frame run so far, and how many of them took a second pass.
+    frames: usize,
+    multipass_frames: usize,
 }
 
 impl Harness {
@@ -81,6 +87,9 @@ impl Harness {
             focus: None,
             meshes: Vec::new(),
             shapes: Vec::new(),
+            passes: 0,
+            frames: 0,
+            multipass_frames: 0,
         };
         harness.idle(3);
         harness
@@ -103,6 +112,9 @@ impl Harness {
         self.focus = focused_node(&out.platform_output);
         self.meshes = painted_meshes(&out.shapes);
         self.shapes = out.shapes.clone();
+        self.passes = out.platform_output.num_completed_passes;
+        self.frames += 1;
+        self.multipass_frames += usize::from(1 < self.passes);
         out.drop_without_applying_deltas();
     }
 
@@ -1927,5 +1939,202 @@ fn a_touch_tap_on_plain_text_closes_the_open_select() {
     assert!(
         shows_value(&h, "Nordics", select_box.left()),
         "closing by a tap outside leaves the choice alone"
+    );
+}
+
+/// A window the height of the Pixel's page (the emulator's 448pt width,
+/// a little short of its 997pt screen once the system bars are taken
+/// off): the Feedback page overflows it by a few points only, so at the
+/// page's end the info banner and its dismiss control are still on
+/// screen.
+const PIXEL_PAGE: egui::Vec2 = egui::vec2(448.0, 940.0);
+
+/// The Feedback page on [`PIXEL_PAGE`], swiped to its end: the offset
+/// is the page's maximum, and a second swipe cannot take it further.
+fn feedback_at_its_end() -> Harness {
+    let mut h = Harness::window(PIXEL_PAGE);
+    h.app.gallery.tab = 3;
+    h.idle(3);
+    h.touch_screen();
+    let up = |h: &mut Harness| {
+        h.swipe(egui::pos2(190.0, 700.0), egui::pos2(190.0, 100.0), 10);
+        h.idle(90);
+    };
+    up(&mut h);
+    let end = h.page_offset().y;
+    assert!(
+        end > 20.0,
+        "the Feedback page must overflow the window: {end}"
+    );
+    up(&mut h);
+    assert!(
+        (h.page_offset().y - end).abs() < 0.5,
+        "the first swipe must take the page to its end: {end} -> {}",
+        h.page_offset().y
+    );
+    h
+}
+
+/// Where the last frame painted three marks on the Feedback page, top
+/// edges: the banners' label above the banners, the restore button
+/// among them, and the snackbars' label far below. `None` for a mark
+/// the frame did not paint.
+fn feedback_marks(h: &Harness) -> [Option<f32>; 3] {
+    [
+        copy::BANNERS_LABEL,
+        copy::BANNERS_RESTORE,
+        copy::SNACKBARS_LABEL,
+    ]
+    .map(|text| h.painted(text).map(|rect| rect.top()))
+}
+
+/// The marks of two frames are the same page: each is painted in both
+/// at the same place, or in neither.
+fn same_marks(a: [Option<f32>; 3], b: [Option<f32>; 3]) -> bool {
+    a.iter().zip(&b).all(|pair| match pair {
+        (Some(a), Some(b)) => (a - b).abs() < 0.5,
+        (None, None) => true,
+        _ => false,
+    })
+}
+
+/// Dismissing the info banner at the end of the Feedback page shortens
+/// the page below the offset it is scrolled to. egui lays the content out
+/// at the offset it stored, and clamps that offset only after the content
+/// is placed, so the first frame with the shorter page draws it
+/// over-scrolled: the "Banners" label half under the tab strip and blank
+/// space below the content. It is the frame the Pixel then held on screen
+/// (finding 3-A9). The page lays that frame out again, in the same frame,
+/// so what reaches the screen is the page where it settles.
+#[test]
+fn a_banner_dismissed_at_the_pages_end_leaves_the_page_clamped_in_its_first_frame() {
+    let mut h = feedback_at_its_end();
+    let before = feedback_marks(&h);
+    let close = ui_kit::icons::Icon::Close.as_char().to_string();
+    let dismiss = h
+        .painted(&close)
+        .expect("the info banner's dismiss is on screen at the page's end")
+        .center();
+
+    // The tap: the banner is still drawn in the frame that releases it,
+    // and the restore button joins it, so the page grows.
+    h.frame(finger_down(dismiss));
+    h.frame(finger_up(dismiss));
+    assert_eq!(h.passes, 1, "the release grows the page and needs one pass");
+
+    // The first frame with the banner gone: no input, no idle frames
+    // before it is read.
+    h.frame(Vec::new());
+    let first = feedback_marks(&h);
+    let first_passes = h.passes;
+
+    h.idle(3);
+    let settled = feedback_marks(&h);
+    assert!(
+        !same_marks(before, settled),
+        "dismissing the banner must move the page: {before:?} -> {settled:?}"
+    );
+    assert!(
+        same_marks(first, settled),
+        "the first frame without the banner must paint the page where it settles: \
+         {first:?} against {settled:?}"
+    );
+    assert_eq!(
+        first_passes, 2,
+        "the shorter page takes a second pass; no other frame does"
+    );
+    assert_eq!(h.passes, 1, "an idle frame takes one pass");
+}
+
+/// Restoring the banners lengthens the page, so the offset it is at stays
+/// inside it and nothing clamps: the first frame with the banners back is
+/// already the page where it settles, in one pass, with no special case
+/// for the restore button.
+#[test]
+fn restoring_the_banners_needs_no_second_pass() {
+    let mut h = feedback_at_its_end();
+    let close = ui_kit::icons::Icon::Close.as_char().to_string();
+    let dismiss = h
+        .painted(&close)
+        .expect("the info banner's dismiss")
+        .center();
+    h.frame(finger_down(dismiss));
+    h.frame(finger_up(dismiss));
+    h.idle(4);
+    let dismissed_at = h.page_offset().y;
+    let restore = h
+        .painted(copy::BANNERS_RESTORE)
+        .expect("the restore button is offered after a dismissal")
+        .center();
+
+    let multipass = h.multipass_frames;
+    h.frame(finger_down(restore));
+    h.frame(finger_up(restore));
+    h.frame(Vec::new());
+    let first = feedback_marks(&h);
+    h.idle(3);
+    assert!(
+        h.painted(copy::BANNERS_RESTORE).is_none(),
+        "the restore brings both banners back, so nothing is left to restore"
+    );
+    assert_eq!(
+        h.multipass_frames, multipass,
+        "no frame of the restore takes a second pass"
+    );
+    assert!(
+        same_marks(first, feedback_marks(&h)),
+        "the first frame with the banners back is the page where it settles"
+    );
+    assert!(
+        (h.page_offset().y - dismissed_at).abs() < 0.5,
+        "a longer page leaves the offset alone: {dismissed_at} -> {}",
+        h.page_offset().y
+    );
+}
+
+/// The second pass is for a changed page only. A reader's own scrolling
+/// of a page that does not change (a swipe past the end and the fling
+/// back, the wheel up and down) takes exactly one pass in every frame,
+/// the clamp at the end included.
+#[test]
+fn scrolling_an_unchanged_page_takes_one_pass_per_frame() {
+    let mut h = Harness::window(PIXEL_PAGE);
+    h.app.gallery.tab = 3;
+    h.idle(3);
+    h.touch_screen();
+    h.idle(3);
+    let frames = h.frames;
+    let multipass = h.multipass_frames;
+
+    // Up past the end with a fling, then back down to the top.
+    h.swipe(egui::pos2(190.0, 700.0), egui::pos2(190.0, 100.0), 10);
+    h.idle(90);
+    let end = h.page_offset().y;
+    assert!(
+        end > 20.0,
+        "the swipe must scroll the page to its end: {end}"
+    );
+    h.swipe(egui::pos2(190.0, 200.0), egui::pos2(190.0, 800.0), 10);
+    h.idle(90);
+    assert!(
+        h.page_offset().y < end - 20.0,
+        "the swipe back must scroll the page up: {end} -> {}",
+        h.page_offset().y
+    );
+    // And the wheel, down and up again.
+    h.wheel_page(30, -10.0);
+    h.wheel_page(30, 10.0);
+
+    assert!(
+        200 < h.frames - frames,
+        "the scrolling must run a few hundred frames: {}",
+        h.frames - frames
+    );
+    assert_eq!(
+        h.multipass_frames,
+        multipass,
+        "{} of the {} frames of scrolling took a second pass",
+        h.multipass_frames - multipass,
+        h.frames - frames
     );
 }
