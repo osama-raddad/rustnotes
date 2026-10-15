@@ -851,10 +851,29 @@ the dot, so a row cannot end on it.
 Scope, from the schedule and the carry-overs: night mode and the WCAG floors, the
 busy label, the swatches, the wordmark, the elevation specimens, and the Tab-to-me
 pill. Each fix had a red test first, one implementer at a time, and the gates
-after it. **No spec or quality review ran for tasks 24 to 29.** Each was checked by
-the gates and by the implementer's own red-then-green record, which the ledger's
-process does not accept as a substitute for the two reviews. Those reviews are owed
-before iteration 6 closes.
+after it. The reviews ran after the batch, in the background, one per commit or
+pair of commits. Their outcomes are below.
+
+**Review outcomes, iteration 6.**
+- 24 and 25: PASS. The busy label is tested through `Button::ui` after a review
+  found that removing the busy branch left every test green. The swatch test uses
+  the public compositor and requires `StrokeKind::Outside`.
+- 26 (wordmark): PASS, with follow-ups in `4c0d9ca`. The mark and the wordmark
+  now read one shape table, and the outline's comments were corrected. The
+  review measured the feather ring at a half-feather on three sides and a full
+  feather at the bottom, where the miter cap allows it.
+- 27 and 28: PASS, with nits, not yet made. Open: the stagger test does not check
+  the icons row, the 320 and 448 widths, or whether the phone row wraps. The pill's
+  25pt height is still under the 44pt touch floor, so the commit body's citation
+  of 1-A13 overclaims. Closing 2-A8 is right.
+- 29: CHANGES REQUESTED for two comments, fixed in `6e30249`. The ratio bar is
+  open, as above.
+- **A commit-hygiene issue.** `bdd9607`, titled for task 24's follow-up, also
+  contains task 25's follow-up in `input_tests.rs`. The two implementers shared
+  the worktree's index, so one commit swept in the other's staged hunk. The
+  content is correct, and the tests pass at `bdd9607`. The history was not
+  rewritten, because the commits were unpushed and another edit was in progress.
+  Split it, or leave it and say so in the PR.
 
 - **Task 24, the busy label (2-A9 and 2-I5), `cbd4086`.** The "Sending…" specimen
   was the disabled look, not a busy state: `Button` had no busy state. A new
