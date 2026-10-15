@@ -1498,9 +1498,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         Button::new(copy::BUTTON_DISABLED)
             .disabled()
             .ui(ui, theme, flags);
-        Button::new(copy::BUTTON_BUSY)
-            .disabled()
-            .ui(ui, theme, flags);
+        Button::new(copy::BUTTON_BUSY).busy().ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
         copy::BUTTONS_NOTE,

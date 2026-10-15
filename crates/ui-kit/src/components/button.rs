@@ -19,7 +19,9 @@
 //! turns into a drag; see [`crate::states::held_press`]), keyboard focus
 //! the FocusRing at `radius-md`, and
 //! disabled the 38% content over a 12% container where the emphasis has
-//! a container. The label is set in the theme's body face at weight 600
+//! a container, and busy that same disabled look with the label at
+//! `on-surface`, so the status a person waits on ("Sending…") stays
+//! legible while the button takes no click. The label is set in the theme's body face at weight 600
 //! ([`crate::typography::body_semibold_family`]), 13/14/16px by size,
 //! tracked open at the CSS's `letter-spacing: 0.01em`
 //! ([`LABEL_TRACKING_EM`]), and icons ride at [`IconSize::Md`], with
@@ -275,6 +277,26 @@ pub fn emphasis_look(emphasis: ButtonEmphasis, state: &WidgetState, theme: Theme
     look
 }
 
+/// The paints of a busy button: an action is running, so it is the
+/// disabled look (the same 12% container, the same border, no click, no
+/// focus) with the label lifted to `on-surface`. Disabled's 38% label is
+/// exempt from the contrast floors as an inactive component; a busy
+/// label ("Sending…") is the status the person is waiting on, so it
+/// reads at body strength: `on-surface` clears 4.5:1 on every busy
+/// container in all six themes, where 38% on-primary reads 1.0 to 1.2:1.
+pub fn busy_look(emphasis: ButtonEmphasis, theme: ThemeId) -> ButtonLook {
+    let mut look = emphasis_look(
+        emphasis,
+        &WidgetState {
+            disabled: true,
+            ..Default::default()
+        },
+        theme,
+    );
+    look.label = theme.colors().on_surface;
+    look
+}
+
 /// The button's minimum width for measured content: horizontal padding
 /// both sides, the 20px icon when one rides, the `space-2` gap between
 /// an icon and a label. An icon-only button is square: its height.
@@ -331,6 +353,7 @@ pub struct Button<'a> {
     slot: IconSlot,
     icon_only: bool,
     enabled: bool,
+    busy: bool,
 }
 
 impl Default for Button<'_> {
@@ -351,6 +374,7 @@ impl<'a> Button<'a> {
             slot: IconSlot::Leading,
             icon_only: false,
             enabled: true,
+            busy: false,
         }
     }
 
@@ -413,6 +437,15 @@ impl<'a> Button<'a> {
         self.enabled(false)
     }
 
+    /// Mark the button busy: an action is running. A busy button
+    /// neither clicks nor takes focus, like a disabled one, but its
+    /// label stays at body strength ([`busy_look`]). Name the work in
+    /// the label ("Sending…").
+    pub const fn busy(mut self) -> Self {
+        self.busy = true;
+        self
+    }
+
     /// The button's emphasis.
     pub const fn emphasis_kind(&self) -> ButtonEmphasis {
         self.emphasis
@@ -449,11 +482,13 @@ impl<'a> Button<'a> {
         // A disabled button neither clicks nor takes focus: it senses
         // nothing. egui's own add_enabled would multiply the painter's
         // opacity by Visuals::disabled_alpha on top of the spec's 38%,
-        // so the kit resolves the disabled pair itself instead.
+        // so the kit resolves the disabled pair itself instead. A busy
+        // button senses nothing either: it waits on its action.
+        let interactive = self.enabled && !self.busy;
         let response = ui.interact(
             rect,
             id,
-            if self.enabled {
+            if interactive {
                 Sense::click()
             } else {
                 Sense::hover()
@@ -464,10 +499,16 @@ impl<'a> Button<'a> {
         // the helper keeps the press while the primary button stays down.
         let hold = states::held_press(ui, &response);
         state.pressed |= hold.held;
-        if !self.enabled {
+        if !interactive {
             state.disabled = true;
         }
-        let look = emphasis_look(self.emphasis, &state, theme);
+        // Busy keeps the disabled container and swaps in a label that
+        // reads; every other state resolves as before.
+        let look = if self.busy {
+            busy_look(self.emphasis, theme)
+        } else {
+            emphasis_look(self.emphasis, &state, theme)
+        };
 
         // The press scale, held while the pointer is down and dropped
         // under reduced motion (spatial effects go, the overlay stays).
@@ -538,9 +579,8 @@ impl<'a> Button<'a> {
         // The accessibility name: the required label on an icon-only
         // button, the label text otherwise.
         let name = self.accessibility_label.unwrap_or(self.label);
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, self.enabled, name)
-        });
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, interactive, name));
 
         FocusRing::new().paint(ui, &response, theme, flags);
 
@@ -585,8 +625,8 @@ mod tests {
     use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
-        emphasis_look, label_job, min_width, Button, ButtonEmphasis, ButtonResponse, ButtonSize,
-        LABEL_TRACKING_EM, TOUCH_TARGET_MIN,
+        busy_look, emphasis_look, label_job, min_width, Button, ButtonEmphasis, ButtonResponse,
+        ButtonSize, LABEL_TRACKING_EM, TOUCH_TARGET_MIN,
     };
 
     /// Install the faces the button paints with: the icon families and
@@ -802,6 +842,29 @@ mod tests {
         }
     }
 
+    /// Busy is the disabled look with one change: the label reads at
+    /// `on-surface`. The container and the border are disabled's, so the
+    /// busy specimen sits where the disabled one does, and the disabled
+    /// look itself keeps its 38% label.
+    #[test]
+    fn busy_keeps_the_disabled_container_and_lifts_the_label() {
+        for theme in ThemeId::ALL {
+            let colors = theme.colors();
+            let name = theme.name();
+            for emphasis in ButtonEmphasis::ALL {
+                let disabled = emphasis_look(*emphasis, &state("disabled"), *theme);
+                let busy = busy_look(*emphasis, *theme);
+                assert_eq!(busy.fill, disabled.fill, "{name} {emphasis:?}: fill");
+                assert_eq!(busy.border, disabled.border, "{name} {emphasis:?}: border");
+                assert_eq!(busy.label, colors.on_surface, "{name} {emphasis:?}: label");
+                assert_ne!(
+                    busy.label, disabled.label,
+                    "{name} {emphasis:?}: disabled keeps its 38% label"
+                );
+            }
+        }
+    }
+
     /// The width math: horizontal padding both sides, the 20px icon and
     /// the space-2 gap when one rides beside a label, and the height
     /// alone for an icon-only button (it is square, its own touch
@@ -965,6 +1028,29 @@ mod tests {
             .drop_without_applying_deltas();
         }
         assert_eq!(fired, 0, "a disabled button never fires");
+
+        // A busy button waits on its action: the same two events, no fire.
+        for pass in 2..4 {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::PointerMoved(pos.unwrap()));
+            input.events.push(egui::Event::PointerButton {
+                pos: pos.unwrap(),
+                button: egui::PointerButton::Primary,
+                pressed: pass == 2,
+                modifiers: Default::default(),
+            });
+            ctx.run_ui(input, |ui| {
+                let response = Button::new("Sending…")
+                    .busy()
+                    .ui(ui, ThemeId::Light, &flags);
+                if response.clicked {
+                    fired += 1;
+                }
+                assert!(response.state.disabled, "busy reads as inactive");
+            })
+            .drop_without_applying_deltas();
+        }
+        assert_eq!(fired, 0, "a busy button never fires");
     }
 
     /// One frame of a press script: `events` at `time` seconds (the clock

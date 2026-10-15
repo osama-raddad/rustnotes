@@ -217,6 +217,35 @@ fn text_roles_clear_their_wcag_floors() {
     }
 }
 
+/// The busy button's label ("Sending…") over its container over the
+/// canvas, for every emphasis in all six themes, clears the 4.5:1 body
+/// floor (2-A9, 2-I5). Busy is an active state, so the disabled label's
+/// documented 38% does not apply to it; the three dark themes are the
+/// night-mode half of the check.
+#[test]
+fn busy_label_clears_the_body_floor_in_all_six_themes() {
+    use crate::components::{busy_look, ButtonEmphasis};
+    use crate::states::composite_over;
+
+    let mut failures = Vec::new();
+    for theme in ThemeId::ALL {
+        let c = theme.colors();
+        for emphasis in ButtonEmphasis::ALL {
+            let look = busy_look(*emphasis, *theme);
+            let fill = composite_over(look.fill, c.surface);
+            let label = composite_over(look.label, fill);
+            let got = contrast(label, fill);
+            if got < 4.5 {
+                failures.push(format!(
+                    "{} {emphasis:?}: busy label on its fill: contrast {got:.2} < 4.5 for {label:?} on {fill:?}",
+                    theme.name()
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// The named spacing lookups return only approved values: the README
 /// scale plus the documented 1px hairline exception, exactly.
 #[test]
