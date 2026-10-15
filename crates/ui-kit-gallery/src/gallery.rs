@@ -2785,10 +2785,15 @@ impl Gallery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ui_kit::components::metric_card::MIN_WIDTH;
 
     /// The narrowest phone the layout guard holds the panels to: 360pt,
     /// the common small Android width.
     const PHONE_WIDTH: f32 = 360.0;
+
+    /// The Pixel emulator's window, 384pt: the width the usability pass
+    /// saw the metric cards squeezed at.
+    const PIXEL_WIDTH: f32 = 384.0;
 
     /// A desktop window, wide enough for every two-column layout.
     const DESKTOP_WIDTH: f32 = 1200.0;
@@ -2965,6 +2970,100 @@ mod tests {
                     body.right(),
                 );
             }
+        }
+    }
+
+    /// Lay the Components tab's metric row out on a window `width` wide,
+    /// inside the page's margins, and return the card bodies it painted
+    /// (the rects filled with the card surface) with the right edge of
+    /// the width the page gives the row.
+    fn metric_cards(width: f32) -> (Vec<Rect>, f32) {
+        let theme = ThemeId::Light;
+        let ctx = egui::Context::default();
+        install(theme, &ctx);
+        apply_theme(theme, &ctx);
+        let surface = theme.colors().surface_container_low;
+        let mut bodies = Vec::new();
+        let mut visible_right = f32::NAN;
+        // The first pass binds the installed faces; the next let the
+        // scroll row settle.
+        for _ in 0..3 {
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(width, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::default())
+                        .show(ui, |ui| {
+                            egui::Frame::default()
+                                .inner_margin(content_margin())
+                                .show(ui, |ui| {
+                                    visible_right = ui.max_rect().right();
+                                    metrics_group(ui, theme);
+                                });
+                        });
+                },
+            );
+            bodies.clear();
+            for clipped in &out.shapes {
+                filled_rects(&clipped.shape, surface, &mut bodies);
+            }
+            out.drop_without_applying_deltas();
+        }
+        (bodies, visible_right)
+    }
+
+    /// Collect the rects `shape` fills with `fill`. A frame with a shadow
+    /// paints its shadow and its fill as one nested shape, so the walk
+    /// descends into those.
+    fn filled_rects(shape: &egui::Shape, fill: Color32, found: &mut Vec<Rect>) {
+        match shape {
+            egui::Shape::Rect(rect) if rect.fill == fill => found.push(rect.rect),
+            egui::Shape::Vec(nested) => {
+                nested
+                    .iter()
+                    .for_each(|shape| filled_rects(shape, fill, found));
+            }
+            _ => {}
+        }
+    }
+
+    /// The metric row keeps every card it paints at or above the kit's
+    /// minimum on a phone window, and runs on past the window's edge to
+    /// be scrolled to. A horizontal scroll caps its content at the
+    /// visible width, so before the cards held a minimum the row gave
+    /// each card what was left of that width: the second card came out
+    /// narrow and the third one narrower, their labels broken a letter
+    /// to a line. Card three sits wholly beyond the row's clip at this
+    /// width, and a frame outside the clip paints nothing, so the test
+    /// holds the cards that do paint.
+    #[test]
+    fn the_metric_row_scrolls_instead_of_squeezing_its_cards() {
+        for width in [PHONE_WIDTH, PIXEL_WIDTH] {
+            let (bodies, visible_right) = metric_cards(width);
+            assert!(
+                bodies.len() >= 2,
+                "{width}pt: the row painted {} cards; at least the first two sit in view",
+                bodies.len()
+            );
+            for (index, body) in bodies.iter().enumerate() {
+                assert!(
+                    body.width() >= MIN_WIDTH - 0.5,
+                    "{width}pt: card {} is {}pt wide; the minimum is {MIN_WIDTH}pt",
+                    index + 1,
+                    body.width()
+                );
+            }
+            assert!(
+                bodies.iter().any(|body| body.right() > visible_right + 0.5),
+                "{width}pt: every card fits inside the window, so the row squeezed them \
+                 instead of scrolling"
+            );
         }
     }
 
