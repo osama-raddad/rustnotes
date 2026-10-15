@@ -11,12 +11,18 @@
 //! `text-muted`. Corners at `radius-lg`, gutters `space-4`, rule pitch
 //! `space-6`.
 //!
+//! The 960 is the preview card's width and the denominator of each
+//! block's share. The four blocks and their three 16-unit gutters take
+//! 944 of it, and the band paints those 944 units across the whole
+//! column, so the proportions between the blocks are the preview's and
+//! the guest paints at about 10% of the band (96 of 944).
+//!
 //! The adaptation (documented judgment): the words gain the eyebrow the
 //! issue's acceptance names, and the V mark at its brand-placement
 //! floor of 96px stands above it, so the composition reads mark,
 //! eyebrow, display headline, standfirst. The canvas leads (the band
 //! blocks are the only fills), the accent stays a guest (the tertiary
-//! block is the narrowest, 10% of the grid), and the headline clears
+//! block is the narrowest, about 10% of the band), and the headline clears
 //! the README's 2.5x pairing floor over the standfirst through
 //! [`crate::typography::pairing_holds`]. The roles re-skin per theme:
 //! Forest, mint, Charcoal, Bronze; Deep Teal, teal tint, Ink,
@@ -43,10 +49,12 @@ pub const BAND_HEIGHT: f32 = 96.0;
 /// How far the blocks bleed past the band's top, px.
 pub const BAND_BLEED: f32 = 16.0;
 
-/// The 960-unit grid the preview's band is drawn on: the denominator
-/// of each block's share (the guest's 96 units are the 10% the ratio
-/// rule gives the accent). The laid-out band spans the 944 units its
-/// blocks and gutters take, scaled to the column ([`band_layout`]).
+/// The preview card's width in grid units, and the denominator of each
+/// block's share in the preview (the guest's 96 units are the 10% the
+/// ratio rule gives the accent). The blocks and gutters take only 944
+/// of the 960, so the painted band divides by that extent instead
+/// ([`band_layout`]) and the guest paints at about 10.2%. Only the
+/// tests use this constant: it states the preview's shares.
 pub const BAND_UNITS: f32 = 960.0;
 
 /// The band's left margin, in grid units: none. The preview's 32-unit
@@ -103,11 +111,15 @@ pub const BAND_BLOCKS: &[(f32, BandRole)] = &[
 /// none, in front) span the band's grid extent, 944 units, and that
 /// extent is scaled to the whole `width`, so the lead block starts on
 /// the column's left edge and the guest ends on its right edge. The
-/// blocks keep the 960-unit shares of [`BAND_BLOCKS`] against one
-/// another and against the gutters. Pure geometry, so the proportions
-/// test without a context.
+/// blocks keep their proportions to one another and to the gutters;
+/// their shares of the painted band are `units / 944`, not the
+/// preview's `units / 960` ([`BAND_UNITS`]). Pure geometry, so the
+/// proportions test without a context.
 pub fn band_layout(width: f32) -> Vec<(f32, f32)> {
     // The last block's right edge in grid units, which the width fills.
+    // The preview card is 960 units wide (`BAND_UNITS`), but its
+    // blocks and gutters take 944 of them, so 944 is what the band
+    // spans and what the width is divided by.
     let extent = BAND_MARGIN_UNITS
         + BAND_BLOCKS.iter().map(|(units, _)| units).sum::<f32>()
         + BAND_GUTTER_UNITS * (BAND_BLOCKS.len() - 1) as f32;
@@ -166,7 +178,8 @@ impl Cover {
         // bleed the preview draws.
         let (band, _) = ui.allocate_exact_size(Vec2::new(width, BAND_HEIGHT), Sense::hover());
         let block_radius = CornerRadius::same(radii::RADIUS_LG as u8);
-        for ((x, w), (_, role)) in band_layout(width).iter().zip(BAND_BLOCKS) {
+        let layout = band_layout(width);
+        for ((x, w), (_, role)) in layout.iter().zip(BAND_BLOCKS) {
             let rect = Rect::from_min_size(
                 Pos2::new(band.left() + x, band.top() - BAND_BLEED),
                 Vec2::new(*w, BAND_HEIGHT + BAND_BLEED),
@@ -176,7 +189,7 @@ impl Cover {
         }
         // Three hairlines cut from the surface ground across the strip,
         // the editorial ruled-stock pattern.
-        let margin = band_layout(width)[0].0;
+        let margin = layout[0].0;
         for line in 1..=3u32 {
             let y = band.top() + BAND_RULE_PITCH * line as f32 + 0.5;
             ui.painter().hline(
@@ -236,9 +249,9 @@ impl Cover {
 
 #[cfg(test)]
 mod tests {
-    use crate::components::brand_showcase::copy_passes_voice_checks;
     use egui::Rect;
 
+    use crate::components::brand_showcase::copy_passes_voice_checks;
     use crate::theme::ThemeId;
     use crate::typography::{pairing_holds, TypeStyle};
 
@@ -305,8 +318,7 @@ mod tests {
     /// and gutters take 944 units (416 + 224 + 160 + 96 and three
     /// gutters of 16), so at 472px the scale is one half: the lead
     /// block starts at 0 and runs 208px wide, the second starts a
-    /// gutter later at 216px, and the guest ends at 472px. The band
-    /// once ended at 944 of the 960 units, short of the column.
+    /// gutter later at 216px, and the guest ends at 472px.
     #[test]
     fn band_layout_scales_the_grid() {
         let layout = band_layout(472.0);
@@ -413,11 +425,11 @@ mod tests {
     /// block on the column's left edge and the guest block on its right
     /// edge. The band once ended at 944 of 960 grid units, so it stopped
     /// short of the content column's right edge by 16 units: 6 pt on a
-    /// phone. The columns start off the whole point and are fractional
-    /// wide, as a phone's are, since that is where an edge that was
-    /// computed rather than placed would show.
+    /// phone. Each column's origin or width is off the pixel grid, as a
+    /// phone's are, since that is where an edge that was computed rather
+    /// than placed would show.
     #[test]
-    fn the_painted_band_fills_the_column_in_four_whole_blocks() {
+    fn the_painted_band_spans_the_column() {
         let columns = [
             Rect::from_min_size(egui::pos2(20.3, 30.0), egui::vec2(361.7, 700.0)),
             Rect::from_min_size(egui::pos2(16.0, 0.0), egui::vec2(320.5, 700.0)),
@@ -494,11 +506,11 @@ mod tests {
                 }
 
                 // The proportions: each block's width keeps its share of
-                // the lead block's.
+                // the lead block's, to the same tolerance as the gutters.
                 for (block, (units, _)) in blocks.iter().zip(BAND_BLOCKS) {
                     let want = blocks[0].rect.width() * units / BAND_BLOCKS[0].0;
                     assert!(
-                        (block.rect.width() - want).abs() < 1e-2,
+                        (block.rect.width() - want).abs() < 1e-3,
                         "{name}: a {units}-unit block is {} wide, wanted {want}",
                         block.rect.width()
                     );
