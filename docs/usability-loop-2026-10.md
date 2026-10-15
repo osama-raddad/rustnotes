@@ -900,6 +900,33 @@ Not done in iteration 6, and open:
 - **Task 27's trailer.** Amended from Sonnet to Haiku, which rewrites the commit
   hash but not its content.
 
+## Iteration 7: Rust Notes touch flows and the keyboard (partial)
+
+A partial device pass on the Pixel, portrait 448pt, font scale 1.0. No triage or
+fix batch has run for this iteration yet.
+
+Checked, and working:
+- The list renders: a note row, its date, the red delete cross, and the "+" button.
+- "+" opens "New note" with the keyboard up. The in-app back arrow saves the note,
+  and the list counts it. Reopening shows the saved text.
+- The two-tap delete works. The first tap arms the cross, and a second tap within
+  the 2-second arm window (`DELETE_ARM_WINDOW`, `lib.rs:42`) deletes the note. A
+  second tap after the window re-arms it, which is the design.
+- The Settings tab shows the display scale, text scale, window, size class, layout,
+  appearance, version and storage. Nothing wrong was seen.
+
+A test-harness artifact, not an app defect: `adb shell input text` with a space
+drops everything after the first space on this keyboard. "Iterationabcdefgh" typed
+without a space arrives whole, so the saved "Iteration" was the input, not the
+autosave. Testers should type without spaces, or send the spaces another way.
+
+Not checked yet, so iteration 7 is open:
+- Swipe-to-delete, pull-to-refresh, the editor's hold-to-select, and autosave
+  timing with the note open.
+- The keyboard covering the editor in landscape (4-A4).
+- The size of the delete cross and the "+" button (1-A13), and the date's alignment
+  in the note row (1-I9).
+
 ## Status and handoff
 
 Paused at the user's request during iteration 5, task 20. Nothing has been
