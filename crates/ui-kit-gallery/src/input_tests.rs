@@ -1217,6 +1217,121 @@ fn the_bar_centres_its_wordmark_and_pads_its_ends() {
     assert!(off.is_empty(), "{}", off.join("\n"));
 }
 
+/// The bar's bottom edge is its own border and nothing beside it: no
+/// straight rule runs along the edge, under the pane's rounded corners
+/// or against its flat part. egui's top panel paints a 1pt separator
+/// line across its whole edge by default (`Panel::show_separator_line`),
+/// and the bar's pane stands flush on that edge: on the flat part the
+/// line lay against the pane's border and doubled it, at each rounded
+/// corner the curve lifted off the line and left a notch, and the line
+/// ran on past the corners to the window's edges. The pane's border is
+/// the one bottom edge, so the test finds the pane by that border (a bar
+/// that lost it fails the lookup) and looks for any line segment or
+/// thin rect, wide enough to cover the pane's flat bottom, within
+/// `NEAR` of the edge.
+#[test]
+fn the_bars_bottom_edge_is_its_border_alone() {
+    use ui_kit::tokens::radii::RADIUS_LG;
+
+    // A rule this near the bottom edge lies on the 1pt border (drawn
+    // inside the pane) or against it.
+    const NEAR: f32 = 2.0;
+    // The thickest a filled rect can be and still read as a rule.
+    const RULE: f32 = 2.0;
+
+    let mut off = Vec::new();
+    for width in [320.0, 384.0, 600.0, 1024.0, 1440.0] {
+        let mut h = Harness::window(egui::vec2(width, 800.0));
+        // The Feedback panel: the page chrome only, as the other bar
+        // tests run it.
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        let at = format!("at {width}pt");
+        let pane = bar_pane(&h, ThemeId::Light);
+        // The pane's flat bottom: its width between the rounded corners.
+        let flat = pane.shrink2(egui::vec2(RADIUS_LG, 0.0));
+
+        let mut rules: Vec<(&str, egui::Rect)> = Vec::new();
+        for (points, stroke) in painted_segments(&h) {
+            if (points[0].y - points[1].y).abs() < 0.01 {
+                let line = egui::Rect::from_two_pos(points[0], points[1]);
+                rules.push(("a line", line.expand2(egui::vec2(0.0, stroke.width / 2.0))));
+            }
+        }
+        for (shape, _) in painted_rects(&h) {
+            if shape.rect.height() <= RULE {
+                rules.push(("a thin rect", shape.rect));
+            }
+        }
+        for (kind, rule) in rules {
+            let along_the_edge =
+                rule.top() < pane.bottom() + NEAR && rule.bottom() > pane.bottom() - NEAR;
+            let covers_the_flat = rule.left() <= flat.left() && flat.right() <= rule.right();
+            if along_the_edge && covers_the_flat {
+                off.push(format!(
+                    "{at} {kind} {rule:?} runs along the bar's bottom edge y {}, x {} to {}",
+                    pane.bottom(),
+                    pane.left(),
+                    pane.right()
+                ));
+            }
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// The tab strip stands where it stood under the bar when egui's
+/// separator line ran along the bar's bottom edge: its 1pt rule, the
+/// strip's lowest line, lies 85pt under the bar's bottom edge. The line
+/// had reserved 1pt of room in the top panel's outer margin; turning it
+/// off (`the_bars_bottom_edge_is_its_border_alone`) gives that room up
+/// unless the clearance keeps it, and the page below would slide up 1pt.
+/// The rule is the 1pt-tall rect as wide as the bar, under it. The 85pt
+/// is a golden value, as `the_bars_controls_keep_their_places` has: a
+/// deliberate change to the strip's height or to the bar's clearance
+/// re-records it.
+#[test]
+fn the_tab_strip_keeps_its_place_under_the_bar() {
+    const SLACK: f32 = 0.02;
+    const RECORDED: f32 = 85.0;
+
+    let mut off = Vec::new();
+    for width in [320.0, 384.0, 600.0, 1024.0, 1440.0] {
+        let mut h = Harness::window(egui::vec2(width, 800.0));
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        let pane = bar_pane(&h, ThemeId::Light);
+        let rules: Vec<egui::Rect> = painted_rects(&h)
+            .into_iter()
+            .map(|(shape, _)| shape.rect)
+            .filter(|rect| {
+                rect.height() == 1.0
+                    && rect.top() > pane.bottom()
+                    && rect.left() == pane.left()
+                    && rect.right() == pane.right()
+            })
+            .collect();
+        match rules.as_slice() {
+            [rule] => {
+                let under = rule.top() - pane.bottom();
+                if (under - RECORDED).abs() > SLACK {
+                    off.push(format!(
+                        "at {width}pt the tab strip's rule {rule:?} lies {under}pt under the \
+                         bar's bottom edge {}, not the recorded {RECORDED}pt",
+                        pane.bottom()
+                    ));
+                }
+            }
+            _ => off.push(format!(
+                "at {width}pt the tab strip paints {} rules as wide as the bar under it, \
+                 not one: {rules:?}",
+                rules.len()
+            )),
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
 /// Keyboard focus on the bar's theme trigger rings it inside the bar.
 /// With the call to action shed the labelled trigger ends the bar's
 /// row and its box runs on into the bar's padding (`ThemeTrigger::
@@ -1774,6 +1889,27 @@ fn painted_rects(h: &Harness) -> Vec<(egui::epaint::RectShape, egui::Rect)> {
     let mut out = Vec::new();
     for clipped in &h.shapes {
         walk(&clipped.shape, clipped.clip_rect, &mut out);
+    }
+    out
+}
+
+/// Every straight line segment the last frame painted (`hline`, `vline`
+/// and `line_segment` all paint one), with its stroke.
+fn painted_segments(h: &Harness) -> Vec<([egui::Pos2; 2], egui::Stroke)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<([egui::Pos2; 2], egui::Stroke)>) {
+        match shape {
+            egui::Shape::LineSegment { points, stroke } => out.push((*points, *stroke)),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.shapes {
+        walk(&clipped.shape, &mut out);
     }
     out
 }

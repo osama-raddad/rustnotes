@@ -2972,9 +2972,24 @@ impl Gallery {
         // call to action would not fit beside the wordmark, and the
         // Tabs strip below the bar already switches every panel.
         let narrow = root.available_width() < NARROW_WIDTH;
-        // The sticky bar, floating on the canvas with its clearance.
+        // The sticky bar, floating on the canvas with its clearance. The
+        // bar is a rounded pane with a border of its own, so the
+        // panel's separator line is off: a full-width straight line on
+        // the panel's edge lay against that border and doubled it, and
+        // ran on under the pane's rounded corners. The panel reserved
+        // the line's room in its outer margin; the clearance keeps it,
+        // so the page below the bar does not move.
+        let separator_room = root
+            .style()
+            .visuals
+            .widgets
+            .noninteractive
+            .bg_stroke
+            .width
+            .round();
         egui::Panel::top("vynatix-app-bar")
-            .frame(egui::Frame::default().outer_margin(chrome_margin(insets.top, 0.0)))
+            .show_separator_line(false)
+            .frame(egui::Frame::default().outer_margin(chrome_margin(insets.top, separator_room)))
             .show(root, |ui| self.app_bar(ui, &ctx, narrow));
 
         egui::CentralPanel::default()
