@@ -206,9 +206,10 @@ impl App {
             Screen::Editor => {
                 let new_note = self.edit_id == 0;
                 let mut back = false;
+                // Not capped: a centred 640 pt column pushed the typed text
+                // into a landscape phone's middle (finding 7-A2).
                 Scaffold::new(pal, m)
                     .background(pal.surface)
-                    .limit_body_width()
                     .top_bar(|u| back = editor_bar(u, new_note, true, pal, m))
                     .show(ui, |ui, _| self.editor_body(ui, pal, m));
                 if back {
@@ -1568,6 +1569,63 @@ mod tests {
             pass.colour_at(pos2(2.0, 400.0)),
             Some(pal.bg),
             "the canvas still fills the window"
+        );
+    }
+
+    /// Finding 7-A2. On the Pixel in landscape the editor's typed text started
+    /// 142 pt in from the usable left edge: the editor caps its body at
+    /// `max_content_width` and centres it, so the column sat inside the
+    /// landscape window. Upright the text starts `sp(3)` in from the edge. The
+    /// text now starts `sp(3)` in from the usable edge in landscape too, and
+    /// the bar's title stays where it was, `CUTOUT` plus the back button's 56.
+    #[test]
+    fn landscape_editor_text_starts_at_the_margin() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "editor-margin-landscape");
+        let id = app.notes[0].id;
+        app.open_editor(id);
+        app.buffer = "typed text".to_owned();
+        let land = landscape_pass(&mut app, &ctx);
+        let text_x = find(&land.text, "typed text").rect.left();
+        let title_x = find(&land.text, "Edit note").rect.left();
+
+        // The same editor and text upright, under the same vertical insets.
+        let ctx_up = egui::Context::default();
+        let mut upright = app_with_two_notes(&ctx_up, "editor-margin-portrait");
+        let up_id = upright.notes[0].id;
+        upright.open_editor(up_id);
+        upright.buffer = "typed text".to_owned();
+        upright.nav.settle();
+        let insets = egui::epaint::MarginF32 {
+            top: 59.0,
+            bottom: 34.0,
+            ..Default::default()
+        };
+        let port = run_pass_insets(
+            &mut upright,
+            &ctx_up,
+            vec2(400.0, 800.0),
+            insets,
+            vec![],
+            0.0,
+        );
+        let upright_x = find(&port.text, "typed text").rect.left();
+
+        let margin = Metrics::DEFAULT.sp(3);
+        assert!(
+            near(upright_x, margin),
+            "the premise: upright the text starts {margin} in, at {upright_x}"
+        );
+        assert!(
+            near(text_x, CUTOUT + margin),
+            "landscape text at {text_x}, wanted {} (usable left {CUTOUT} + sp(3)); \
+             the title is at {title_x}",
+            CUTOUT + margin
+        );
+        assert!(
+            near(title_x, CUTOUT + 56.0),
+            "the bar is unchanged: title at {title_x}, wanted {}",
+            CUTOUT + 56.0
         );
     }
 }
