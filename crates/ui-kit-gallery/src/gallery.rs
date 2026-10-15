@@ -148,27 +148,28 @@ fn content_margin() -> egui::Margin {
 /// The window height under which the gallery's chrome compacts, for the
 /// phone in landscape (finding 4-A2): the tab description is dropped (as
 /// it is on a phone in portrait) and the chrome's vertical gaps give way
-/// to [`SHORT_GAP`]. The full chrome, the bar and the tab strip
-/// included, is 245pt tall with the description on two lines and 263pt
-/// on three, before the system bars' insets, so it leaves the page half
-/// of the window only from 490 to 526pt up. Landscape phones are 360 to
-/// 448pt tall (the Pixel 448, iPhones 375 to 440), under 500; a portrait
-/// phone is 568pt or more and a landscape tablet 600pt or more, over it.
-/// The window's height is the root `Ui`'s, the insets included.
+/// to [`SHORT_GAP`]. The window's height is the root `Ui`'s, the system
+/// bars' insets included.
+///
+/// Landscape phones are 360 to 448pt tall (the Pixel 448, iPhones 375 to
+/// 440), under 500; a portrait phone is 568pt or more and a landscape
+/// tablet 600pt or more, over it. As a check, with no insets at all the
+/// full chrome (the bar and the tab strip included) is 245pt tall with
+/// the description on two lines and 263pt on three, so it leaves the page
+/// half of the window only from 490 to 526pt up; insets only raise that.
 pub(crate) const SHORT_WINDOW_HEIGHT: f32 = 500.0;
 
 /// Each of the chrome's vertical gaps under the bar in a short window
 /// (see [`SHORT_WINDOW_HEIGHT`]): the bar's clearance below, the content
 /// panel's margin above the tab strip, and the space between the strip
-/// and the page. `space-1`, because the room is tight: on the Pixel in
-/// landscape the host's insets take 76pt of the 448, the bar with its
-/// clearance above 80pt and the tab strip 49pt more, and half the window
-/// is the page's, which leaves 19pt for the three gaps and the bar's
-/// separator room (1pt). They take 13pt of it, and the page keeps 230pt,
-/// 51% of the window. The bar's clearance above stays as it is, so the
-/// bar, and the popovers that hang from it, stand where they stand in a
-/// window of any height; the content panel's margin below the page goes
-/// (there is `page`'s own 24pt of space at the end of its scroll).
+/// and the page. `space-1`, because the room is tight: `space-2` would
+/// take 25pt (three gaps and the bar's 1pt separator room) where the
+/// Pixel in landscape has 19pt for them once the page has half the
+/// window; the budget is in `a_short_window_keeps_half_its_height_for_the_page`.
+/// The bar's clearance above stays as it is, so the bar, and the
+/// popovers that hang from it, stand where they stand in a window of any
+/// height. The content panel's margin below the page goes, since `page`
+/// ends its scroll with 24pt of space of its own.
 const SHORT_GAP: f32 = spacing::SPACE_1;
 
 /// A drag on a sideways row picks its axis once it has travelled this
@@ -3046,6 +3047,9 @@ impl Gallery {
         // for the page: the gaps under the bar shrink to `SHORT_GAP`, and
         // the tab description below the strip goes.
         let short = root.available_height() < SHORT_WINDOW_HEIGHT;
+        // `full` in a window of full height, `SHORT_GAP` in a short one.
+        // The bar's clearance above is not one of these: it stays, and
+        // only the gaps under the bar are compressed.
         let gap = |full: f32| if short { SHORT_GAP } else { full };
         let chrome_margin = |top: f32, bottom: f32| egui::Margin {
             left: (PAGE_GUTTER + side) as i8,
@@ -3054,8 +3058,10 @@ impl Gallery {
             bottom: (gap(spacing::SPACE_3) + bottom) as i8,
         };
         // The content panel's margin: the gutter at each side as ever.
-        // The 24px rhythm above the strip and below the page is what the
-        // short window gives up, the page's foot altogether.
+        // A short window gives up the 24px rhythm above the strip (for
+        // `SHORT_GAP`) and below the page (no margin at all, as the page
+        // ends with space of its own). It names `SHORT_GAP` rather than
+        // using `gap`, which would repeat `content_margin`'s 24px here.
         let panel_margin = if short {
             egui::Margin {
                 top: SHORT_GAP as i8,

@@ -1567,16 +1567,7 @@ fn the_tab_strip_keeps_its_place_under_the_bar() {
         h.app.gallery.tab = 3;
         h.idle(3);
         let pane = bar_pane(&h, ThemeId::Light);
-        let rules: Vec<egui::Rect> = painted_rects(&h)
-            .into_iter()
-            .map(|(shape, _)| shape.rect)
-            .filter(|rect| {
-                (rect.height() - 1.0).abs() <= SLACK
-                    && rect.top() > pane.bottom()
-                    && (rect.left() - pane.left()).abs() <= SLACK
-                    && (rect.right() - pane.right()).abs() <= SLACK
-            })
-            .collect();
+        let rules = tab_strip_rules(&h, pane);
         match rules.as_slice() {
             [rule] => {
                 let under = rule.top() - pane.bottom();
@@ -1627,6 +1618,20 @@ fn tab_strip_rules(h: &Harness, pane: egui::Rect) -> Vec<egui::Rect> {
 /// shrink to 4pt and the margin below the page goes (the page keeps
 /// 230pt). The bar, its clearance above it and the strip stay as they
 /// are, so the strip's rule lies 57pt under the bar, not 85pt.
+///
+/// The budget that sets `SHORT_GAP` to `space-1`: half the Pixel's 448pt
+/// is 224pt; its insets (76pt), the bar with its 12pt clearance above
+/// (80pt) and the strip (49pt) leave 19pt for the three gaps under the
+/// bar and the bar's 1pt separator room. Gaps of 4pt take 13pt of it;
+/// gaps of `space-2` would take 25pt, and the page would fall to 218pt,
+/// 6pt under half.
+///
+/// Three things are asserted for each window: the page keeps half of it
+/// (its `inner_rect` is at least half the window's height, and clear of
+/// the bottom inset), the description is not painted, and the strip is
+/// still there (its rule lies under the bar, which stands 12pt under the
+/// status bar). What gives way is the description and the gaps, not the
+/// strip.
 ///
 /// The page's visible area is the scroll output's `inner_rect`
 /// (`Gallery::page_rect`), checked against the clip rect the page's
@@ -1774,7 +1779,7 @@ fn a_window_that_is_not_short_keeps_its_full_chrome() {
             159.0,
         ),
         (
-            "a window as tall as the short ones are not",
+            "a window exactly at the short threshold",
             egui::vec2(997.0, crate::gallery::SHORT_WINDOW_HEIGHT),
             24.0,
             24.0,
