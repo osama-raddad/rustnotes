@@ -2790,3 +2790,195 @@ fn scrolling_an_unchanged_page_takes_one_pass_per_frame() {
         h.frames - frames
     );
 }
+
+/// Every text shape the last frame painted, with its rect and the clip it
+/// was painted under.
+fn painted_text(h: &Harness) -> Vec<(String, egui::Rect, egui::Rect)> {
+    fn walk(
+        shape: &egui::Shape,
+        clip: egui::Rect,
+        out: &mut Vec<(String, egui::Rect, egui::Rect)>,
+    ) {
+        match shape {
+            egui::Shape::Text(text) => out.push((
+                text.galley.text().to_owned(),
+                egui::Rect::from_min_size(text.pos, text.galley.size()),
+                clip,
+            )),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, clip, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &h.shapes {
+        walk(&clipped.shape, clipped.clip_rect, &mut out);
+    }
+    out
+}
+
+/// Lay the Components page out in a `width`-wide window and list every
+/// place its content passes the page's right gutter (the window less
+/// [`PAGE_GUTTER`](crate::gallery::PAGE_GUTTER)), the bar's and the tab
+/// strip's right edge. The page's own content is told from the bar and the
+/// strip by its clip, which starts at the page's top; and the page's own
+/// shapes from the sideways rows' by the clip's left edge: the page paints
+/// under a clip as wide as the window, a row under its scroll area's, which
+/// starts at the gutter.
+///
+/// What it holds, to within a point of slack: every page rect that paints a
+/// fill or a stroke, and every painted string of the page, ends at or inside
+/// the gutter. The rightmost and leftmost of those rects sit on the gutter's
+/// two edges, so the margins match. Every sideways row clips at the gutter,
+/// and on a phone at least one row has content beyond its clip to scroll to.
+/// The page must paint at least one rect, one string and one row, or the
+/// report says so instead of passing on empty lists.
+fn components_gutter_report(width: f32) -> Vec<String> {
+    const SLACK: f32 = 1.0;
+    let gutter = crate::gallery::PAGE_GUTTER;
+    let right = width - gutter;
+
+    let mut h = Harness::window(egui::vec2(width, 855.0));
+    h.app.gallery.tab = 2;
+    h.idle(6);
+    let page = h
+        .app
+        .gallery
+        .page_rect
+        .expect("the chrome has shown the page");
+    let in_page = |clip: egui::Rect| clip.top() >= page.top() - SLACK;
+    let in_row = |clip: egui::Rect| clip.left() > SLACK;
+
+    let mut off = Vec::new();
+    let rects = painted_rects(&h);
+    // The page's own rects: each visible one (a fill or a stroke) is as far
+    // right as the gutter.
+    let page_rects: Vec<egui::Rect> = rects
+        .iter()
+        .filter(|(shape, clip)| {
+            in_page(*clip) && !in_row(*clip) && (shape.fill.a() > 0 || shape.stroke.width > 0.0)
+        })
+        .map(|(shape, _)| shape.rect)
+        .collect();
+    if page_rects.is_empty() {
+        off.push(format!("at {width}pt the page painted no rect"));
+    }
+    let rightmost = page_rects
+        .iter()
+        .map(|rect| rect.right())
+        .fold(0.0, f32::max);
+    let leftmost = page_rects
+        .iter()
+        .map(|rect| rect.left())
+        .fold(f32::INFINITY, f32::min);
+    if right + SLACK < rightmost {
+        off.push(format!(
+            "at {width}pt the page's rightmost rect ends at x {rightmost}, {}pt past the \
+             gutter at x {right}",
+            rightmost - right
+        ));
+    } else if (rightmost - right).abs() > SLACK || (leftmost - gutter).abs() > SLACK {
+        off.push(format!(
+            "at {width}pt the page's rects run from x {leftmost} to x {rightmost}; the margins \
+             are {leftmost} on the left and {} on the right, and should both be {gutter}",
+            width - rightmost
+        ));
+    }
+    // The page's paragraphs and labels.
+    let texts: Vec<f32> = painted_text(&h)
+        .into_iter()
+        .filter(|(_, _, clip)| in_page(*clip) && !in_row(*clip))
+        .map(|(_, rect, _)| rect.right())
+        .collect();
+    if texts.is_empty() {
+        off.push(format!("at {width}pt the page painted no text"));
+    }
+    let text_right = texts.iter().copied().fold(0.0, f32::max);
+    if right + SLACK < text_right {
+        off.push(format!(
+            "at {width}pt the page's text ends at x {text_right}, {}pt past the gutter at \
+             x {right}",
+            text_right - right
+        ));
+    }
+    // The rows: the clips narrower than the window, one per distinct rect.
+    let mut rows: Vec<egui::Rect> = Vec::new();
+    for clipped in &h.shapes {
+        if in_page(clipped.clip_rect)
+            && in_row(clipped.clip_rect)
+            && !rows.contains(&clipped.clip_rect)
+        {
+            rows.push(clipped.clip_rect);
+        }
+    }
+    if rows.is_empty() {
+        off.push(format!("at {width}pt the page painted no sideways row"));
+    }
+    for row in &rows {
+        if right + SLACK < row.right() {
+            off.push(format!(
+                "at {width}pt a row clips at x {}, {}pt past the gutter at x {right}",
+                row.right(),
+                row.right() - right
+            ));
+        }
+    }
+    // A row still scrolls: on a phone some painted rect in one reaches past
+    // its clip.
+    let phone = width < ui_kit::tokens::breakpoints::BREAKPOINT_TABLET;
+    let scrolls = rects
+        .iter()
+        .any(|(shape, clip)| in_page(*clip) && in_row(*clip) && shape.rect.right() > clip.right());
+    if phone && !scrolls {
+        off.push(format!(
+            "at {width}pt no row has content beyond its clip, so none of them scrolls"
+        ));
+    }
+    off
+}
+
+/// Finding 5-A1: the Components page keeps its content inside the page's
+/// right gutter, so the right margin matches the left, and its sideways
+/// rows (the metrics, the editorial cards, the glass tiles) clip there
+/// rather than past it. It was seen on the Pixel in a 448pt-wide portrait
+/// window: the text fields, the search field's focus ring and the rows ran
+/// to about x 441.5, while the bar and the tab strip end at x 432, a right
+/// margin of about 7pt against the left's 16. The 384pt phone the other
+/// tests hold and a desktop window are held to the same edge.
+#[test]
+fn the_components_page_keeps_its_content_inside_the_right_gutter() {
+    let mut off = Vec::new();
+    for width in [PHONE.x, PIXEL_PAGE.x, 1280.0] {
+        off.extend(components_gutter_report(width));
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
+/// The overshoot of finding 5-A1 came and went with the window's width. On
+/// the unfixed page it was 23.5pt at 434pt, shrinking by a point for each
+/// point wider to 1.5pt at 456pt, and gone from 458pt: the chips row ended
+/// its fourth chip within a gap of the right edge only in that range. Those
+/// figures were read off the unfixed layout by hand; the sweep asserts the
+/// gutter, not the figures. It samples that band every 4pt, where the
+/// overshoot lives, and the rest of the phone range every 16pt: a layout
+/// costs about half a second, and a sweep of every width took most of the
+/// suite's time.
+///
+/// The page keeps its gutter across the phone range, then, not only at the
+/// widths above.
+#[test]
+fn the_components_page_keeps_its_right_gutter_at_every_phone_width() {
+    let mut off = Vec::new();
+    let band = 432..=460;
+    let widths = (320..600)
+        .step_by(16)
+        .filter(|width| !band.contains(width))
+        .chain(band.clone().step_by(4));
+    for width in widths {
+        off.extend(components_gutter_report(width as f32));
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}

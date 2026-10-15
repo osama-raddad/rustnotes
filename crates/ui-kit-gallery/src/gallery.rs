@@ -1590,7 +1590,21 @@ fn chips_group(
     ));
     ui.add_space(spacing::SPACE_1);
     ui.horizontal_wrapped(|ui| {
-        for (label, selected) in copy::CHIP_FILTERS.iter().zip(filters.iter_mut()) {
+        let last_filter = copy::CHIP_FILTERS.len() - 1;
+        for (index, (label, selected)) in copy::CHIP_FILTERS
+            .iter()
+            .zip(filters.iter_mut())
+            .enumerate()
+        {
+            if index == last_filter {
+                // The featured chip stands a further `space-4` from the
+                // filters. The gap rides the row's item spacing, which
+                // follows the last filter chip: an `add_space` after it
+                // does not wrap, so a chip ending within the gap of the
+                // page's right edge left the space past it, and the page
+                // grew that wide (see `wrapping_row`).
+                ui.spacing_mut().item_spacing.x += spacing::SPACE_4;
+            }
             if let Some(ChipEvent::Toggled(now)) = Chip::new(label)
                 .set_selected(*selected)
                 .ui(ui, theme, flags)
@@ -1599,7 +1613,6 @@ fn chips_group(
                 *selected = now;
             }
         }
-        ui.add_space(spacing::SPACE_4);
         Chip::new(copy::CHIP_FEATURED).accent().ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
