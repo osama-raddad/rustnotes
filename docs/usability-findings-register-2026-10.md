@@ -29,7 +29,7 @@ Earlier audit counts are superseded.
 | 1-I2 | minor | gallery, Brand hero band | Last swatch ends 23 px short of the margin; seams kept as a design element (D2) | fixed e47784b | Iter 1 L126-127; Iter 2 L236-237 |
 | 1-I3 | not stated | gallery, top bar | Trailing gap wider than the leading gap | decision open: D3 | Iter 1 L128-129; Iter 2 L238-240; D3 L381-387 |
 | 1-I4 | not stated | gallery, Theme popover rows | Rows 32 pt apart; toggles 7 pt off the radio column; labels 28 pt off | fixed ca1b391 | Iter 1 L148-149; moved to Iter 3 L405; fix L492-494 |
-| 1-I5 | not stated | gallery on iOS, chrome | 28% of the iOS screen is chrome before any content; Android check first | open: iOS pass (iteration 9) is partial; no check recorded | Iter 1 L150-151; Iter 9 L1101-1110 |
+| 1-I5 | not stated | gallery on iOS, chrome | 28% of the iOS screen is chrome before any content; Android check first | open: iOS pass (iteration 9) partial; the iOS gap measures 56.3 pt, the same as Android's 1-I5 gap | Iter 1 L150-151; Iter 9 iOS results |
 | 1-I7 | nit | gallery, Foundations | Specimen clipped at the fold | open: no closure recorded | Iter 1 L152-153 |
 | 1-I8 | nit | gallery, Theme popover placement | Popover placement | fixed caa29e4 | Iter 1 L152-153; moved to Iter 3 L405; fix L502-506 |
 | 1-I9 | nit | Rust Notes, date alignment | Date right-aligned and floating; guard covers the list at rest only | closed: guard test in 7b07a78 | Iter 1 L154; Iter 7 L1033-1037; Status L1176-1178 |
@@ -55,8 +55,8 @@ Earlier audit counts are superseded.
 | 2-I3 | minor | gallery, top bar | Trailing gap wider than the leading gap | decision open: D3 | Iter 2 L238-240; D3 L381-387 |
 | 2-I4 | minor | ui-kit, wordmark rendering | Wordmark edges hard, with no anti-aliasing | fixed d660dbb | Iter 2 L241-243; Iter 6 task 26 L897-903 |
 | 2-I5 | nit | gallery, busy label | 'Sending' active-state label reads about 1.2:1 | fixed cbd4086 | Iter 2 L256-260; Iter 6 task 24 L886-891 |
-| 2-I8 | minor | gallery on iOS, bottom clip | Content hard-clipped near 816 pt; snackbar corners look notched | open: iOS pass (iteration 9) is partial; bottom of the page not reached | Iter 2 L270-272; Iter 2 closed L413-414; Iter 9 L1101-1104 |
-| 2-I9 | minor | gallery on iOS, bar edge and gap | Bar's bottom edge fuses with the divider; about 55 pt empty above the tab labels | open: iOS pass (iteration 9) is partial; no iOS check recorded | Iter 2 L273-275; Iter 2 closed L413-414; Iter 9 L1108-1110 |
+| 2-I8 | minor | gallery on iOS, bottom clip | Content hard-clipped near 816 pt; snackbar corners look notched | open: confirmed on iOS (card cut at 815.7 pt, iteration 9); cause not traced; snackbar corners not checked | Iter 2 L270-272; Iter 2 closed L413-414; Iter 9 iOS results |
+| 2-I9 | minor | gallery on iOS, bar edge and gap | Bar's bottom edge fuses with the divider; about 55 pt empty above the tab labels | open: the fused divider does not reproduce on iOS; the gap waits on 1-I5 | Iter 2 L273-275; Iter 2 closed L413-414; Iter 9 iOS results |
 | 3-A1 | major | gallery, Theme popover rows | Radio rows 32 pt apart, under the 44-pt floor; toggle labels 28 pt right of radio labels | fixed ca1b391 | Iter 3 L436-438; fix L492-494 |
 | 3-A2 | major | gallery, top bar tab order | Tab goes Theme then Search; Search sits left of Theme on screen | fixed 12c256e | Iter 3 L439-440; fix L495-498 |
 | 3-A3 | major | gallery, Brand tab focus ring | Ring clipped on its left edge at the content margin | fixed 206daff | Iter 3 L441-443; fix L499-501 |
@@ -171,7 +171,7 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 - 1-A9: open: no closure recorded, principle card 01 about 443 pt tall. Ledger L142-143.
 - 1-A10: decision open, default taken: specimens, which are inert. Ledger L132-135.
 - 1-A13: open: pill still 25 pt, under the 44-pt floor; plus button unguarded (known gap). Ledger L136-140, L874-876, L1029-1031.
-- 1-I5 (iOS): open: iOS pass (iteration 9) is partial. Ledger L150-151.
+- 1-I5 (iOS): open: iOS gap measured at 56.3 pt; closure is a decision on the chrome. Ledger L150-151.
 - 1-I7 (nit): open: no closure recorded, specimen clipped at the fold. Ledger L152-153.
 - K1: open: known gap, rightward pointer jump; no fix or ignored regression test. Ledger L180-185.
 - K2: closed in iteration 10: mutation caught. Ledger iteration 10 K2 entry.
@@ -183,8 +183,8 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 - 2-A10 (minor): decision open: D12, card specimens. Ledger L261-262.
 - 2-I3 (minor): decision open: D3, trailing gap. Ledger L238-240.
 - 2-A13 (nit): open: no closure recorded, glass specimens; carried to the iteration 10 backlog. Ledger L268-269, L1121-1123.
-- 2-I8 (minor, iOS): open: iOS pass (iteration 9) is partial; bottom clip not measured. Ledger L270-272.
-- 2-I9 (minor, iOS): open: iOS pass (iteration 9) is partial; bar edge and gap not checked. Ledger L273-275.
+- 2-I8 (minor, iOS): open: bottom clip confirmed on iOS at 815.7 pt; cause not traced. Ledger L270-272.
+- 2-I9 (minor, iOS): open: fused divider does not reproduce on iOS; gap waits on 1-I5. Ledger L273-275.
 - components-glass-spill (nit): open: no closure recorded, same as 2-A13. Ledger L1121-1123.
 - D2: decision open, default taken: kept as a documented design element. Ledger L377-380.
 - D3: decision open: D3. Ledger L381-387.
@@ -254,13 +254,13 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 
 ### Resume here (handoff, ledger resume list)
 - Decide D1 to D19. D16 has a default: keep the reading width on Medium portrait.
-- Iteration 9's open items: the iOS bottom clip, the Components right margin on iOS, the bar's edge on iOS (2-I9), and the keyboard inset.
+- Iteration 9's open items: the iOS bottom clip (2-I8, confirmed; cause not traced), the 3.3 pt right-margin asymmetry on the icon row, and the keyboard inset (not testable on the simulator yet).
 - Iteration 10's open items: the re-screenshot sweep at HEAD; K4 (diagnose the settled-short state); and the sequential backlog workflow.
 - Refresh PR #24's title and body (iterations 1 to 8 closed, 9 partial, 10 closed with open items, D1 to D19, K1 to K4, the register path).
 - Re-run the trailer check over `162d7e7..HEAD`.
 
 ### Iteration 9 open items (ledger L1101-1110)
-- iOS bottom clip at 816 pt (2-I8; iter9-ios-bottom-clip): scroll Components to its end and measure.
+- iOS bottom clip at 816 pt (2-I8): confirmed on iOS; the cause is not traced.
 - Right margin of the Components page on iOS (task-20-ios-caveat; iter9-components-right-margin-ios).
 - Bar's edge and gap on iOS (2-I9).
 - Keyboard inset: caret above the keyboard in the Rust Notes editor (iter9-keyboard-inset; iter9-keyboard-inset-ios).

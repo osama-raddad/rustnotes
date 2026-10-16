@@ -1099,15 +1099,32 @@ Checked with taps only, earlier in the pass:
 - The status bar shows iOS's "Vynatix Gallery" back-to-app link at the top left.
   That is the system's own link from the gallery run, not a Rust Notes defect.
 
-Still open for iteration 9:
-- **The iOS bottom clip** (the 816-pt hard clip from an earlier tester). The bottom of
-  the Components page was not reached: a fresh gallery launch, followed by three drags,
-  left the page mid-scroll. Needs a scroll to the end before it can be measured.
-- **The right margin on the Components page**, which task 20 left as "iOS is not claimed".
-  A screenshot-based measurement was inconclusive (the top-bar edge detection hit the
-  screen border), so it stays open rather than closed.
-- **The bar's edge and gap on iOS (2-I9)** and **the keyboard inset** (the caret above
-  the keyboard in the Rust Notes editor).
+iOS results from the second pass, on the HEAD builds. The tester measured; I checked the
+bottom-clip and gap screenshots by eye.
+- **The bottom clip (2-I8) is real on iOS.** After one swipe, the `.card--outlined` card
+  on the Components page stops with a straight horizontal edge at 815.7 pt. Its bottom
+  border and corners are missing, and nothing is painted from 816 to 860 pt
+  (`iter-9-ios-clip-mid.png`). At the end of the scroll the lowest content is at 784 pt,
+  and 784 to 861 pt is end-of-scroll space, not clip. The home indicator sits at 861 to
+  866 pt (the earlier brief said 840). The cause is not traced.
+- **The right margin on the Components page is 3.3 pt out.** On the unscrolled page the
+  icon-button row runs from 16.0 pt on the left to 19.3 pt on the right
+  (`iter-9-ios-components-top2.png`). The column divider spans 16.0 to 386.0 pt, which is
+  symmetric. One button row is not full width (its right edge is 81.7 pt from the screen
+  edge); that is content, not a margin.
+- **The fused divider (2-I9) does not reproduce on iOS.** The bar's bottom edge at 141 to
+  142 pt has no line beneath it. The nearest full-width divider is at 227 to 228 pt, under
+  the tab labels (`iter-9-ios-gallery-start.png`). The gap from the bar's bottom to the tab
+  labels is 56.3 pt on iOS, and 55.3 dp on Android at 3 px per dp. The gap belongs to the
+  1-I5 chrome item.
+- **The keyboard inset is not testable on the simulator yet.** No software keyboard was
+  drawn after "+" or a tap in the body, even with the simulator's hardware keyboard
+  connection turned off. The caret sits at x 15.7 pt, y 129 to 150 pt on the New note
+  screen (`iter-9-ios-keyboard-after-restart.png`). The caret-to-keyboard relation is
+  unmeasured, so this is not a pass. Next: check the simulator's Keyboard menu, or test a
+  text field in another app.
+- **Simulator setting.** The pass set `ConnectHardwareKeyboard` to false, and the setting
+  was reverted with `defaults delete`.
 
 **Blank band above the gesture bar (Android half, measured).** The Components page
 scrolled to its end: the last content row is at y 2744 px, the gesture bar's pixels run
@@ -1204,9 +1221,10 @@ start of iteration 5, which is no longer accurate.
   its test correction in `82c5b48`, verified headless only), and the design AVD
   (two-pane landscape; single-pane at 600 pt portrait, on the Medium side of the boundary).
 - **Iteration 9 (iOS, partial):** gestures are drivable with the simulator's MCP tool. Scroll,
-  popover, and the swipe-to-delete arm are checked. Open: the iOS bottom clip (the 816-pt claim),
-  the right margin of the Components page (task 20's iOS caveat), the bar's edge on iOS (2-I9),
-  and the keyboard inset.
+  popover, and the swipe-to-delete arm are checked. The bottom clip is confirmed on iOS (2-I8,
+  the outlined card cut at 816 pt; cause not traced). Open: the 3.3 pt right-margin asymmetry on
+  the icon row, and the keyboard inset, which is not testable on the simulator yet. The fused
+  divider (2-I9) does not reproduce on iOS; its gap waits on 1-I5.
 - **Iteration 10 (regression sweep, in progress):** `just check` exits 0. K2 is closed:
   the axis-lock mutation is caught. K4 is open: the touch script's `unswipe` failed in 3 of
   12 runs, and its cause is not traced. The branch diff review ran (three reviewers), and
@@ -1279,8 +1297,8 @@ start of iteration 5, which is no longer accurate.
 ### Resume here
 
 1. Decide D1 to D19 (D16 has a default: keep the reading width on Medium portrait).
-2. Iteration 9's open items: the iOS bottom clip, the Components right margin on iOS, the bar's
-   edge on iOS (2-I9), and the keyboard inset.
+2. Iteration 9's open items: the iOS bottom clip (2-I8, confirmed; cause not traced), the 3.3 pt
+   right-margin asymmetry on the icon row, and the keyboard inset (not testable on the simulator yet).
 3. Iteration 10's open items: the re-screenshot sweep at HEAD against the `iter-N-verify`
    baselines; K4 (diagnose the settled-short state before any more runs); and the sequential
    backlog workflow.
