@@ -1696,8 +1696,9 @@ mod tests {
             0.0,
         );
 
-        // The light palette's bar and surface are the same white, so the
-        // colour alone does not tell them apart: go by shape. The surface is
+        // The bar and the surface are found by shape, not by colour: some
+        // palettes give them the same fill, and `Palette::of` takes the
+        // context's theme, which this context does not set. The surface is
         // the full-height fill at the top of the detail pane (the bars are
         // one bar height, and the cards sit lower down).
         let bar_h = Metrics::DEFAULT.bar_height;
@@ -1726,6 +1727,14 @@ mod tests {
              left inset {CUTOUT} pt)",
             surface.right(),
             bar.right(),
+        );
+        // Both edges come from the same scaffold variable, so the pair alone
+        // would pass a wrong edge: pin the edge to the window's geometry too.
+        assert!(
+            (surface.right() - (w - CUTOUT)).abs() <= 1.0,
+            "the detail surface ends at {} pt, not the mirrored edge at {} pt",
+            surface.right(),
+            w - CUTOUT,
         );
 
         let right_margin = Rect::from_min_max(pos2(w - CUTOUT, 0.0), pos2(w, h));
