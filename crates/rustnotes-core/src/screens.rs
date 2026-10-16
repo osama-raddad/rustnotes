@@ -86,6 +86,20 @@ fn tab_bar(ui: &mut Ui, selected: Tab, pal: &Palette, m: &Metrics) -> Option<Tab
     bottom_nav(ui, &TABS, idx, pal, m).map(|i| if i == 0 { Tab::Notes } else { Tab::Settings })
 }
 
+/// Where a list row's delete cross is centred: 32 pt in from the card's right edge.
+fn cross_center(card: Rect) -> egui::Pos2 {
+    pos2(card.right() - 32.0, card.center().y)
+}
+
+/// A row's delete cross touch area: a square 4 pt wider than the touch target,
+/// centred on the cross.
+fn cross_hit(card: Rect, touch_target: f32) -> Rect {
+    Rect::from_center_size(
+        cross_center(card),
+        vec2(touch_target + 4.0, touch_target + 4.0),
+    )
+}
+
 /// Contents of the list's top bar. Returns whether "+" was tapped.
 fn list_bar(ui: &mut Ui, count: usize, pal: &Palette, m: &Metrics) -> bool {
     let title = bar_title(ui, m.sp(3), "Notes", pal, m);
@@ -608,9 +622,8 @@ impl App {
                     Rect::from_min_size(pos2(row.left() + card_m, row.top()), vec2(card_w, card_h));
                 // Delete is registered after the row so it wins the hit test.
                 let row_resp = ui.interact(card, Id::new(("row", note.id)), Sense::click());
-                let del_c = pos2(card.right() - 32.0, card.center().y);
-                let del_hit =
-                    Rect::from_center_size(del_c, vec2(m.touch_target + 4.0, m.touch_target + 4.0));
+                let del_c = cross_center(card);
+                let del_hit = cross_hit(card, m.touch_target);
                 let del_resp = ui.interact(del_hit, Id::new(("del", note.id)), Sense::click());
                 if del_resp.clicked() {
                     action = Some(ListAction::Delete(note.id));
@@ -1214,6 +1227,101 @@ mod tests {
             "the swiped note is the one gone"
         );
         assert_eq!(app.armed_delete, None, "the delete consumes the arm");
+    }
+
+    /// The smallest a delete cross's touch area may be, in points, in each
+    /// dimension. The list's own target is larger; this pins the minimum.
+    const MIN_TOUCH_PT: f32 = 44.0;
+
+    /// Each row's delete cross has a touch area at least `MIN_TOUCH_PT` in
+    /// both dimensions, for the card the list lays out at phone width (the
+    /// window the list tests use). The list must also hit-test exactly where
+    /// `cross_hit` puts it, so the check covers the rect the list uses.
+    #[test]
+    fn delete_cross_touch_area_is_at_least_44_points() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "cross-min");
+        run_pass(&mut app, &ctx, vec![], 1.0);
+        for note in &app.notes {
+            let card = ctx
+                .read_response(Id::new(("row", note.id)))
+                .expect("the row is laid out")
+                .rect;
+            let hit = ctx
+                .read_response(Id::new(("del", note.id)))
+                .expect("the delete cross is laid out")
+                .rect;
+            let touch = cross_hit(card, Metrics::DEFAULT.touch_target);
+            assert!(
+                touch.width() >= MIN_TOUCH_PT && touch.height() >= MIN_TOUCH_PT,
+                "the cross's touch area is {} by {} pt, under {MIN_TOUCH_PT} pt",
+                touch.width(),
+                touch.height()
+            );
+            assert!(
+                near(hit.left(), touch.left())
+                    && near(hit.top(), touch.top())
+                    && near(hit.width(), touch.width())
+                    && near(hit.height(), touch.height()),
+                "the list hit-tests the cross at {hit:?}, not where cross_hit puts it at {touch:?}"
+            );
+        }
+    }
+
+    /// Each row's date is right-aligned to one shared edge, and that edge is
+    /// left of the row's delete cross touch area, so no date runs under a
+    /// cross. The dates differ in length, so a shared edge cannot be a
+    /// shared start by accident.
+    #[test]
+    fn row_dates_share_one_right_edge_clear_of_the_cross() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_notes(
+            &ctx,
+            "dates-edge",
+            &["first note", "second note", "third note"],
+        );
+        app.row_dates = vec![
+            "Oct 14, 2026".to_owned(),
+            "Sep 30, 2025".to_owned(),
+            "Jan 2, 2026".to_owned(),
+        ];
+        let painted = run_pass(&mut app, &ctx, vec![], 1.0);
+        assert_eq!(dates(&app, &painted), 3, "all three rows show their dates");
+
+        let mut rights = vec![];
+        for note in &app.notes {
+            let card = ctx
+                .read_response(Id::new(("row", note.id)))
+                .expect("the row is laid out")
+                .rect;
+            let cross = cross_hit(card, Metrics::DEFAULT.touch_target);
+            // The date on this row: a row's date sits inside its card's height.
+            let on_row: Vec<&Painted> = painted
+                .iter()
+                .filter(|p| {
+                    app.row_dates.contains(&p.text)
+                        && (card.top()..=card.bottom()).contains(&p.rect.center().y)
+                })
+                .collect();
+            assert_eq!(on_row.len(), 1, "one date on the row of note {}", note.id);
+            let date = on_row[0];
+            assert_eq!(date.shown, date.text, "the date is shown whole");
+            assert!(
+                date.rect.right() < cross.left(),
+                "the date {:?} ends at {} but the cross's touch area starts at {}",
+                date.text,
+                date.rect.right(),
+                cross.left()
+            );
+            rights.push(date.rect.right());
+        }
+        let first = rights[0];
+        for right in &rights {
+            assert!(
+                (right - first).abs() <= 1.0,
+                "the dates end at {rights:?}, not one edge"
+            );
+        }
     }
 
     /// A note's second line, long enough to run the whole width of its row.
