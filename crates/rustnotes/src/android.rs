@@ -79,6 +79,14 @@ pub fn start<A: crate::App>(app: AndroidApp) {
     let mut options = crate::native_options::<A>();
     // winit needs the AndroidApp handle to build its event loop.
     options.android_app = Some(app);
+    // eframe calls `App::save` only when it has a storage, and on Android it
+    // has none unless a path is given. This file is that storage. Its save
+    // runs on Suspended (winit's TerminateWindow), which needs no frame, so
+    // it still runs when the focus-loss save cannot (no frame runs once the
+    // activity pauses). Window geometry is not persisted: Android windows
+    // are full-screen.
+    options.persistence_path = Some(data_dir.join("eframe-state.ron"));
+    options.persist_window = false;
     if let Err(e) = crate::run::<A>(options, data_dir) {
         log::error!("eframe exited with error: {e}");
     }
