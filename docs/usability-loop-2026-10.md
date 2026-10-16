@@ -1,7 +1,8 @@
 # Framework usability loop — October 2026
 
-Status: iterations 1 to 8 are closed, 9 is partial, and 10 is closed with open
-items. The current state, the open decisions (D1 to D19), the known gaps, and the
+Status: iterations 1 to 8 are closed, 9 is partial (one check left: a caret low in a
+long note), and 10 is closed with open items. The current state, the open decisions
+(D1 to D20), the known gaps, and the
 resume steps are in "Status and handoff" at the end of this file. The findings
 register, derived from this ledger, is `docs/usability-findings-register-2026-10.md`.
 
@@ -1106,13 +1107,17 @@ bottom-clip and gap screenshots by eye.
   border and corners are missing, and nothing is painted from 816 to 860 pt
   (`iter-9-ios-clip-mid.png`). At the end of the scroll the lowest content is at 784 pt,
   and 784 to 861 pt is end-of-scroll space, not clip. The home indicator sits at 861 to
-  866 pt (the earlier brief said 840). The cause is not traced.
-- **The icon-button row's right gap is 3.3 pt wider than its left gap.** On the unscrolled
-  page the row runs from 16.0 pt on the left to 19.3 pt on the right
-  (`iter-9-ios-components-top2.png`). The column divider spans 16.0 to 386.0 pt, which is
-  symmetric. Whether the row is a margin or its natural width is not yet checked against the
-  Android row, so this is not yet a defect. One button row is not full width (its right edge
-  is 81.7 pt from the screen edge).
+  866 pt (the earlier brief said 840). The cause is established: the scroll viewport ends at
+  874 − 34 − 24 = 816 pt (`gallery.rs:3179` for the 34, `gallery.rs:144` for the 24). It is a
+  layout decision, D20, not an inset bug.
+- **The right margin is symmetric (closed).** The column divider spans 16.0 to 386.0 pt on
+  iOS, so the page's full-width content keeps the 16 pt gutter on both sides. The icon-button
+  row (16.0 pt to 19.3 pt, `iter-9-ios-components-top2.png`) and the chips row (ending at its
+  last chip, about 375 pt) end at their natural widths. The one button row that is not full
+  width (its right edge 81.7 pt from the screen edge) is content. The headless gutter tests
+  pass at 400 and 416 pt, either side of 402 pt, which the sweep does not reach directly.
+- **Text under the tab divider (227 to 240 pt).** Seen in the mid-scroll frame. It is the top
+  edge of the same scroll viewport, under the sticky strip, which is ordinary scroll behaviour.
 - **The fused divider (2-I9) does not reproduce on iOS.** The bar's bottom edge at 141 to
   142 pt has no line beneath it. The nearest full-width divider is at 227 to 228 pt, under
   the tab labels (`iter-9-ios-gallery-start.png`). The gap from the bar's bottom to the tab
@@ -1123,8 +1128,11 @@ bottom-clip and gap screenshots by eye.
   shutdown and boot of the device, with the hardware keyboard setting off, Settings' search
   shows a keyboard, and Rust Notes' New note shows one too (`iter-9-ios-rust-kb-new.png`).
   The caret sits at 140 pt and the keyboard's top edge at 582 pt, so the caret is clear of it.
-  Still open: a caret low in a long note, where the keyboard would cover it. That needs typed
-  text, which autosaves, so it is not done here.
+  Still open: a caret low in a long note, under the keyboard. The keyboard was drawn in both
+  the New note and the Edit note screens. A long-text check then typed about 850 characters in
+  the Edit note, but the keyboard was not drawn in the frame after typing, so the caret-to-
+  keyboard relation is not measured. The test note was deleted with the two-tap delete (the
+  list shows only the older note). The hardware-keyboard default was restored after each test.
 - **Simulator setting.** The pass set `ConnectHardwareKeyboard` to false for the keyboard test,
   and the default was restored with `defaults delete`.
 
@@ -1132,7 +1140,8 @@ bottom-clip and gap screenshots by eye.
 scrolled to its end: the last content row is at y 2744 px, the gesture bar's pixels run
 2950 to 2961 px, so the blank band is 206 px, or 68.7 pt (`iter-9-components-bottom.png`).
 The bottom inset is 24 pt (72 px), and the bar sits inside that inset. About 45 pt is
-the page's end-of-scroll space, which the code does not explain. The earlier tester's
+the page's own trailing space. The other 24 pt is `content_margin()`'s bottom (`SPACE_6`,
+`gallery.rs:144`), so the code does explain the end of the page. The earlier tester's
 figure of about 33 pt was measured another way and is not reproduced here. Recorded as a
 backlog item, not a defect: the space keeps the last card clear of the bar.
 
@@ -1222,12 +1231,11 @@ start of iteration 5, which is no longer accurate.
   portrait pass (list, editor, Settings), the two-pane surface inset (`99a3ad1`, with
   its test correction in `82c5b48`, verified headless only), and the design AVD
   (two-pane landscape; single-pane at 600 pt portrait, on the Medium side of the boundary).
-- **Iteration 9 (iOS, partial):** gestures are drivable with the simulator's MCP tool. Scroll,
-  popover, and the swipe-to-delete arm are checked. The bottom clip is confirmed on iOS (2-I8,
-  the outlined card cut at 816 pt; cause not traced). Open: the 3.3 pt right-margin asymmetry on
-  the icon row, and a caret low in a long note under the keyboard (the keyboard itself appears,
-  and the top-of-note caret is clear). The fused divider (2-I9) does not reproduce on iOS; its
-  gap waits on 1-I5.
+- **Iteration 9 (iOS, partial, one check left):** gestures are drivable with the simulator's MCP
+  tool. Scroll, popover, and the swipe-to-delete arm are checked. The bottom clip is confirmed on
+  iOS (2-I8, the outlined card cut at 816 pt) and is a layout decision, D20. The right margin is
+  symmetric (closed). Open: a caret low in a long note under the keyboard. The fused divider
+  (2-I9) does not reproduce on iOS; its gap waits on 1-I5.
 - **Iteration 10 (regression sweep, in progress):** `just check` exits 0. K2 is closed:
   the axis-lock mutation is caught. K4 is open: the touch script's `unswipe` failed in 3 of
   12 runs, and its cause is not traced. The branch diff review ran (three reviewers), and
@@ -1286,6 +1294,13 @@ start of iteration 5, which is no longer accurate.
   put the glyphs on a shared baseline with one caption line. Choose one.
 - **D19, OS night mode and the gallery.** The gallery starts on Forest Light whatever the OS
   night flag says, and the Theme menu switches it. Should the gallery follow the OS flag at launch?
+- **D20, the scroll's bottom edge (2-I8).** The gallery's scroll viewport ends 58 pt above the
+  screen bottom: 34 pt of safe area and the panel's 24 pt bottom margin (`gallery.rs:3179`,
+  `gallery.rs:144`). The Pixel's viewport ends at 949 pt by the same structure. Options: keep it,
+  or drop the 24 pt on full-height windows, as the short-window branch already does
+  (`gallery.rs:3137-3142`). Default taken: keep. If the user picks the drop, the red test is the
+  harness at 402 x 874 with a 34 pt bottom inset, Components mid-scroll, asserting the lowest
+  paint reaches 840 pt.
 - **Open:** the Teal Light card's ratio bar border, at 1.31:1 on Teal Light.
 
 ### Known gaps
@@ -1299,9 +1314,10 @@ start of iteration 5, which is no longer accurate.
 
 ### Resume here
 
-1. Decide D1 to D19 (D16 has a default: keep the reading width on Medium portrait).
-2. Iteration 9's open items: the iOS bottom clip (2-I8, confirmed; cause not traced), the icon row's
-   3.3 pt right gap (not yet checked against Android), and a caret low in a long note under the keyboard.
+1. Decide D1 to D20 (D16 has a default: keep the reading width on Medium portrait; D20 has a
+   default: keep the bottom margin).
+2. Iteration 9's open item: a caret low in a long note under the keyboard. The bottom clip is D20,
+   and the right margin is closed.
 3. Iteration 10's open items: the re-screenshot sweep at HEAD against the `iter-N-verify`
    baselines; K4 (diagnose the settled-short state before any more runs); and the sequential
    backlog workflow.
