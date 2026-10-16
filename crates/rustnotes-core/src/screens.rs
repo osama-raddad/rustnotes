@@ -274,9 +274,14 @@ impl App {
                 let left = Rect::from_min_max(r.min, pos2(r.min.x + list_w, r.max.y));
                 let right = Rect::from_min_max(pos2(left.right(), r.min.y), r.max);
 
-                // Detail surface, edge to edge behind the right pane.
+                // Detail surface behind the right pane: up into the status
+                // strip like the bar, and across to the same mirrored edge the
+                // bar stops at. The side margin beside a cutout is canvas.
                 ui.painter().rect_filled(
-                    Rect::from_min_max(pos2(right.left(), full.top()), pos2(full.max.x, r.max.y)),
+                    Rect::from_min_max(
+                        pos2(right.left(), full.top()),
+                        pos2(right.right(), r.max.y),
+                    ),
                     0.0,
                     pal.surface,
                 );
@@ -1665,6 +1670,75 @@ mod tests {
             let strays = margin_strays(&pass, w, h, pal.bg);
             assert!(strays.is_empty(), "settings, {theme:?}: {strays:#?}");
         }
+    }
+
+    /// The two-pane window: the Pixel's width at the height `two_pane_ok`
+    /// needs. `PIXEL_LANDSCAPE`'s 448 pt is Compact in height, so it renders
+    /// the single pane and never reaches `two_pane`.
+    const TWO_PANE_LANDSCAPE: (f32, f32) = (998.0, 480.0);
+
+    /// The detail pane's surface stops at the edge its bar stops at, the
+    /// mirrored edge: the side margin beside the cutout is canvas, not
+    /// surface. The detail is closed, so the only surface fill on the right
+    /// is the one under test.
+    #[test]
+    fn two_pane_surface_meets_the_mirrored_edge() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "two-pane-surface");
+        let pal = Palette::of(&ctx);
+        let (w, h) = TWO_PANE_LANDSCAPE;
+        let pass = run_pass_insets(
+            &mut app,
+            &ctx,
+            vec2(w, h),
+            cutout_on_the_left(),
+            vec![],
+            0.0,
+        );
+
+        // The light palette's bar and surface are the same white, so the
+        // colour alone does not tell them apart: go by shape. The surface is
+        // the full-height fill at the top of the detail pane (the bars are
+        // one bar height, and the cards sit lower down).
+        let bar_h = Metrics::DEFAULT.bar_height;
+        let surface = pass
+            .fills
+            .iter()
+            .find(|f| f.fill == pal.surface && f.rect.top() <= 0.0 && f.rect.height() > bar_h)
+            .expect("the detail surface")
+            .rect;
+        // The detail bar starts where the surface does; the list's bar starts
+        // at the cutout.
+        let bar = pass
+            .fills
+            .iter()
+            .find(|f| {
+                f.fill == pal.bar
+                    && f.rect.top() <= 0.0
+                    && (f.rect.height() - bar_h).abs() <= 1.0
+                    && (f.rect.left() - surface.left()).abs() <= 1.0
+            })
+            .expect("the detail bar")
+            .rect;
+        assert!(
+            (surface.right() - bar.right()).abs() <= 1.0,
+            "the detail surface ends at {} pt, its bar at {} pt (window {w} pt, \
+             left inset {CUTOUT} pt)",
+            surface.right(),
+            bar.right(),
+        );
+
+        let right_margin = Rect::from_min_max(pos2(w - CUTOUT, 0.0), pos2(w, h));
+        let strays: Vec<Rect> = pass
+            .fills_in(right_margin)
+            .filter(|f| f.fill == pal.surface)
+            .map(|f| f.rect)
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "surface colour in the right margin, past the bar's edge at {} pt: {strays:?}",
+            bar.right(),
+        );
     }
 
     /// With no horizontal inset (a phone upright) nothing moves: the bars
