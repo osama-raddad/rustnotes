@@ -145,7 +145,7 @@ Earlier audit counts are superseded.
 | iter8-portrait-editor-title-uncapped | not stated | Rust Notes, portrait editor | Title bar uncapped while the body is capped to a centred 640 column | closed by design: scaffold caps the body only (scaffold.rs:174); bar stays full width | Iter 8 L1058-1060; D16 disposition L1229-1231 |
 | iter8-two-pane-surface-inset | not stated | Rust Notes, two-pane detail surface | Surface ran past the scaffold's mirrored edge; headless check only | fixed 99a3ad1 | Iter 8 L1062-1068; Status L1180-1182 |
 | iter9-blank-band-above-gesture-bar | not stated | gallery Components end, Android | Blank band of 68.7 pt above the gesture bar | closed: not a defect; recorded as backlog, the space keeps the last card clear of the bar | Iter 9 L1111-1117 |
-| iter9-components-right-margin-ios | not stated | gallery on iOS, Components right margin | Right margin unmeasured; screenshot check inconclusive | open: iOS pass (iteration 9) is partial; measurement inconclusive | Iter 9 L1105-1107 |
+| iter9-components-right-margin-ios | not stated | gallery on iOS, Components right margin | Right margin unmeasured; screenshot check inconclusive | open: icon row's right gap 19.3 pt against 16.0 pt on the left; not yet checked against Android | Iter 9 iOS results |
 | iter9-ios-bottom-clip | not stated | gallery on iOS, bottoms of Components and Feedback | Hard clip near 816 pt reported by an earlier tester; not measured | open: iOS pass (iteration 9) is partial; page never scrolled to its end | Iter 9 L1101-1104; Status L1183-1186 |
 | iter9-keyboard-inset | not stated | Rust Notes editor on iOS, keyboard | Whether the caret stays above the keyboard | open: iOS pass (iteration 9) is partial; not checked | Iter 9 L1108-1110; Status L1184-1186 |
 | iter9-keyboard-inset-ios | not stated | Rust Notes editor on iOS, keyboard | Same item as iter9-keyboard-inset | open: iOS pass (iteration 9) is partial; not checked | Iter 9 L1108-1110 |
@@ -153,7 +153,7 @@ Earlier audit counts are superseded.
 | snackbar-over-trigger-row | not stated | gallery, snackbar | Floats over its own trigger row (cosmetic) | closed by design: a snackbar floats over content by design | Iter 2 L403-404; Iter 3 L468-469 |
 | start-a-project-tap | not stated | gallery, Components | 'Start a project' gives no visible response to a tap | closed by design: demo button with no action; its pressed look is the feedback | Iter 2 L276-278 |
 | tab-to-me-pill-height | not stated | gallery, Tab-to-me pill | 18 pt tall with about 3 pt of padding; cramped. Now 25 pt, still under the 44-pt floor (D11) | fixed fb99a5f | Iter 5 L742-743; Iter 6 task 28 L911-913 |
-| task-20-ios-caveat | not stated | gallery on iOS, Components right margin | Right margin left as 'iOS is not claimed' by task 20 | open: iOS pass (iteration 9) is partial; screenshot measurement inconclusive | Iter 5 L765-767; Iter 9 L1105-1107 |
+| task-20-ios-caveat | not stated | gallery on iOS, Components right margin | Right margin left as 'iOS is not claimed' by task 20 | open: icon row's right gap measured on iOS (3.3 pt wider); Android comparison pending | Iter 5 L765-767; Iter 9 iOS results |
 | teal-light-ratio-bar-border | not stated | gallery, Teal Light card ratio bar | Same ratio bar border, 1.31:1 on Teal Light | open: unclear whether the finding meant the bar; bar unchanged | Iter 6 L919-921; Status L1245 |
 | top-bar-bottom-hairline | minor | gallery, top bar | Bottom hairline runs past the rounded corners | fixed ab9dfdd | Iter 2 L402-404; Iter 3 L456-458, L512-515 |
 | two-pane-surface-inset | not stated | Rust Notes, two-pane detail surface | Same finding as iter8-two-pane-surface-inset, under a second ID | fixed 99a3ad1 | Iter 8 L1062-1068 |
@@ -213,7 +213,7 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 - D10: decision open: D10, full-bleed landscape bars. Ledger L634-639.
 
 ### Iteration 5
-- task-20-ios-caveat: open: iOS pass (iteration 9) is partial; Components right margin on iOS. Ledger L765-767, L1105-1107.
+- task-20-ios-caveat: open: Components icon row's right gap on iOS, 3.3 pt wider than the left; Android comparison pending. Ledger L765-767, iteration 9 iOS results.
 - gesture-bar-blank-band: open: iOS clip half not measured; Android band is backlog, not a defect. Ledger L736-739, L1111-1117.
 - D11: decision open: D11, 44-pt touch floor. Ledger L723-729.
 - D12: decision open: D12, Components card widths. Ledger L730-733.
@@ -254,7 +254,7 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 
 ### Resume here (handoff, ledger resume list)
 - Decide D1 to D19. D16 has a default: keep the reading width on Medium portrait.
-- Iteration 9's open items: the iOS bottom clip (2-I8, confirmed; cause not traced), the 3.3 pt right-margin asymmetry on the icon row, and the keyboard inset (not testable on the simulator yet).
+- Iteration 9's open items: the iOS bottom clip (2-I8, confirmed; cause not traced), the icon row's 3.3 pt right gap (not yet checked against Android), and a caret low in a long note under the keyboard.
 - Iteration 10's open items: the re-screenshot sweep at HEAD; K4 (diagnose the settled-short state); and the sequential backlog workflow.
 - Refresh PR #24's title and body (iterations 1 to 8 closed, 9 partial, 10 closed with open items, D1 to D19, K1 to K4, the register path).
 - Re-run the trailer check over `162d7e7..HEAD`.

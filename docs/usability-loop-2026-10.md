@@ -1107,24 +1107,26 @@ bottom-clip and gap screenshots by eye.
   (`iter-9-ios-clip-mid.png`). At the end of the scroll the lowest content is at 784 pt,
   and 784 to 861 pt is end-of-scroll space, not clip. The home indicator sits at 861 to
   866 pt (the earlier brief said 840). The cause is not traced.
-- **The right margin on the Components page is 3.3 pt out.** On the unscrolled page the
-  icon-button row runs from 16.0 pt on the left to 19.3 pt on the right
+- **The icon-button row's right gap is 3.3 pt wider than its left gap.** On the unscrolled
+  page the row runs from 16.0 pt on the left to 19.3 pt on the right
   (`iter-9-ios-components-top2.png`). The column divider spans 16.0 to 386.0 pt, which is
-  symmetric. One button row is not full width (its right edge is 81.7 pt from the screen
-  edge); that is content, not a margin.
+  symmetric. Whether the row is a margin or its natural width is not yet checked against the
+  Android row, so this is not yet a defect. One button row is not full width (its right edge
+  is 81.7 pt from the screen edge).
 - **The fused divider (2-I9) does not reproduce on iOS.** The bar's bottom edge at 141 to
   142 pt has no line beneath it. The nearest full-width divider is at 227 to 228 pt, under
   the tab labels (`iter-9-ios-gallery-start.png`). The gap from the bar's bottom to the tab
   labels is 56.3 pt on iOS, and 55.3 dp on Android at 3 px per dp. The gap belongs to the
   1-I5 chrome item.
-- **The keyboard inset is not testable on the simulator yet.** No software keyboard was
-  drawn after "+" or a tap in the body, even with the simulator's hardware keyboard
-  connection turned off. The caret sits at x 15.7 pt, y 129 to 150 pt on the New note
-  screen (`iter-9-ios-keyboard-after-restart.png`). The caret-to-keyboard relation is
-  unmeasured, so this is not a pass. Next: check the simulator's Keyboard menu, or test a
-  text field in another app.
-- **Simulator setting.** The pass set `ConnectHardwareKeyboard` to false, and the setting
-  was reverted with `defaults delete`.
+- **The keyboard appears on iOS. The inset is checked only with the caret at the top.** The
+  first pass saw no keyboard, and the cause was the simulator's state, not the app. After a
+  shutdown and boot of the device, with the hardware keyboard setting off, Settings' search
+  shows a keyboard, and Rust Notes' New note shows one too (`iter-9-ios-rust-kb-new.png`).
+  The caret sits at 140 pt and the keyboard's top edge at 582 pt, so the caret is clear of it.
+  Still open: a caret low in a long note, where the keyboard would cover it. That needs typed
+  text, which autosaves, so it is not done here.
+- **Simulator setting.** The pass set `ConnectHardwareKeyboard` to false for the keyboard test,
+  and the default was restored with `defaults delete`.
 
 **Blank band above the gesture bar (Android half, measured).** The Components page
 scrolled to its end: the last content row is at y 2744 px, the gesture bar's pixels run
@@ -1223,8 +1225,9 @@ start of iteration 5, which is no longer accurate.
 - **Iteration 9 (iOS, partial):** gestures are drivable with the simulator's MCP tool. Scroll,
   popover, and the swipe-to-delete arm are checked. The bottom clip is confirmed on iOS (2-I8,
   the outlined card cut at 816 pt; cause not traced). Open: the 3.3 pt right-margin asymmetry on
-  the icon row, and the keyboard inset, which is not testable on the simulator yet. The fused
-  divider (2-I9) does not reproduce on iOS; its gap waits on 1-I5.
+  the icon row, and a caret low in a long note under the keyboard (the keyboard itself appears,
+  and the top-of-note caret is clear). The fused divider (2-I9) does not reproduce on iOS; its
+  gap waits on 1-I5.
 - **Iteration 10 (regression sweep, in progress):** `just check` exits 0. K2 is closed:
   the axis-lock mutation is caught. K4 is open: the touch script's `unswipe` failed in 3 of
   12 runs, and its cause is not traced. The branch diff review ran (three reviewers), and
@@ -1297,8 +1300,8 @@ start of iteration 5, which is no longer accurate.
 ### Resume here
 
 1. Decide D1 to D19 (D16 has a default: keep the reading width on Medium portrait).
-2. Iteration 9's open items: the iOS bottom clip (2-I8, confirmed; cause not traced), the 3.3 pt
-   right-margin asymmetry on the icon row, and the keyboard inset (not testable on the simulator yet).
+2. Iteration 9's open items: the iOS bottom clip (2-I8, confirmed; cause not traced), the icon row's
+   3.3 pt right gap (not yet checked against Android), and a caret low in a long note under the keyboard.
 3. Iteration 10's open items: the re-screenshot sweep at HEAD against the `iter-N-verify`
    baselines; K4 (diagnose the settled-short state before any more runs); and the sequential
    backlog workflow.
