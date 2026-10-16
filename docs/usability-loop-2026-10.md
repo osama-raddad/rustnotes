@@ -1,8 +1,9 @@
 # Framework usability loop — October 2026
 
 Status: iterations 1 to 8 are closed, 9 is partial, and 10 is closed with open
-items. The current state, the open decisions (D1 to D18), the known gaps, and the
-resume steps are in "Status and handoff" at the end of this file.
+items. The current state, the open decisions (D1 to D19), the known gaps, and the
+resume steps are in "Status and handoff" at the end of this file. The findings
+register, derived from this ledger, is `docs/usability-findings-register-2026-10.md`.
 
 Branch `feat/framework-usability-iterations`, cut from `feat/design-notes-fixes`
 (draft PR #23, tip `7918329`). This loop's PR stacks on #23.
@@ -130,9 +131,13 @@ Deferred to later iterations:
   Iteration 2. The Teal Light swatch is nearly invisible, which is iteration 6.
 - 1-A10, "Book a call" shows a pressed state, and the other taps do nothing.
   They may be specimens by design; needs a decision. Iteration 2.
+  **Disposition:** decision open, default taken: specimens, which are inert. The
+  user confirms; no D number is assigned.
 - 1-A13, touch targets: the "Tab to me" pill is 18 pt tall, and state buttons
   are about 58 pt. Iteration 2. Rust Notes' ✕ (32 pt) and "+" (40 pt) are
-  iteration 7.
+  iteration 7. **Two halves:** the Tab-to-me pill is fixed in `fb99a5f` (2-A8); the
+  Rust Notes cross is guarded in `7b07a78`, and its "+" button is not guarded
+  (`fab_size` is 56 pt, a known gap).
 - 1-A6, fixed-width tiles hug the left edge on a phone. Iteration 5.
 - 1-A9, principle card 01 is about 443 pt tall. This is the known follow-up
   from the Oct 14 pass. Iteration 5.
@@ -251,6 +256,8 @@ Findings and dispositions:
 - **2-A9 and 2-I5, nit, low-contrast labels.** "Disabled" is 1.1:1 against its
   fill, which is the documented 38%. "Sending…" is an active state and reads
   about 1.2:1, which is a problem. Deferred to iteration 6 (contrast).
+  **Two halves:** 2-A9, the "Disabled" label, is closed by design: 38% is the
+  documented disabled opacity. 2-I5, the "Sending…" label, is fixed in `cbd4086`.
 - **2-A10, minor, cards.** `.card--filled` has no visible surface. Card widths
   vary, and none fill the page width. Deferred to iteration 5.
 - **2-A11, minor, right gutter.** The right gutter is 6 to 7 pt against 16 pt on
@@ -313,6 +320,8 @@ Progress on the batch (each commit verified green by the coordinator):
   `scroll_to_rect(row, Center)` in the popup rows. Found by the implementer,
   pre-existing, and not part of the select fix. **Deferred to iteration 3**
   (chrome and popovers).
+  **Disposition:** closed in iteration 3 as not reproduced on the device (the
+  harness effect; see the iteration 3 closure).
 
 Test-quality backlog, to be taken in the iteration-10 sweep, all test-only and
 none blocking:
@@ -367,6 +376,7 @@ Open decisions for you (the loop does not wait on them):
 - **D2, swatch hairlines.** Three surface-coloured rules cross the band. The
   module doc and a test assert them as the "ruled stock" design element, from the
   source brand preview. I kept them and closed the seam part of 1-A4 as by design.
+  **Decision open; default taken: kept.**
   Say the word and the three `hline` calls go, in one small commit.
 - **D3, the trailing gap.** The labelled Theme trigger's chevron now sits 28 pt
   from the pane edge, against 24 pt for the wordmark (box terms), and about 33 pt
@@ -378,6 +388,7 @@ Open decisions for you (the loop does not wait on them):
 - **D4, the wordmark reads "Vnatix" at a glance.** The "y" tucks into the V
   monogram. It matches the large logo on the Brand tab, so I treated it as
   intentional. Confirm that, or flag it for the brand.
+  **Decision open; default taken: intentional monogram.**
 - **D5, a personal iPhone has the gallery installed.** My baseline run installed
   the Vynatix Gallery on your connected iPhone 17 Pro (`Räddad iPhone`,
   `07DBE8D0-DEAC-50B8-AE9B-492146EE6B11`). It was never launched. It is still
@@ -806,7 +817,7 @@ governing-principle card, was 98.4%, found on the device and closed in
   `VOICE_CARD_WIDTH - 32` wraps were inert. `ee11286` removed them. Rendering was
   unchanged, checked by a snapshot of every painted string and rect on the Brand
   tab at six widths, taken before and after.
-- **Decision for you, D13: the small photo tiles on a phone.** They now stack one
+- **Decision open, default taken (one per row), D13: the small photo tiles on a phone.** They now stack one
   per row at the full column width, 104pt tall. Two-up was tried first and rejected,
   because the finding's 39% is per tile, and two-up left each tile at about 49%. The
   cost is two more rows of page. The other option is two-up, with the column
@@ -1107,6 +1118,10 @@ backlog item, not a defect: the space keeps the last card clear of the bar.
 
 ## Iteration 10: the regression sweep (closed, with open items)
 
+**Backlog carried into iteration 10 (open, not closed here):** the Components glass
+specimen spill (2-A13, from iteration 5) and the "Restore the banners" affordance
+(3-I9 and 3-I10, from iteration 5). Both are deferred to this backlog with no fix date.
+
 - **`just check`: exit 0**, for the Android and iOS targets of every mobile crate.
 - **`tools/emu-touch.sh emulator-5554`, three runs at HEAD.** Run 1 exited 1:
   six of seven checks passed, and `unswipe` measured 3.5% against a limit of 2%.
@@ -1195,16 +1210,16 @@ start of iteration 5, which is no longer accurate.
 
 - **D1 (K3), relaunch freeze after Back.** The gallery freezes when relaunched after
   Back at its root. Testers use `am force-stop`.
-- **D2, swatch hairlines.** Kept as a documented element.
+- **D2, swatch hairlines.** Decision open; default taken: kept as a documented element.
 - **D3, the trailing gap** on the Theme trigger.
-- **D4, the wordmark's legibility.** Treated as the monogram.
+- **D4, the wordmark's legibility.** Decision open; default taken: treated as the monogram.
 - **D5, the Vynatix Gallery is still installed on your personal iPhone.** Remove it with
   `xcrun devicectl device uninstall app --device 07DBE8D0-DEAC-50B8-AE9B-492146EE6B11 com.osamaraddad.vynatixgallery.ios`.
 - **D6 to D10, the search popover, the chevron, the toggle glyphs, the held popover,
   full-bleed landscape bars.**
 - **D11, the 44-pt touch floor, kit-wide.** Blocks the touch-target sweep.
 - **D12, the Components card widths.** Blocks the touch-target sweep.
-- **D13, phone photo tiles:** one per row (chosen) or two-up.
+- **D13, phone photo tiles:** decision open; default taken: one per row (two-up is the alternative).
 - **D14, a caption's dot can start a line** after the no-break fix.
 - **D15, `WidgetState` cannot tell busy from disabled.**
 - **D16, the editor width cap.** Fixed in `458f343`. The cap is kept at any width
@@ -1212,6 +1227,8 @@ start of iteration 5, which is no longer accurate.
   `medium_editor_keeps_its_body_width_cap` pins it. Device check on the tablet in
   portrait (800 px, Medium width): the text starts at x 96, a centred 640 column plus
   the 16pt margin, and the title at x 56 is uncapped (`build/usability-audit/iter-10-tablet-portrait-editor.png`).
+  **Disposition:** by design. The scaffold caps the body only (`scaffold.rs:174`), so the
+  bar stays full width, as on the list screen.
   One fact from the review: an Expanded-width window never reaches the single-pane
   route, it goes two-pane, which never capped. So the "Expanded" half of
   metrics.rs:24 has never applied. A backlog item fixes that doc line.
