@@ -273,11 +273,10 @@ impl<A: App> eframe::App for Host<A> {
         // the save hook restores `*mut A` inside its monomorphized closure.
         #[cfg(target_os = "ios")]
         HOST_PTR.with(|p| p.set(&mut self.app as *mut A as *mut ()));
-        // Losing focus saves here only while frames run. Once the activity
-        // pauses, winit dispatches no frame, so on Android the save that
-        // covers backgrounding is `save` below (Suspended). It is NOT the
-        // save moment on iOS — backgrounding never resigns the key window
-        // there; the lifecycle observers installed in `Host::new` cover iOS.
+        // Losing focus saves here only while frames run. On Android the save
+        // that covers backgrounding is `save` below. It is NOT the save moment
+        // on iOS: backgrounding never resigns the key window there, and the
+        // lifecycle observers installed in `Host::new` cover iOS.
         if ctx.input(|i| {
             i.events
                 .iter()
@@ -304,12 +303,13 @@ impl<A: App> eframe::App for Host<A> {
         HOST_PTR.with(|p| p.set(std::ptr::null_mut()));
     }
 
-    /// Android only. eframe calls this on the Suspended event, which winit
-    /// forwards when the native window is torn down. That path needs no
-    /// frame, so it still runs after the activity has paused. eframe also
-    /// calls it on its 30 s autosave tick (a frame path) and before
-    /// `on_exit`; `save_current` is a no-op on a clean buffer. Storage
-    /// exists only with the `persistence_path` set in `android::start`.
+    /// Android only. eframe calls this on the exit path, and the device run
+    /// behind the 7-A3 entry exercised it on backgrounding: an edit made
+    /// under 1.5 s before Home survived a process kill (2 of 2 runs, while
+    /// the pre-fix build lost it). Which winit event triggers the call on
+    /// Android is not confirmed in code; the path the code reads is
+    /// `Suspended`. `save_current` is a no-op on a clean buffer. eframe calls
+    /// this only when a storage exists, which `android::start` provides.
     #[cfg(target_os = "android")]
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
         self.app.save_current();
