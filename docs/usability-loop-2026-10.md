@@ -135,8 +135,9 @@ Deferred to later iterations:
   user confirms; no D number is assigned.
 - 1-A13, touch targets: the "Tab to me" pill is 18 pt tall, and state buttons
   are about 58 pt. Iteration 2. Rust Notes' ✕ (32 pt) and "+" (40 pt) are
-  iteration 7. **Two halves:** the Tab-to-me pill is fixed in `fb99a5f` (2-A8); the
-  Rust Notes cross is guarded in `7b07a78`, and its "+" button is not guarded
+  iteration 7. **Two halves:** the Tab-to-me pill's padding is fixed in `fb99a5f`
+  (2-A8), but its height is still 25 pt, under the 44 pt floor: open, pending D11.
+  The Rust Notes cross is guarded in `7b07a78`; its "+" button is not guarded
   (`fab_size` is 56 pt, a known gap).
 - 1-A6, fixed-width tiles hug the left edge on a phone. Iteration 5.
 - 1-A9, principle card 01 is about 443 pt tall. This is the known follow-up
@@ -1255,13 +1256,16 @@ start of iteration 5, which is no longer accurate.
 
 ### Resume here
 
-1. Finish the D16 scoped fix and its review, then close it in the iteration 10 entry.
-2. Refresh PR #24's title and body. It should name the iterations, the `bdd9607` commit
-   (which also carries a task-25 hunk), D1 to D18, and K1 to K4.
-3. Re-run the trailer check over `162d7e7..HEAD` (every commit should carry the Haiku
-   trailer).
-4. Decide D11 to D18. Then the touch-target sweep can run.
-5. Finish iteration 9's gesture-free items.
+1. Decide D1 to D19 (D16 has a default: keep the reading width on Medium portrait).
+2. Iteration 9's open items: the iOS bottom clip, the Components right margin on iOS, the bar's
+   edge on iOS (2-I9), and the keyboard inset.
+3. Iteration 10's open items: the re-screenshot sweep at HEAD against the `iter-N-verify`
+   baselines; the K4 fix (a longer reverse swipe, then three clean runs); the K2 mutation check;
+   and the sequential backlog workflow.
+4. Refresh PR #24's title and body: iterations 1 to 8 closed, 9 partial, 10 closed with open
+   items, the `bdd9607` commit (it carries a task-25 hunk), D1 to D19, K1 to K4, and the register
+   path.
+5. Re-run the trailer check over `162d7e7..HEAD`, and confirm every commit carries the Haiku trailer.
 
 ### Working notes
 
