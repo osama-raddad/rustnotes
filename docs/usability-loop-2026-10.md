@@ -1,6 +1,6 @@
 # Framework usability loop — October 2026
 
-Status: iterations 1 to 7 are closed, 8 and 9 are partial, and 10 is closed with open
+Status: iterations 1 to 8 are closed, 9 is partial, and 10 is closed with open
 items. The current state, the open decisions (D1 to D18), the known gaps, and the
 resume steps are in "Status and handoff" at the end of this file.
 
@@ -1029,26 +1029,36 @@ armed.
 takes most of a landscape phone, and the caret stays visible above it. There is no
 layout defect; a larger editor would need a smaller keyboard.
 
-## Iteration 8: size classes (partial)
+## Iteration 8: size classes (closed)
 
-Device: `Snakebyte_Tablet` (1280 by 800, landscape), `emulator-5556`, booted for
-this pass. The Pixel (`emulator-5554`) was left on portrait 448pt at font scale 1.0.
-`just run-android` picks the first emulator, so the tablet was installed with
-`just android-install rustnotes emulator-5556 native`.
+Devices: `Snakebyte_Tablet` (1280 by 800 dp) on `emulator-5556`, and then
+`Snakebyte_Tablet_Design` (1024 by 600 dp, 160 dpi), which replaced it on the same port
+for the design check. The Pixel (`emulator-5554`) was not used here.
+`just run-android` picks the first emulator, so both tablets were installed with
+`just android-install rustnotes <serial> native`.
 
-Checked, and working:
-- The two-pane layout: the note list on the left (about 420pt), the detail pane on
-  the right, and the bottom bar across both.
-- The empty detail pane reads "Select a note or tap +", centred.
-- A note created on the tablet opens in the right pane with the title "Edit note"
-  and the body text on the same left edge. The selected row is highlighted.
-- The tablet's software keyboard leaves most of the editor visible.
-
-Not checked, so iteration 8 is open:
-- The two-pane surface colour, and its side inset (from the 0de8ad4 review). The
-  pane edges look plain on this screenshot, but the inset was not measured.
-- The Snakebyte_Tablet_Design AVD, and a portrait tablet.
-- Phone landscape single-pane was checked in iteration 7 on the Pixel, not here.
+- **Two-pane layout and editor, landscape (`Snakebyte_Tablet`).** The note list
+  on the left (about 420pt), the detail pane on the right, the bottom bar across both.
+  The empty detail reads "Select a note or tap +". A note created there opens in the
+  right pane with "Edit note" and the body text on the same left edge.
+  (`iter-8-tablet-editor.png`)
+- **Portrait pass, `Snakebyte_Tablet` at 800 by 1280 pt (Medium width, Expanded
+  height, single-pane).** The list (`iter-10-tablet-portrait.png`), the editor opened from
+  the list (`iter-10-tablet-portrait-editor.png`: the text is capped to a centred
+  640 column, starting at x 96 px, while the title is not capped), and Settings
+  (`iter-8-tablet-portrait-settings.png`). The note was created in landscape and opened in
+  portrait.
+- **Two-pane surface inset (`99a3ad1`, with the test correction in `82c5b48`).** A
+  headless check at 998 by 480 pt with a 53 pt left inset found the detail surface ending at
+  998 pt while its bar stopped at 945 pt, so the right margin showed surface colour. The
+  surface now ends at the scaffold's mirrored edge. The guard test pins it to the window's
+  geometry (998 minus 53). **Reachability:** two-pane needs height of at least 480 pt, and
+  an asymmetric inset needs a cutout. Neither emulator here has both, so the fix is
+  verified headless only. It would need a landscape phone at least 480 pt tall with a cutout.
+- **Design AVD, `Snakebyte_Tablet_Design`.** Landscape: two-pane (`iter-8-design-landscape.png`).
+  Portrait, 600 by 1024 pt: Medium width, Expanded height, single-pane
+  (`iter-8-design-portrait-settings.png`). The Compact/Medium boundary is at 600 pt, and this
+  device sits exactly on it, which the app classes as Medium.
 
 ## Iteration 9: the iOS pass (taps only, partial)
 
@@ -1135,8 +1145,10 @@ start of iteration 5, which is no longer accurate.
   editor text, `32b3f86` and its cap scope in `458f343`, see D16), and 7-A3 (edits lost
   when backgrounded, `9188861`, with its comments in `729a9b7`). Guards: 1-A13 and 1-I9
   (`7b07a78`). 4-A4 is closed as by design.
-- **Iteration 8 (tablet, partial):** the two-pane layout and editor on
-  `Snakebyte_Tablet`. Open: the two-pane surface inset, the design AVD, a portrait tablet.
+- **Iteration 8 (tablet, closed):** the two-pane layout and editor (landscape), the
+  portrait pass (list, editor, Settings), the two-pane surface inset (`99a3ad1`, with
+  its test correction in `82c5b48`, verified headless only), and the design AVD
+  (two-pane landscape; single-pane at 600 pt portrait, on the Medium side of the boundary).
 - **Iteration 9 (iOS, partial):** taps only. Open: gestures (not drivable here), the
   bottom clip and blank band, the bar's edge on iOS (2-I9), the iOS keyboard inset.
 - **Iteration 10 (regression sweep, in progress):** `just check` exits 0. The
@@ -1214,8 +1226,7 @@ start of iteration 5, which is no longer accurate.
 3. Re-run the trailer check over `162d7e7..HEAD` (every commit should carry the Haiku
    trailer).
 4. Decide D11 to D18. Then the touch-target sweep can run.
-5. Finish iteration 8's open checks and iteration 9's gesture-free items, and close iteration 6's
-   night-mode device pass.
+5. Finish iteration 9's gesture-free items.
 
 ### Working notes
 
