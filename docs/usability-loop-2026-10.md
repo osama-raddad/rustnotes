@@ -1,8 +1,8 @@
 # Framework usability loop — October 2026
 
-Status: iterations 1 to 8 are closed, 9 is partial (one check left: a caret low in a
-long note), and 10 is closed with open items. The current state, the open decisions
-(D1 to D20), the known gaps, and the
+Status: iterations 1 to 9 are closed (9 with one open minor: the caret stays under the
+keyboard until the first keystroke), and 10 is closed with open items. The current state,
+the open decisions (D1 to D20), the known gaps, and the
 resume steps are in "Status and handoff" at the end of this file. The findings
 register, derived from this ledger, is `docs/usability-findings-register-2026-10.md`.
 
@@ -1123,16 +1123,21 @@ bottom-clip and gap screenshots by eye.
   the tab labels (`iter-9-ios-gallery-start.png`). The gap from the bar's bottom to the tab
   labels is 56.3 pt on iOS, and 55.3 dp on Android at 3 px per dp. The gap belongs to the
   1-I5 chrome item.
-- **The keyboard appears on iOS. The inset is checked only with the caret at the top.** The
-  first pass saw no keyboard, and the cause was the simulator's state, not the app. After a
-  shutdown and boot of the device, with the hardware keyboard setting off, Settings' search
-  shows a keyboard, and Rust Notes' New note shows one too (`iter-9-ios-rust-kb-new.png`).
-  The caret sits at 140 pt and the keyboard's top edge at 582 pt, so the caret is clear of it.
-  Still open: a caret low in a long note, under the keyboard. The keyboard was drawn in both
-  the New note and the Edit note screens. A long-text check then typed about 850 characters in
-  the Edit note, but the keyboard was not drawn in the frame after typing, so the caret-to-
-  keyboard relation is not measured. The test note was deleted with the two-tap delete (the
-  list shows only the older note). The hardware-keyboard default was restored after each test.
+- **The keyboard appears on iOS. The caret stays under it until the first keystroke (minor).**
+  The first pass saw no keyboard, and the cause was the simulator's state, not the app. The
+  MCP `text` action injects hardware key events: it turned "keyboard's" into "keyboardäs" on
+  the Swedish layout. iOS then suppresses the software keyboard device-wide until a shutdown
+  and boot. Settings showed none afterwards, and a clean boot brought it back. So keyboard
+  checks are touch-only, with text pre-seeded in storage.
+  On a clean boot, a touch on the last line of a note about 830 pt long brings the keyboard
+  up, but the editor does not scroll to the caret. The body shrinks to its top edge at 581
+  pt, and the caret stays under the keyboard (`iter-9-ios-clean-tap.png`). A swipe up in the
+  body scrolls it (`iter-9-ios-disc2-swipe.png`). One software keystroke scrolls the caret
+  into view, but only to the keyboard's edge (`iter-9-ios-disc3-key.png`). The cause is in
+  core, the editor's scroll-to-caret when the body height changes while focused. Not fixed in
+  this pass. The fix candidate is core, with a red test in the harness: focus the editor, put
+  the cursor at the bottom, apply a larger bottom inset, and assert the cursor rect is inside
+  the visible viewport.
 - **Simulator setting.** The pass set `ConnectHardwareKeyboard` to false for the keyboard test,
   and the default was restored with `defaults delete`.
 
@@ -1207,6 +1212,11 @@ specimen spill (2-A13, from iteration 5) and the "Restore the banners" affordanc
     frame after a cross delete (predates the branch, not run on a device); the
     detail surface's right edge may not match the mirrored bar edge in a left-only
     inset (low reachability).
+- **HEAD sweep (eight surfaces, `build/usability-audit/iter-10-sweep/`): no regressions.** The
+  differences trace to committed changes: the header wordmark (`d660dbb`), the Foundations header
+  commits, and the Components "Sending..." label (`cbd4086`). The Theme menu opens and dismisses.
+  Rust Notes' list, Settings and editor match their baselines by structure. Those two editor and
+  list baselines are landscape, so they were judged by eye.
 - **Verdict:** `just check` is green. `emu-touch.sh` is informational (K4). The
   branch review has no open blocker. The one major that is a design question is D18,
   and the other is D16, now fixed with the user's question recorded.
@@ -1231,11 +1241,12 @@ start of iteration 5, which is no longer accurate.
   portrait pass (list, editor, Settings), the two-pane surface inset (`99a3ad1`, with
   its test correction in `82c5b48`, verified headless only), and the design AVD
   (two-pane landscape; single-pane at 600 pt portrait, on the Medium side of the boundary).
-- **Iteration 9 (iOS, partial, one check left):** gestures are drivable with the simulator's MCP
-  tool. Scroll, popover, and the swipe-to-delete arm are checked. The bottom clip is confirmed on
-  iOS (2-I8, the outlined card cut at 816 pt) and is a layout decision, D20. The right margin is
-  symmetric (closed). Open: a caret low in a long note under the keyboard. The fused divider
-  (2-I9) does not reproduce on iOS; its gap waits on 1-I5.
+- **Iteration 9 (iOS, closed with one open minor):** gestures are drivable with the simulator's
+  MCP tool. Scroll, popover, and the swipe-to-delete arm are checked. The bottom clip is confirmed
+  on iOS (2-I8, the outlined card cut at 816 pt) and is a layout decision, D20. The right margin is
+  symmetric (closed). The keyboard appears on a clean boot, and the caret stays under it until the
+  first keystroke: a minor core scroll-to-caret finding, open. The fused divider (2-I9) does not
+  reproduce on iOS; its gap waits on 1-I5.
 - **Iteration 10 (regression sweep, in progress):** `just check` exits 0. K2 is closed:
   the axis-lock mutation is caught. K4 is open: the touch script's `unswipe` failed in 3 of
   12 runs, and its cause is not traced. The branch diff review ran (three reviewers), and
@@ -1316,11 +1327,10 @@ start of iteration 5, which is no longer accurate.
 
 1. Decide D1 to D20 (D16 has a default: keep the reading width on Medium portrait; D20 has a
    default: keep the bottom margin).
-2. Iteration 9's open item: a caret low in a long note under the keyboard. The bottom clip is D20,
-   and the right margin is closed.
-3. Iteration 10's open items: the re-screenshot sweep at HEAD against the `iter-N-verify`
-   baselines; K4 (diagnose the settled-short state before any more runs); and the sequential
-   backlog workflow.
+2. Iteration 9's open minor: the editor's scroll-to-caret when the keyboard appears (core; red test
+   first). The bottom clip is D20, and the right margin is closed.
+3. Iteration 10's open items: K4 (diagnose the settled-short state before any more runs), and the
+   sequential backlog workflow. The HEAD sweep is done, with no regressions.
 4. Refresh PR #24's title and body: iterations 1 to 8 closed, 9 partial, 10 closed with open
    items, the `bdd9607` commit (it carries a task-25 hunk), D1 to D19, K1 to K4, and the register
    path.

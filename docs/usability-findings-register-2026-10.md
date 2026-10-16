@@ -5,9 +5,9 @@ Earlier audit counts are superseded.
 
 ## Totals
 
-- Distinct IDs: 147 (79 numbered, 20 D-items, 4 K-items, 44 descriptive). The 1-I2 row was added after the collapse.
+- Distinct IDs: 148 (79 numbered, 20 D-items, 4 K-items, 45 descriptive). The 1-I2 row was added after the collapse.
 - By severity: blocker 3; major 27; minor 44; nit 15; not stated 57.
-- By final disposition: fixed 60; closed 15 (of which closed by design 7; K2 closed in iteration 10; two iOS right-margin rows closed in iteration 9); decision open 34 (6 of them with a default taken); open 38.
+- By final disposition: fixed 60; closed 15 (of which closed by design 7; K2 closed in iteration 10; two iOS right-margin rows closed in iteration 9); decision open 34 (6 of them with a default taken); open 39.
 
 ## Register
 
@@ -57,6 +57,7 @@ Earlier audit counts are superseded.
 | 2-I5 | nit | gallery, busy label | 'Sending' active-state label reads about 1.2:1 | fixed cbd4086 | Iter 2 L256-260; Iter 6 task 24 L886-891 |
 | 2-I8 | minor | gallery on iOS, bottom clip | Content hard-clipped near 816 pt; snackbar corners look notched | decision open: D20 (the scroll's bottom edge; 816 pt on iOS, 949 pt on Android); snackbar corners not checked | Iter 2 L270-272; Iter 2 closed L413-414; Iter 9 iOS results |
 | 2-I9 | minor | gallery on iOS, bar edge and gap | Bar's bottom edge fuses with the divider; about 55 pt empty above the tab labels | open: the fused divider does not reproduce on iOS; the gap waits on 1-I5 | Iter 2 L273-275; Iter 2 closed L413-414; Iter 9 iOS results |
+| ios-caret-under-keyboard | not stated | Rust Notes editor on iOS, long note | After a touch at the end, the caret stays under the keyboard until the first keystroke; the editor does not scroll to the caret when the body shrinks | open: minor, core scroll-to-caret; fix not started | Iter 9 iOS results |
 | 3-A1 | major | gallery, Theme popover rows | Radio rows 32 pt apart, under the 44-pt floor; toggle labels 28 pt right of radio labels | fixed ca1b391 | Iter 3 L436-438; fix L492-494 |
 | 3-A2 | major | gallery, top bar tab order | Tab goes Theme then Search; Search sits left of Theme on screen | fixed 12c256e | Iter 3 L439-440; fix L495-498 |
 | 3-A3 | major | gallery, Brand tab focus ring | Ring clipped on its left edge at the content margin | fixed 206daff | Iter 3 L441-443; fix L499-501 |
@@ -186,6 +187,7 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 - 2-A13 (nit): open: no closure recorded, glass specimens; carried to the iteration 10 backlog. Ledger L268-269, L1121-1123.
 - 2-I8 (minor, iOS): decision open: D20, the scroll's bottom edge (816 pt on iOS). Ledger L270-272, iteration 9 iOS results.
 - 2-I9 (minor, iOS): open: fused divider does not reproduce on iOS; gap waits on 1-I5. Ledger L273-275.
+- ios-caret-under-keyboard: open: minor, core scroll-to-caret on iOS. Iteration 9 iOS results.
 - components-glass-spill (nit): open: no closure recorded, same as 2-A13. Ledger L1121-1123.
 - D2: decision open, default taken: kept as a documented design element. Ledger L377-380.
 - D3: decision open: D3. Ledger L381-387.
@@ -256,8 +258,8 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 
 ### Resume here (handoff, ledger resume list)
 - Decide D1 to D20. D16 has a default: keep the reading width on Medium portrait. D20 has a default: keep the bottom margin.
-- Iteration 9's open item: a caret low in a long note under the keyboard. The bottom clip is D20; the right margin is closed.
-- Iteration 10's open items: the re-screenshot sweep at HEAD; K4 (diagnose the settled-short state); and the sequential backlog workflow.
+- Iteration 9 closed with one open minor (ios-caret-under-keyboard). The bottom clip is D20; the right margin is closed.
+- Iteration 10's open items: K4 (diagnose the settled-short state), and the sequential backlog workflow. The HEAD sweep is done, with no regressions.
 - Refresh PR #24's title and body (iterations 1 to 8 closed, 9 partial, 10 closed with open items, D1 to D19, K1 to K4, the register path).
 - Re-run the trailer check over `162d7e7..HEAD`.
 
