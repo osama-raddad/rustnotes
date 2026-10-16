@@ -185,8 +185,8 @@ Known gaps, recorded rather than fixed:
   it is not expected on a phone. A fix, or an `#[ignore]`d regression test, is
   still open.
 - **K2, axis-lock coverage.** The jump test's coverage of the origin-based axis
-  lock is argued from the code. A mutation check was denied by the classifier,
-  so it is unverified.
+  lock was argued from the code. Closed in iteration 10: the mutation is caught
+  (see there).
 - **K3, freeze on relaunch (1-R1, blocker, open).** Still open. This blocks
   unattended testing after a Back exit, so testers avoid Back and use
   `am force-stop` between runs. The options are: end the process when the
@@ -1136,9 +1136,31 @@ specimen spill (2-A13, from iteration 5) and the "Restore the banners" affordanc
   - **Not bisected.** Since 162d7e7, only `fb99a5f` touched `states_section`, and
     its +8pt pill height does not account for 57pt. The `wrapping_row` callers
     (lines 913, 984, 1031) are not the states row.
-  - **Status: informational.** A single run is not a gate until `unswipe` is
-    deterministic. Backlog: lengthen the reverse swipe (300 to 1300, not 1100), so the
-    row's start clamp guarantees the restore. Recorded as **K4**.
+  - **Status: informational, still open (K4).** A single run is not a gate until
+    `unswipe` is deterministic. Follow-up in this stretch:
+    - The reverse swipe went from 1100 to 1300 px (1000 px, against the forward 800 px).
+      Three runs at 1.5 s: `unswipe` 2.9% (fail), 0.0, 0.0.
+    - The failing run's restored frame, against its start state, was about 96 pt to the
+      left of the start, still short of the clamp at 1.5 s (`iter-10-k4-run1-diff.png`,
+      a shift search over the state-tile band). The earlier "about 57 pt short" reading
+      was in the same direction. Consistent with the fling still running at 1.5 s; not
+      traced to code.
+    - Three runs with a 3 s wait before the restore shot: `unswipe` 0.0, 0.0, 0.0. Run 1
+      failed `return` (16.0%), a second check with the same weakness.
+    - The committed script now waits until two shots in a row differ by under 0.5% before
+      the restore shot (`still`), and the back-swipe check does the same (`back_to_top`).
+      Gate batch, three runs: `unswipe` 0.0, **3.1% (fail)**, 0.0; `return` 0.0 in all
+      three. The stable wait fixed `return`. It did not make `unswipe` deterministic: the
+      failing run had settled 3.1% from its start, so a settled short state also occurs.
+      Not traced.
+    - Totals: four batches, 12 runs, three `unswipe` failures (3.5%, 2.9%, 3.1%). The check
+      stays informational. The next step is a diagnosis of the short state, not more runs.
+- **K2 closed (axis-lock mutation).** The axis is measured from the last frame's delta
+  (`let travelled = delta;`) in place of the travel since the press, at
+  `crates/ui-kit-gallery/src/gallery.rs:405`. `input_tests.rs:509` fired on the
+  mutation: "a vertical swipe on the row must scroll the page: 1692 -> 1692". The
+  mutation was reverted with an Edit, `git diff --exit-code` on `gallery.rs` is clean,
+  and the test passes on HEAD.
 - **Branch diff review** (three read-only reviewers, one per area, over `7918329..HEAD`):
   - *ui-kit:* no blockers or majors. Minor: the tab strip's scroll ignores reduced
     motion (a glide still runs). Two comments are wrong, not the code: outline.rs:26
@@ -1185,10 +1207,10 @@ start of iteration 5, which is no longer accurate.
   popover, and the swipe-to-delete arm are checked. Open: the iOS bottom clip (the 816-pt claim),
   the right margin of the Components page (task 20's iOS caveat), the bar's edge on iOS (2-I9),
   and the keyboard inset.
-- **Iteration 10 (regression sweep, in progress):** `just check` exits 0. The
-  emulator touch script exited 1 once in three runs (K4, not established as a
-  regression). The branch diff review ran (three reviewers), and its findings are
-  triaged below.
+- **Iteration 10 (regression sweep, in progress):** `just check` exits 0. K2 is closed:
+  the axis-lock mutation is caught. K4 is open: the touch script's `unswipe` failed in 3 of
+  12 runs, and its cause is not traced. The branch diff review ran (three reviewers), and
+  its findings are triaged below.
 
 ### Branch review, triaged
 
@@ -1248,11 +1270,11 @@ start of iteration 5, which is no longer accurate.
 ### Known gaps
 
 - **K1:** a rightward pointer jump in the first touch frame moves a specimen row.
-- **K2:** the axis-lock mutation has not been run.
-- **K4:** the emulator touch script's `unswipe` check failed once in three runs at
-  HEAD. Cause not established: the row probe position varied, or the swipe landed
-  near the row's edge. Not bisected. Informational until the reverse swipe is
-  lengthened so the clamp guarantees the restore.
+- **K2:** closed in iteration 10 (the mutation is caught; see there).
+- **K4:** the emulator touch script's `unswipe` check failed in 3 of 12 runs over four
+  batches (3.5%, 2.9%, 3.1%). At 1.5 s the restored row was about 96 pt short of its
+  start, and the stable-wait batch's failing run settled 3.1% from its start. Cause not
+  traced; not bisected. Informational: no more runs until the short state is diagnosed.
 
 ### Resume here
 
@@ -1260,8 +1282,8 @@ start of iteration 5, which is no longer accurate.
 2. Iteration 9's open items: the iOS bottom clip, the Components right margin on iOS, the bar's
    edge on iOS (2-I9), and the keyboard inset.
 3. Iteration 10's open items: the re-screenshot sweep at HEAD against the `iter-N-verify`
-   baselines; the K4 fix (a longer reverse swipe, then three clean runs); the K2 mutation check;
-   and the sequential backlog workflow.
+   baselines; K4 (diagnose the settled-short state before any more runs); and the sequential
+   backlog workflow.
 4. Refresh PR #24's title and body: iterations 1 to 8 closed, 9 partial, 10 closed with open
    items, the `bdd9607` commit (it carries a task-25 hunk), D1 to D19, K1 to K4, and the register
    path.

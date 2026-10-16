@@ -7,7 +7,7 @@ Earlier audit counts are superseded.
 
 - Distinct IDs: 146 (79 numbered, 19 D-items, 4 K-items, 44 descriptive). The 1-I2 row was added after the collapse.
 - By severity: blocker 3; major 27; minor 44; nit 15; not stated 57.
-- By final disposition: fixed 60; closed 12 (of which closed by design 7); decision open 32 (5 of them with a default taken); open 42.
+- By final disposition: fixed 60; closed 13 (of which closed by design 7; K2 closed in iteration 10); decision open 32 (5 of them with a default taken); open 41.
 
 ## Register
 
@@ -112,9 +112,9 @@ Earlier audit counts are superseded.
 | D18 | major | gallery, icons row | Top or bottom alignment for the icons row | decision open: D18 | Iter 10 L1146-1147; Status L1240-1242 |
 | D19 | not stated | gallery, OS night flag | Gallery starts on Forest Light whatever the OS night flag says | decision open: D19 | Iter 6 L928-931; Status L1243-1244 |
 | K1 | not stated | ui-kit and gallery, touch input | Rightward pointer jump in the first touch frame moves a clamped specimen row | open: known gap; no fix or ignored regression test recorded | Iter 1 L180-185; Known gaps L1249 |
-| K2 | not stated | gallery, axis-lock coverage | Mutation check denied by the classifier; coverage unverified | open: mutation check not run | Iter 1 L186-188; Known gaps L1250 |
+| K2 | not stated | gallery, axis-lock coverage | Mutation check denied by the classifier; coverage unverified | closed in iteration 10: mutation caught at gallery.rs:405, input_tests.rs:509 fired, clean revert | Iter 1 L186-189; Iter 10 K2 entry; Known gaps |
 | K3 | blocker | host, relaunch after Back | Same issue as 1-R1 and D1 | decision open: D1 | Iter 1 L189-194; D1 L371-375 |
-| K4 | not stated | tools/emu-touch.sh, unswipe check | Failed once in three runs at HEAD; cause not established; not bisected | open: cause not established; reverse swipe not yet lengthened | Iter 10 L1126-1140; Known gaps L1251-1254 |
+| K4 | not stated | tools/emu-touch.sh, unswipe check | Failed in 3 of 12 runs over four batches; restored row settles short; cause not traced | open: informational; no more runs until the short state is diagnosed | Iter 10 K4 entry; Known gaps |
 | 7-hold-to-select | not stated | Rust Notes, editor | Hold then drag selects text; no word-select or selection handles | open: no closure recorded (observation, not a fix) | Iter 7 L1012-1016 |
 | branch-core-editor-cap | major | Rust Notes, editor width cap | Cap removed for every single-pane window, contrary to metrics.rs:24; Resume step 1 still lists finishing the scoped fix | fixed 458f343 | Iter 10 L1153-1154, L1197-1199; D16 L1225-1226; Resume L1258 |
 | branch-core-swipe-hint-tap | minor | Rust Notes, swipe hint | Hint can be tapped; it opens the note and drops the arm | decision open: D17 | Iter 10 L1155-1156, L1205-1206; D17 L1237-1239 |
@@ -174,7 +174,7 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 - 1-I5 (iOS): open: iOS pass (iteration 9) is partial. Ledger L150-151.
 - 1-I7 (nit): open: no closure recorded, specimen clipped at the fold. Ledger L152-153.
 - K1: open: known gap, rightward pointer jump; no fix or ignored regression test. Ledger L180-185.
-- K2: open: mutation check not run. Ledger L186-188.
+- K2: closed in iteration 10: mutation caught. Ledger iteration 10 K2 entry.
 - K3 (blocker): decision open: D1. Ledger L189-194.
 - D1 (blocker): decision open: D1, relaunch freeze after Back. Ledger L371-375.
 
@@ -239,7 +239,7 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 - iter9-keyboard-inset-ios: open: same item as iter9-keyboard-inset. Ledger L1108-1110.
 
 ### Iteration 10
-- K4: open: cause not established; reverse swipe not yet lengthened. Ledger L1126-1140, L1251-1254.
+- K4: open: 3 of 12 runs fail unswipe; cause not traced; informational. Ledger iteration 10 K4 entry and known gaps.
 - branch-gallery-icons-alignment (major): decision open: D18. Ledger L1146-1147, L1240-1242.
 - D18 (major): decision open: D18, top or bottom alignment. Ledger L1240-1242.
 - branch-core-swipe-hint-tap (minor): decision open: D17. Ledger L1155-1156, L1237-1239.
@@ -255,7 +255,7 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 ### Resume here (handoff, ledger resume list)
 - Decide D1 to D19. D16 has a default: keep the reading width on Medium portrait.
 - Iteration 9's open items: the iOS bottom clip, the Components right margin on iOS, the bar's edge on iOS (2-I9), and the keyboard inset.
-- Iteration 10's open items: the re-screenshot sweep at HEAD; the K4 fix (a longer reverse swipe, then three clean runs); the K2 mutation check; and the sequential backlog workflow.
+- Iteration 10's open items: the re-screenshot sweep at HEAD; K4 (diagnose the settled-short state); and the sequential backlog workflow.
 - Refresh PR #24's title and body (iterations 1 to 8 closed, 9 partial, 10 closed with open items, D1 to D19, K1 to K4, the register path).
 - Re-run the trailer check over `162d7e7..HEAD`.
 
@@ -267,11 +267,10 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 
 ### Iteration 10 open items (ledger L1119-1161, L1187-1190, L326-336)
 - Backlog carried into iteration 10, with no fix date: Components glass specimen spill (2-A13; components-glass-spill) and the Restore the banners affordance (3-I9, 3-I10; components-restore-banners-link).
-- K4: emulator touch script unswipe check; cause not established; lengthen the reverse swipe so the clamp guarantees the restore.
+- K4: emulator touch script unswipe check; 3 of 12 runs fail; the restored row settles short; cause not traced.
 - Branch review backlog: the minor and major items listed under the iteration 10 rows above, plus D17 and D18.
 - D16: the scoped fix is made (`458f343`, reviewed PASS). The user's choice on Medium portrait remains: decision open, default taken (keep the reading width).
 - Re-screenshot sweep at HEAD against the `iter-N-verify` baselines: not done.
-- K2, the axis-lock mutation check: not run.
 - Test-quality backlog, not IDs (ledger L326-336, L414-415, L561-564, L771-776): metric-card padding round-trip and build helper; text-field wrap-width assertion and helper; painted_text and painted_strings shared walker; chips-row guard against CHIP_FILTERS drift; golden-table re-recording notes; shape walkers repeated across test files.
 
 ## Decisions for the user
@@ -299,9 +298,9 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 ## Known gaps
 
 - K1: a rightward pointer jump in the first touch frame moves a clamped specimen row; no fix or ignored regression test recorded. Ledger L180-185, L1249.
-- K2: the axis-lock mutation check was denied by the classifier, so coverage is unverified. Ledger L186-188, L1250.
+- K2: closed in iteration 10. The axis-lock mutation is caught by the jump test (`gallery.rs:405`, `input_tests.rs:509`).
 - K3: the relaunch freeze after Back (same as D1, and 1-R1 at blocker severity). Ledger L189-194.
-- K4: the emulator touch script's unswipe check failed once in three runs at HEAD; cause not established. Ledger L1126-1140, L1251-1254.
+- K4: the emulator touch script's unswipe check failed in 3 of 12 runs over four batches; cause not traced. Ledger iteration 10 K4 entry.
 
 ## Sources
 
