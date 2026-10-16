@@ -919,7 +919,7 @@ Not done in iteration 6, and open:
 - **Task 27's trailer.** Amended from Sonnet to Haiku, which rewrites the commit
   hash but not its content.
 
-## Iteration 7: Rust Notes touch flows and the keyboard (partial)
+## Iteration 7: Rust Notes touch flows and the keyboard (closed)
 
 A partial device pass on the Pixel, portrait 448pt, font scale 1.0. No triage or
 fix batch has run for this iteration yet.
@@ -964,14 +964,67 @@ Later in the pass:
   tablets in the Medium class (600 to 839pt), which the cap used to narrow. No test
   covers Medium. The alternative is to keep the reading width and cap the title bar
   too. Keep full width, or restore the reading width for portrait tablets?
-- **4-A4, still open.** In landscape the keyboard covers all but about one and a
-  half lines of the editor. That is the keyboard's own height, not a layout
-  defect; the caret stays visible. It is not fixed.
+- **4-A4, closed as by design.** In landscape the keyboard covers all but about one
+  and a half lines of the editor. That is the keyboard's own height, and the caret stays
+  visible above it. There is no layout defect.
 
-Not checked yet, so iteration 7 is open:
-- The editor's hold-to-select, and autosave timing with the note open.
-- The size of the delete cross and the "+" button (1-A13), and the date's alignment
-  in the note row (1-I9). Both look aligned on the screenshots; neither was measured.
+**7-A3, major, edits made just before the app is backgrounded are lost.** A
+marker typed under 0.5 s before Home, then a process kill, was not in the note after
+relaunch. The pre-fix build lost it (`homepqrs`, the valid red: the note was open).
+**Fixed in `9188861`** (reapplying `f2673f8`, which `fbfa8ab` had reverted; its comment
+corrections are in `729a9b7`). With the
+fix installed, the same sequence kept the marker in both runs (`fixhome`,
+`repeathome`; screenshots `build/usability-audit/iter-7-fix-home-kill-2.png` and
+`-3.png`).
+
+- **History.** `f2673f8` added the save and `fbfa8ab` reverted it, on the strength of
+  two runs that do not count: `pqrs` (a force-stop with no Home, which is a hard kill and
+  loses an edit under 1.5 s old by design) and `savea` (started at the list, so the
+  note was never open). The revert message's diagnosis was never verified. `9188861`
+  reapplies the fix. Its message describes comment corrections that were left unstaged,
+  so `729a9b7` adds them.
+- **Mechanism.** Before the fix, the host saved on focus loss only inside a frame, and
+  no frame runs once the activity pauses. The fix saves through eframe's `App::save`,
+  which eframe calls only when it has a storage. The code reads that call as coming from
+  winit's `Suspended`. Which winit event fires on this emulator is **not confirmed in
+  code**, and the logcat for the Home press was not conclusive.
+- **Cost.** eframe's `persistence` feature, on the Android target only, with `ron`,
+  `enumn` and `typeid` added to the lock file (the diff is additive). Nothing is written
+  to `eframe-state.ron`: the save goes to the database through `save_current`. eframe's
+  30 s autosave tick now also calls `save`, which does nothing on a clean buffer.
+- **Untested.** Screen-off, swipe-away from recent apps, multi-window, and a low-memory
+  kill that skips `onStop`.
+
+**Hold-to-select (observation, not a fix).** A stationary 0.9 s press places the
+caret and selects nothing. A 0.7 s hold followed by a drag selects the text under the
+finger (`iter-7-hold-select.png`, `iter-7-hold-drag.png`). There is no word-select and
+no selection handles. egui's `TextEdit` does not do word-select on a long touch, so
+this is a gap a tester would file, not a regression.
+
+**Autosave.** The debounce fires and the write survives a process kill: marker `zqxw`
+was saved, and it was still there after a force-stop and relaunch. A kill within the
+1.5 s window loses the edit, by design (`pqrs`).
+
+**Device data, not code.** The sample note now carries `zqxw` on line 2, and on line 4
+the markers `repeathome`, `fixhome`, `ctl`, `ctl2` and `savehome`, as well as the `ZZ`
+prefix on line 3. Emulator state, not code.
+
+**1-A13, the touch targets (guard, `7b07a78`).** The delete cross's touch area is
+`touch_target + 4` (52pt on the 48pt default), and a headless test asserts at least 44pt in
+both dimensions. The test measures `Response.rect`, which is unclipped, so a
+clipped edge at the scroll boundary is not covered. The "+" button is a separate
+case: `fab_size` is 56pt in `Metrics::DEFAULT`, which is above 44, but no test
+guards it. It is recorded here as a known gap, not a finding.
+
+**1-I9, the date's alignment (guard, `7b07a78`).** Every row's date shares one right
+edge, and that edge lies left of the cross's touch area (the date's right edge is
+at the card's right minus 76pt, and the cross's touch area starts at minus 58pt).
+The test covers the list at rest. It does not cover the state with the delete hint
+armed.
+
+**4-A4, the keyboard in landscape: closed as by design.** The keyboard's own height
+takes most of a landscape phone, and the caret stays visible above it. There is no
+layout defect; a larger editor would need a smaller keyboard.
 
 ## Iteration 8: size classes (partial)
 
