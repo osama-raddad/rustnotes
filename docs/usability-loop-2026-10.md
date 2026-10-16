@@ -1,9 +1,8 @@
 # Framework usability loop — October 2026
 
-Status: iterations 1 to 6 are closed, 7 to 9 are partial, and 10 is closed with open
-items. The head is the commit that adds this line. The current state, the open
-decisions (D1 to D18), the known gaps (K1, K2, K4), and the resume steps are in
-"Status and handoff" at the end of this file.
+Status: iterations 1 to 7 are closed, 8 and 9 are partial, and 10 is closed with open
+items. The current state, the open decisions (D1 to D18), the known gaps, and the
+resume steps are in "Status and handoff" at the end of this file.
 
 Branch `feat/framework-usability-iterations`, cut from `feat/design-notes-fixes`
 (draft PR #23, tip `7918329`). This loop's PR stacks on #23.
@@ -910,14 +909,18 @@ pair of commits. Their outcomes are below.
   the Teal Light bar's 60% surface segment is about 1.07:1 against the card. It is
   not clear the finding meant the bar, so it is open.
 
-Not done in iteration 6, and open:
+**Night mode, device pass (done).** All six themes rendered on the Pixel with the
+gallery's Theme menu, with OS night mode on: Forest Light (default), Forest Dark,
+Teal Light, Teal Dark, Monochrome Light and Monochrome Dark. Screenshots are
+`build/usability-audit/iter-6-night-*.png`. OS night mode was restored to `no`.
 
-- **The night-mode device pass.** The WCAG floors now cover the six themes, and the
-  busy-label test loops all of them. Nothing ran the gallery in each theme on the
-  device, so the night-mode pass is still open.
-- **The Teal Light card, device check.** Task 29 is a headless fix only.
-- **Task 27's trailer.** Amended from Sonnet to Haiku, which rewrites the commit
-  hash but not its content.
+- **The OS night flag does not switch the gallery.** The gallery starts on Forest Light
+  whatever the OS says (`ui-kit-gallery/src/lib.rs:60` hard-codes `ThemeId::Light`), and
+  the Theme menu is the switch. Whether the gallery should follow the OS flag is a
+  choice for you: **D19**.
+- **Teal Light card, device check (done).** Its six role swatches now show visible
+  outlines (`iter-6-teal-card.png`). The card's ratio bar still uses `outline_variant`,
+  and that stays open from the task-29 review.
 
 ## Iteration 7: Rust Notes touch flows and the keyboard (closed)
 
@@ -1068,6 +1071,14 @@ Not checked, so iteration 9 is open:
 - The bar's edge and gap on iOS (2-I9).
 - The keyboard inset path on iOS.
 
+**Blank band above the gesture bar (Android half, measured).** The Components page
+scrolled to its end: the last content row is at y 2744 px, the gesture bar's pixels run
+2950 to 2961 px, so the blank band is 206 px, or 68.7 pt (`iter-9-components-bottom.png`).
+The bottom inset is 24 pt (72 px), and the bar sits inside that inset. About 45 pt is
+the page's end-of-scroll space, which the code does not explain. The earlier tester's
+figure of about 33 pt was measured another way and is not reproduced here. Recorded as a
+backlog item, not a defect: the space keeps the last card clear of the bar.
+
 ## Iteration 10: the regression sweep (closed, with open items)
 
 - **`just check`: exit 0**, for the Android and iOS targets of every mobile crate.
@@ -1118,11 +1129,12 @@ start of iteration 5, which is no longer accurate.
 - **Closed:** iterations 1 to 6. Each fix has a red test, a gate run, and a review.
   Iteration 5's fix batch (20 to 23) and iteration 6's batch (24 to 29) are closed
   in the iteration entries above.
-- **Iteration 7 (Rust Notes, partial):** checked on the Pixel: list, create, back,
-  reopen, two-tap delete, Settings, pull-to-refresh. Fixed and device-checked:
-  7-A1 (swipe-delete, `beeec62`) and 7-A2 (landscape editor text, `32b3f86`, with
-  its cap scope in progress, see D16). Open: hold-to-select, autosave timing, and
-  the measured sizes of the delete cross and "+" (1-A13).
+- **Iteration 7 (Rust Notes, closed):** the list, create, back, reopen, two-tap
+  delete, Settings, pull-to-refresh, hold-to-select and autosave are all checked on the
+  Pixel. Fixed and device-checked: 7-A1 (swipe-delete, `beeec62`), 7-A2 (landscape
+  editor text, `32b3f86` and its cap scope in `458f343`, see D16), and 7-A3 (edits lost
+  when backgrounded, `9188861`, with its comments in `729a9b7`). Guards: 1-A13 and 1-I9
+  (`7b07a78`). 4-A4 is closed as by design.
 - **Iteration 8 (tablet, partial):** the two-pane layout and editor on
   `Snakebyte_Tablet`. Open: the two-pane surface inset, the design AVD, a portrait tablet.
 - **Iteration 9 (iOS, partial):** taps only. Open: gestures (not drivable here), the
@@ -1181,6 +1193,8 @@ start of iteration 5, which is no longer accurate.
 - **D18, the icons row's alignment.** Top-aligned, so the captions step down with the
   glyph size (`build/usability-audit/iter-10-icons-sizes.png`). Bottom alignment would
   put the glyphs on a shared baseline with one caption line. Choose one.
+- **D19, OS night mode and the gallery.** The gallery starts on Forest Light whatever the OS
+  night flag says, and the Theme menu switches it. Should the gallery follow the OS flag at launch?
 - **Open:** the Teal Light card's ratio bar border, at 1.31:1 on Teal Light.
 
 ### Known gaps
@@ -1200,7 +1214,8 @@ start of iteration 5, which is no longer accurate.
 3. Re-run the trailer check over `162d7e7..HEAD` (every commit should carry the Haiku
    trailer).
 4. Decide D11 to D18. Then the touch-target sweep can run.
-5. Finish iteration 7's open checks, iteration 8's, and iteration 9's gesture-free items.
+5. Finish iteration 8's open checks and iteration 9's gesture-free items, and close iteration 6's
+   night-mode device pass.
 
 ### Working notes
 
