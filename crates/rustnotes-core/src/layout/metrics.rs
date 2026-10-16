@@ -21,7 +21,8 @@ pub struct Metrics {
     pub fab_size: f32,
     pub corner: f32,
     pub text: TextScale,
-    /// Body width cap in Medium/Expanded windows so lines stay readable.
+    /// Body width cap in single-pane (Medium) windows so lines stay readable.
+    /// An Expanded window goes two-pane, which never caps its body.
     pub max_content_width: f32,
 }
 

@@ -23,8 +23,8 @@ use std::collections::{HashMap, HashSet};
 
 /// Two triangle corners closer than this, in art units on both axes,
 /// are the same point. The art box is 1000 units tall, so a quarter
-/// unit is a fortieth of a pixel at a 1000px wordmark and nothing at
-/// the sizes the kit paints it.
+/// unit is a quarter of a pixel at a 1000px wordmark, and far below a
+/// pixel at the sizes the kit paints it.
 pub(super) const SNAP: f32 = 0.25;
 
 /// The longest a miter vector may get, in multiples of the offset: a

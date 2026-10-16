@@ -257,7 +257,7 @@ impl Logo {
     /// `feather` points: the ink pulled in by half of it, a ring of
     /// the same colour fading to transparent over the whole of it,
     /// centred on the art's edge as epaint's own feathering is. `0`
-    /// paints the hard-edged triangles.
+    /// paints the snapped outline's triangles with no ring.
     fn mesh(&self, rect: egui::Rect, color: Color32, feather: f32) -> Mesh {
         let outline = self.art.outline();
         let (w, h) = self.art.box_units();
