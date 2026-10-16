@@ -1060,26 +1060,42 @@ for the design check. The Pixel (`emulator-5554`) was not used here.
   (`iter-8-design-portrait-settings.png`). The Compact/Medium boundary is at 600 pt, and this
   device sits exactly on it, which the app classes as Medium.
 
-## Iteration 9: the iOS pass (taps only, partial)
+## Iteration 9: the iOS pass (partial)
 
-Device: the iPhone 16 Pro simulator, `1F96BFA0-C3BF-4C38-BBF5-1A9CADCA0C9D`. Built
-with `just ios-run app=rustnotes`, which installs on the simulator and does not
-pick a connected iPhone.
+Device: the iPhone 16 Pro simulator, `1F96BFA0-C3BF-4C38-BBF5-1A9CADCA0C9D`. Rust Notes
+was built with `just ios-run app=rustnotes` and the gallery with `just ios-run
+app=ui-kit-gallery`. Both install on the simulator; neither picks a connected iPhone.
 
-Checked, with taps only:
+**Gestures are drivable with the simulator's MCP tool** (`mcp__Claude_Code_iOS_Simulator__control`:
+`swipe` and `touch_path`). The earlier note that gestures could not be driven was true of `idb ui swipe`
+only.
+
+- **Scroll (gallery, Brand page).** A swipe up changed 17.1% of the screen's pixels.
+- **Popover (gallery, Theme).** A tap on "Theme" opened the menu. A tap outside dismissed
+  it, leaving 0.22% of pixels changed against the page before the menu.
+- **Swipe-to-delete arm (Rust Notes, `beeec62`).** A drag left held at the far end is
+  recorded in `iter-9-ios-swipe.mov`. Frame 60 shows the row dragged with the red "Delete"
+  behind it. Frame 75 shows the row back in place with the red "Tap again to delete" hint
+  and a solid cross. The earlier "did not arm" screenshots were taken across separate
+  tool calls, so the 2-second arm window had expired. This is the same result as on the
+  Pixel.
+
+Checked with taps only, earlier in the pass:
 - The list renders under the dynamic island, with the "+" and the bottom bar.
 - "+" opens "New note" with the caret in the body. The "<" back arrow returns to
   the list. The unsaved empty note was not kept, which is correct.
 - The status bar shows iOS's "Vynatix Gallery" back-to-app link at the top left.
   That is the system's own link from the gallery run, not a Rust Notes defect.
 
-Not checked, so iteration 9 is open:
-- Gestures. The simulator tools here take taps only, and iOS swipes and edge
-  gestures are unverified (as the schedule already says).
-- The bottom clip and the blank band above the gesture bar (about 33pt, from the
-  Android pass), and the iOS 816-pt hard clip.
-- The bar's edge and gap on iOS (2-I9).
-- The keyboard inset path on iOS.
+Still open for iteration 9:
+- **The iOS bottom clip** (the 816-pt hard clip from an earlier tester). The bottom of
+  the Components page was not reached: a fresh gallery launch, followed by three drags,
+  left the page mid-scroll. Needs a scroll to the end before it can be measured.
+- **The right margin on the Components page**, which task 20 left as "iOS is not claimed".
+  A screenshot-based measurement was inconclusive (the top-bar edge detection hit the
+  screen border), so it stays open rather than closed.
+- **The bar's edge and gap on iOS (2-I9)** and **the keyboard inset** (the caret above
+  the keyboard in the Rust Notes editor).
 
 **Blank band above the gesture bar (Android half, measured).** The Components page
 scrolled to its end: the last content row is at y 2744 px, the gesture bar's pixels run
@@ -1149,8 +1165,10 @@ start of iteration 5, which is no longer accurate.
   portrait pass (list, editor, Settings), the two-pane surface inset (`99a3ad1`, with
   its test correction in `82c5b48`, verified headless only), and the design AVD
   (two-pane landscape; single-pane at 600 pt portrait, on the Medium side of the boundary).
-- **Iteration 9 (iOS, partial):** taps only. Open: gestures (not drivable here), the
-  bottom clip and blank band, the bar's edge on iOS (2-I9), the iOS keyboard inset.
+- **Iteration 9 (iOS, partial):** gestures are drivable with the simulator's MCP tool. Scroll,
+  popover, and the swipe-to-delete arm are checked. Open: the iOS bottom clip (the 816-pt claim),
+  the right margin of the Components page (task 20's iOS caveat), the bar's edge on iOS (2-I9),
+  and the keyboard inset.
 - **Iteration 10 (regression sweep, in progress):** `just check` exits 0. The
   emulator touch script exited 1 once in three runs (K4, not established as a
   regression). The branch diff review ran (three reviewers), and its findings are
