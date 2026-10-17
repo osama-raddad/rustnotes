@@ -281,8 +281,10 @@ fn bar_popover<'a>(
     theme: ThemeId,
 ) -> egui::Popup<'a> {
     // The popover's width as last laid out: the area's rect, keyed by
-    // the popup's id. The first frame of an opening has none; its
-    // sizing pass is invisible and the next frame anchors it again.
+    // the popup's id. A popup never laid out has none, and its first
+    // sizing pass is invisible, so the next frame anchors it again. A
+    // reopened popup reads the rect of its last opening, which is
+    // content-sized and so not stale.
     let laid_out = trigger
         .ctx
         .memory(|memory| memory.area_rect(egui::Popup::default_response_id(trigger)))

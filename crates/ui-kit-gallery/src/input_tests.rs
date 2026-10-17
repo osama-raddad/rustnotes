@@ -881,7 +881,7 @@ fn the_theme_popover_stays_on_its_trigger_at_narrow_phone_widths() {
             pane.left(),
             trigger.right() - pane.left()
         );
-        if popover.right() > room.right() + SLACK {
+        if popover.right() > room.right() {
             off.push(format!(
                 "{measured}: the popover ends at x {}, past the window's right edge {}",
                 popover.right(),
@@ -889,9 +889,9 @@ fn the_theme_popover_stays_on_its_trigger_at_narrow_phone_widths() {
             ));
         }
         if hung {
-            if popover.right() > trigger.right() + SLACK {
+            if (popover.right() - trigger.right()).abs() > SLACK {
                 off.push(format!(
-                    "{measured}: hung, the popover ends at x {}, past its trigger's right edge {}",
+                    "{measured}: hung, the popover ends at x {}, off its trigger's right edge {}",
                     popover.right(),
                     trigger.right()
                 ));
