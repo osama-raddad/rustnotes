@@ -267,19 +267,30 @@ fn bar_popover_frame(theme: ThemeId) -> egui::Frame {
 /// hung the popovers by their left edges on a wide window and centred
 /// the search popover under its button on a phone, so the alignment is
 /// fixed here, with no alternatives. `bar` is the bar's pane and
-/// `width` the popover's width, which the hold measures: exact for the
-/// search popover, a ceiling for the theme menu, whose area shrinks to
-/// its content. The caller sets the open state and shows the content.
+/// `width` the popover's width ceiling, which `.width` sets. The hold
+/// measures the popover as it was last laid out, its area's rect, and
+/// falls back to `width` until the area has been laid out once: the
+/// search popover fills its width, but the theme menu's area shrinks
+/// to its content (about 226pt against the 248pt ceiling), and the
+/// ceiling would push its right edge past the trigger's. The caller sets
+/// the open state and shows the content.
 fn bar_popover<'a>(
     trigger: &egui::Response,
     bar: Rect,
     width: f32,
     theme: ThemeId,
 ) -> egui::Popup<'a> {
+    // The popover's width as last laid out: the area's rect, keyed by
+    // the popup's id. The first frame of an opening has none; its
+    // sizing pass is invisible and the next frame anchors it again.
+    let laid_out = trigger
+        .ctx
+        .memory(|memory| memory.area_rect(egui::Popup::default_response_id(trigger)))
+        .map_or(width, |rect| rect.width());
     // The trigger's right edge, or the right edge that puts the
     // popover's left edge on the bar's, where the former would leave
     // the popover's left edge short of the bar's.
-    let right = trigger.rect.right().max(bar.left() + width);
+    let right = trigger.rect.right().max(bar.left() + laid_out);
     egui::Popup::from_response(trigger)
         .anchor(egui::pos2(right, bar.bottom()))
         .align(egui::RectAlign::BOTTOM_END)

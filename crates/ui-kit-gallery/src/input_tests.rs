@@ -838,6 +838,75 @@ fn the_theme_popovers_rows_are_44pt_and_their_labels_align() {
     assert!(off.is_empty(), "{}", off.join("\n"));
 }
 
+/// The theme popover on the narrowest phones (265, 280 and 295pt wide)
+/// stays where the bar's rule puts it. Hung from its trigger (the room
+/// from the trigger's right edge to the bar's left edge is at least the
+/// popover's width), its right edge stands on the trigger's right edge,
+/// or inside it by a point. Held inside the bar (the room is narrower),
+/// its left edge stands on the bar's left edge, as the rule says, and
+/// its right edge runs past the trigger by design. Either way the popover
+/// stays inside the window.
+///
+/// The popover's ceiling (`THEME_MENU_WIDTH`, 248pt) once clamped its
+/// anchor to the bar's left edge plus that ceiling, while the menu lays
+/// out at about 226pt. At 280pt the trigger ends 250pt from the window's
+/// left edge, and the popover's right edge ran 14pt past it; at 265pt
+/// the held popover's left edge stood 22pt in from the bar's.
+#[test]
+fn the_theme_popover_stays_on_its_trigger_at_narrow_phone_widths() {
+    // Painted to the pixel, laid out in whole points: a point's slack.
+    const SLACK: f32 = 1.0;
+
+    let mut off = Vec::new();
+    for width in [265.0, 280.0, 295.0] {
+        let mut h = Harness::window(egui::vec2(width, PHONE.y));
+        // The Feedback panel paints no theme names of its own, and no
+        // popover of its own.
+        h.app.gallery.tab = 3;
+        h.idle(3);
+        h.touch_screen();
+        let pane = bar_pane(&h, ThemeId::Light);
+        let trigger = h
+            .node(Role::Button, copy::THEME_MENU)
+            .expect("the bar's theme trigger");
+        h.tap(trigger.center());
+        h.idle(2);
+        let popover = open_popover(&h);
+        let room = h.ctx.content_rect();
+        let hung = popover.width() <= trigger.right() - pane.left();
+        let measured = format!(
+            "at {width}pt: the popover {popover:?} is {}pt wide, the trigger {trigger:?}, the \
+             bar's left edge {}, the trigger's room from the bar's left edge {}pt",
+            popover.width(),
+            pane.left(),
+            trigger.right() - pane.left()
+        );
+        if popover.right() > room.right() + SLACK {
+            off.push(format!(
+                "{measured}: the popover ends at x {}, past the window's right edge {}",
+                popover.right(),
+                room.right()
+            ));
+        }
+        if hung {
+            if popover.right() > trigger.right() + SLACK {
+                off.push(format!(
+                    "{measured}: hung, the popover ends at x {}, past its trigger's right edge {}",
+                    popover.right(),
+                    trigger.right()
+                ));
+            }
+        } else if (popover.left() - pane.left()).abs() > SLACK {
+            off.push(format!(
+                "{measured}: held, the popover starts at x {}, not on the bar's left edge {}",
+                popover.left(),
+                pane.left()
+            ));
+        }
+    }
+    assert!(off.is_empty(), "{}", off.join("\n"));
+}
+
 /// The bar's search popover closes on a tap outside it, as the theme
 /// menu's does, and the bar holds one popover open at a time: opening
 /// either one closes the other.
