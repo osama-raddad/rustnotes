@@ -1217,6 +1217,32 @@ specimen spill (2-A13, from iteration 5) and the "Restore the banners" affordanc
   commits, and the Components "Sending..." label (`cbd4086`). The Theme menu opens and dismisses.
   Rust Notes' list, Settings and editor match their baselines by structure. Those two editor and
   list baselines are landscape, so they were judged by eye.
+- **Backlog fixed in this stretch.** Each item's commit, with its red or its probe:
+  - Doc comments (`metrics.rs:24`, `outline.rs:26`, `logo.rs:260`): `12d5f9d`.
+  - Theme popover width (`gallery-popover-width-ceiling`, `branch-gallery-theme-menu-width`):
+    `2165a04`, reviewed, with the follow-up `e142709`. The clamp measured the 248 pt ceiling, not the
+    popover's laid-out width. Before: the popover's right edge at 264.2 at both 265 and 280 pt.
+    At 280 pt (hung) it ran 14 pt past its trigger; at 265 pt (held) its left edge stood 22 pt in
+    from the bar. After: on the trigger at 280 pt, and on the bar's edge at 265 pt, where the held
+    rule puts its right edge 7 pt past the trigger by design. The rule is written in `bar_popover`'s
+    comment.
+  - Reduced motion in the tab strip (`ui-kit-tab-strip-reduced-motion`, `branch-ui-tab-strip-motion`):
+    `6064796`. The follow uses `scroll_to_me_animation(None, ScrollAnimation::none())` under
+    `reduced_motion`. The red showed the strip at 3.0 against a settled 313.6 after two frames. egui
+    applies the offset on the frame after the request, so the test reads two frames on. The module
+    doc still says "instant", and the code is one frame: a one-line doc fix is open.
+  - Shared shape walker (`painted_text`, `painted_strings`): `da9cf11`. No behaviour change; 52 tests
+    before and after. `painted_rects`, `painted_segments` and `painted_meshes` follow the same
+    recursion and could fold in later.
+  - Components gutter report (`gallery-harness-855pt`, `branch-gallery-harness-855pt`): `1dcc1cd`. The
+    report now paints the whole page in a 9000 pt window. Below the first screen the probe found the
+    page's own rects and text, and five clipped text fields. No sideways row lies below the first
+    screen, and the commit says so. The lowest-edge guard counts clipped content: it was red at a
+    4000 pt window, where the text fields straddle the edge. This commit replaces an earlier pair of
+    commits that the review rejected; they were never pushed.
+  - Still open from the backlog: `limit_body_width`'s test constants, the tab-strip test's doc
+    (`gallery-tab-strip-test-doc`), the iteration 1 to 5 test-quality items, and the walker
+    follow-up above.
 - **Verdict:** `just check` is green. `emu-touch.sh` is informational (K4). The
   branch review has no open blocker. The one major that is a design question is D18,
   and the other is D16, now fixed with the user's question recorded.
@@ -1330,7 +1356,9 @@ start of iteration 5, which is no longer accurate.
 2. Iteration 9's open minor: the editor's scroll-to-caret when the keyboard appears (core; red test
    first). The bottom clip is D20, and the right margin is closed.
 3. Iteration 10's open items: K4 (diagnose the settled-short state before any more runs), and the
-   sequential backlog workflow. The HEAD sweep is done, with no regressions.
+   backlog items still open: `limit_body_width`'s test constants, the tab-strip test's doc, the glide
+   module doc's "instant" wording, the iteration 1 to 5 test-quality items, and the walker follow-up.
+   The HEAD sweep is done, with no regressions.
 4. Refresh PR #24's title and body: iterations 1 to 8 closed, 9 partial, 10 closed with open
    items, the `bdd9607` commit (it carries a task-25 hunk), D1 to D19, K1 to K4, and the register
    path.
@@ -1349,3 +1377,7 @@ start of iteration 5, which is no longer accurate.
 - **Gates:** `just test`, `just lint`, `just check`. Run one implementer in the worktree at a
   time: staged hunks share the index, and `bdd9607` came from two implementers sharing it.
 - **Touch script:** `zsh tools/emu-touch.sh <serial>`. Informational until K4 is fixed.
+- **Shared build target.** On 2026-10-17 a scratch copy's build wrote into `build/target`, the warm
+  cache this worktree's `build/target` links to, and a `cargo clean -p ui-kit` run in the worktree
+  removed about 8.9 GiB of ui-kit artifacts from the cache. Other sessions may have lost ui-kit
+  builds. A scratch copy needs its own `CARGO_TARGET_DIR`.

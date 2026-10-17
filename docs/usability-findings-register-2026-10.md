@@ -7,7 +7,7 @@ Earlier audit counts are superseded.
 
 - Distinct IDs: 148 (79 numbered, 20 D-items, 4 K-items, 45 descriptive). The 1-I2 row was added after the collapse.
 - By severity: blocker 3; major 27; minor 44; nit 15; not stated 57.
-- By final disposition: fixed 60; closed 15 (of which closed by design 7; K2 closed in iteration 10; two iOS right-margin rows closed in iteration 9); decision open 34 (6 of them with a default taken); open 39.
+- By final disposition: fixed 60; closed 15 (of which closed by design 7; K2 closed in iteration 10; two iOS right-margin rows closed in iteration 9); decision open 34 (6 of them with a default taken); open 33. Iteration 10's backlog fixes (2165a04, e142709, 6064796, da9cf11, 1dcc1cd, 12d5f9d) moved six IDs from open to fixed: fixed 66.
 
 ## Register
 
@@ -121,18 +121,18 @@ Earlier audit counts are superseded.
 | branch-core-editor-cap | major | Rust Notes, editor width cap | Cap removed for every single-pane window, contrary to metrics.rs:24; Resume step 1 still lists finishing the scoped fix | fixed 458f343 | Iter 10 L1153-1154, L1197-1199; D16 L1225-1226; Resume L1258 |
 | branch-core-swipe-hint-tap | minor | Rust Notes, swipe hint | Hint can be tapped; it opens the note and drops the arm | decision open: D17 | Iter 10 L1155-1156, L1205-1206; D17 L1237-1239 |
 | branch-core-two-pane-stale-frame | minor | Rust Notes, two-pane detail | Same as core-two-pane-stale-frame | open: no closure recorded (backlog) | Iter 10 L1155-1157 |
-| branch-gallery-harness-855pt | minor | gallery harness | Same as gallery-harness-855pt | open: no closure recorded (backlog, no fix date) | Iter 10 L1148-1149, L1201-1202 |
+| branch-gallery-harness-855pt | minor | gallery harness | Same as gallery-harness-855pt | fixed 1dcc1cd | Iter 10 L1148-1149, L1201-1202 |
 | branch-gallery-icons-alignment | major | gallery, icons row | Top-aligned by the 7e07d9b wrapping_row change; no test covers it | decision open: D18 | Iter 10 L1146-1147, L1194-1196; D18 L1240-1242 |
-| branch-gallery-theme-menu-width | minor | gallery, Theme popover width | Same as gallery-popover-width-ceiling | open: no closure recorded (backlog, not run) | Iter 10 L1149-1151 |
-| branch-ui-tab-strip-motion | minor | ui-kit, tab strip scroll | Same as ui-kit-tab-strip-reduced-motion | open: no closure recorded (backlog, no fix date) | Iter 10 L1142-1143, L1200 |
+| branch-gallery-theme-menu-width | minor | gallery, Theme popover width | Same as gallery-popover-width-ceiling | fixed 2165a04, e142709 | Iter 10 L1149-1151 |
+| branch-ui-tab-strip-motion | minor | ui-kit, tab strip scroll | Same as ui-kit-tab-strip-reduced-motion | fixed 6064796 | Iter 10 L1142-1143, L1200 |
 | components-glass-spill | nit | gallery, Components | Glass specimen spills on the Components page (same as 2-A13) | open: no closure recorded | Iter 10 L1121-1123; Iter 2 L268-269 |
 | components-restore-banners-link | nit | gallery, Restore the banners link | No affordance (same as 3-I9 and 3-I10) | open: no closure recorded | Iter 10 L1121-1123 |
 | core-detail-edge-left-inset | minor | Rust Notes, detail right edge | May not match the mirrored bar edge in a left-only inset; low reachability | open: no closure recorded (backlog, low reachability) | Iter 10 L1157-1158 |
 | core-two-pane-stale-frame | minor | Rust Notes, two-pane detail | Stale frame after a cross delete; predates the branch; not run on a device | open: no closure recorded (backlog) | Iter 10 L1155-1157, L1206-1207 |
 | focus-ring-theme-trigger | not stated | gallery, Theme trigger focus ring | Ring clipped by the overhang (regression from the iteration 2 work) | fixed 747dcfd | Iter 2 L364-367 |
 | foundations-elevation-spacing | not stated | gallery, Foundations elevation specimens | Specimens staggered with gaps of about 100 pt | fixed 7e07d9b | Iter 5 L739-741; Iter 6 task 27 L904-910 |
-| gallery-harness-855pt | minor | gallery harness | Paints only the first 855 pt, so gutter tests cover the first screen only | open: no closure recorded (backlog, no fix date) | Iter 10 L1148-1149, L1201-1202 |
-| gallery-popover-width-ceiling | minor | gallery, Theme popover width | THEME_MENU_WIDTH (248 pt) can pass the trigger's right edge at 265 to 295 pt windows; not run | open: no closure recorded (backlog, not run) | Iter 10 L1149-1151, L1202-1204 |
+| gallery-harness-855pt | minor | gallery harness | Paints only the first 855 pt, so gutter tests cover the first screen only | fixed 1dcc1cd (whole-page gutter check; five clipped text fields below the fold, no sideways row) | Iter 10 L1148-1149, L1201-1202 |
+| gallery-popover-width-ceiling | minor | gallery, Theme popover width | THEME_MENU_WIDTH (248 pt) can pass the trigger's right edge at 265 to 295 pt windows | fixed 2165a04, e142709: the clamp measures the popover's laid-out width; overshoot at 280 pt (14 pt past the trigger) and held misplacement at 265 pt (22 pt in from the bar) | Iter 10 L1149-1151, L1202-1204 |
 | gallery-tab-strip-test-doc | minor | gallery, tab-strip test | Test doc says it follows a tap; it sets the host's selection | open: no closure recorded (backlog, no fix date) | Iter 10 L1151-1152 |
 | gesture-bar-blank-band | not stated | gallery, Components end, Android and iOS | Blank band above the gesture bar; hard clip at the bottom inset (iOS 816 pt) | open: iOS clip half not measured (iteration 9 partial); Android band is backlog, not a defect | Iter 5 L736-739; Iter 9 L1111-1117 |
 | iter3-banners-label-at-page-end | not stated | gallery, Banners label | Label sits half under the tab strip at the scroll limit | open: no closure recorded (open question for the user; no D number) | Iter 3 L542-545 |
@@ -160,7 +160,7 @@ Earlier audit counts are superseded.
 | top-bar-bottom-hairline | minor | gallery, top bar | Bottom hairline runs past the rounded corners | fixed ab9dfdd | Iter 2 L402-404; Iter 3 L456-458, L512-515 |
 | two-pane-surface-inset | not stated | Rust Notes, two-pane detail surface | Same finding as iter8-two-pane-surface-inset, under a second ID | fixed 99a3ad1 | Iter 8 L1062-1068 |
 | ui-kit-outline-logo-comments | not stated | ui-kit, outline.rs:26 and logo.rs:260 comments | Two code comments are wrong, not the code | open: no closure recorded (backlog, no fix date) | Iter 10 L1143-1145 |
-| ui-kit-tab-strip-reduced-motion | minor | ui-kit, tab strip scroll | Scroll ignores reduced motion; a glide still runs | open: no closure recorded (backlog, no fix date) | Iter 10 L1142-1143, L1200 |
+| ui-kit-tab-strip-reduced-motion | minor | ui-kit, tab strip scroll | Scroll ignores reduced motion; a glide still runs | fixed 6064796 (the follow is instant under reduced motion; module doc wording still says instant, the code is one frame) | Iter 10 L1142-1143, L1200 |
 
 ## Remaining work
 
@@ -248,10 +248,10 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 - D18 (major): decision open: D18, top or bottom alignment. Ledger L1240-1242.
 - branch-core-swipe-hint-tap (minor): decision open: D17. Ledger L1155-1156, L1237-1239.
 - D17 (minor): decision open: D17, swipe hint wording and tap. Ledger L1237-1239.
-- ui-kit-tab-strip-reduced-motion and branch-ui-tab-strip-motion (minor): open: no closure recorded, backlog. Ledger L1142-1143, L1200.
+- ui-kit-tab-strip-reduced-motion and branch-ui-tab-strip-motion (minor): fixed 6064796. Ledger L1142-1143, L1200.
 - ui-kit-outline-logo-comments: open: no closure recorded, backlog. Ledger L1143-1145.
-- gallery-harness-855pt and branch-gallery-harness-855pt (minor): open: no closure recorded, backlog. Ledger L1148-1149, L1201-1202.
-- gallery-popover-width-ceiling and branch-gallery-theme-menu-width (minor): open: no closure recorded, backlog, not run. Ledger L1149-1151, L1202-1204.
+- gallery-harness-855pt and branch-gallery-harness-855pt (minor): fixed 1dcc1cd. Ledger L1148-1149, L1201-1202.
+- gallery-popover-width-ceiling and branch-gallery-theme-menu-width (minor): fixed 2165a04 and e142709. Ledger L1149-1151, L1202-1204.
 - gallery-tab-strip-test-doc (minor): open: no closure recorded, backlog. Ledger L1151-1152.
 - core-two-pane-stale-frame and branch-core-two-pane-stale-frame (minor): open: no closure recorded, backlog; not run on a device. Ledger L1155-1157, L1206-1207.
 - core-detail-edge-left-inset (minor): open: no closure recorded, backlog, low reachability. Ledger L1157-1158.
@@ -275,7 +275,7 @@ Open and decision-open rows, grouped by the iteration where each was raised.
 - Branch review backlog: the minor and major items listed under the iteration 10 rows above, plus D17 and D18.
 - D16: the scoped fix is made (`458f343`, reviewed PASS). The user's choice on Medium portrait remains: decision open, default taken (keep the reading width).
 - Re-screenshot sweep at HEAD against the `iter-N-verify` baselines: not done.
-- Test-quality backlog, not IDs (ledger L326-336, L414-415, L561-564, L771-776): metric-card padding round-trip and build helper; text-field wrap-width assertion and helper; painted_text and painted_strings shared walker; chips-row guard against CHIP_FILTERS drift; golden-table re-recording notes; shape walkers repeated across test files.
+- Test-quality backlog, not IDs (ledger L326-336, L414-415, L561-564, L771-776): metric-card padding round-trip and build helper; text-field wrap-width assertion and helper; chips-row guard against CHIP_FILTERS drift; golden-table re-recording notes; shape walkers repeated across test files.
 
 ## Decisions for the user
 
