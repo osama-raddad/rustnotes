@@ -110,7 +110,13 @@ objc2-ui-kit = { version = "0.3", features = [
 # Backend-free declarations: which activity class eframe/winit and this
 # crate's glue target is a cargo feature (see [features] above) — the
 # backend features add exactly one of these per build.
-eframe = { workspace = true }
+# `persistence` gives eframe a storage on Android, which is the only way it
+# calls `eframe::App::save` there. Android has no default storage dir, so
+# `android::start` sets `persistence_path`. Device-verified (7-A3): an edit
+# made under 1.5 s before Home survives a process kill. eframe's 30 s
+# autosave tick also calls `save`, which no-ops on a clean buffer. iOS and
+# desktop do not take this feature.
+eframe = { workspace = true, features = ["persistence"] }
 android-activity = "0.6"
 android_logger = "0.14"
 jni = "0.22"

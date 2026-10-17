@@ -71,18 +71,19 @@ use egui::{self, Align2, Color32, CornerRadius, Rect, Sense, Vec2};
 
 use ui_kit::components::badge::{Badge, IconButton};
 use ui_kit::components::banner::{Banner, BannerEvent, BannerTone};
-use ui_kit::components::button::{Button, ButtonEmphasis};
+use ui_kit::components::button::{self, Button, ButtonEmphasis, ButtonSize};
 use ui_kit::components::checkbox::{Checkbox, CheckboxState};
 use ui_kit::components::chip::{Chip, ChipEvent};
 use ui_kit::components::liquid_glass::{glass_recipe, paint_glass, GlassThickness, GlassTint};
-use ui_kit::components::radio::{option, RadioGroup, RadioOption};
+use ui_kit::components::radio::{self, option, RadioGroup, RadioOption};
 use ui_kit::components::select::{popup_frame, Select};
 use ui_kit::components::snackbar::{Snackbar, SnackbarEvent, SnackbarHost};
 use ui_kit::components::tabs::Tabs;
 use ui_kit::components::text_field::{hint_row, label_row, TextField};
-use ui_kit::components::toggle::Toggle;
+use ui_kit::components::toggle::{self, Toggle};
 use ui_kit::components::top_app_bar::{
-    NavLink, TopAppBar, ACTIONS_GAP, GROUP_GAP, LINK_GAP, LOGO_HEIGHT,
+    NavLink, TopAppBar, ACTIONS_GAP, BAR_PAD_X, BAR_PAD_Y, CONTENT_HEIGHT, GROUP_GAP, LINK_GAP,
+    LOGO_HEIGHT,
 };
 use ui_kit::components::{
     BrandShowcase, Card, Cover, EditorialCard, FocusRing, Grid, LiquidGlass, MetricCard,
@@ -112,8 +113,21 @@ const NARROW_WIDTH: f32 = breakpoints::BREAKPOINT_TABLET;
 /// vertical offset back to zero every frame: neither the wheel nor a
 /// finger could move the page for longer than a frame. The strip
 /// carries its own salt now; this one keeps the page's state its own
-/// whatever else the panel holds.
+/// whatever else the panel holds. [`page_scroll_salt`] pairs it with
+/// the active panel, so each panel has a page state of its own.
 const PAGE_SCROLL: &str = "gallery-page";
+
+/// The salt source of the page scroll area for the panel at `tab`.
+/// The area's state, and with it the scroll offset, lives under the
+/// id this source makes; one source for every panel would carry the
+/// offset from the panel the reader left to the one they open.
+/// `page` takes both the area's salt and the id it loads the state
+/// by from this one value: `ScrollArea::id_salt` hashes its argument
+/// into an `IdSalt`, so a lookup by any other spelling reads a fresh
+/// default state.
+fn page_scroll_salt(tab: usize) -> (&'static str, usize) {
+    (PAGE_SCROLL, tab)
+}
 
 /// The page's side gutter. The bar, the tab strip and the page all share
 /// it, so the chrome's edges line up with the text rather than sitting
@@ -131,6 +145,33 @@ fn content_margin() -> egui::Margin {
     }
 }
 
+/// The window height under which the gallery's chrome compacts, for the
+/// phone in landscape (finding 4-A2): the tab description is dropped (as
+/// it is on a phone in portrait) and the chrome's vertical gaps give way
+/// to [`SHORT_GAP`]. The window's height is the root `Ui`'s, the system
+/// bars' insets included.
+///
+/// Landscape phones are 360 to 448pt tall (the Pixel 448, iPhones 375 to
+/// 440), under 500; a portrait phone is 568pt or more and a landscape
+/// tablet 600pt or more, over it. As a check, with no insets at all the
+/// full chrome (the bar and the tab strip included) is 245pt tall with
+/// the description on two lines and 263pt on three, so it leaves the page
+/// half of the window only from 490 to 526pt up; insets only raise that.
+pub(crate) const SHORT_WINDOW_HEIGHT: f32 = 500.0;
+
+/// Each of the chrome's vertical gaps under the bar in a short window
+/// (see [`SHORT_WINDOW_HEIGHT`]): the bar's clearance below, the content
+/// panel's margin above the tab strip, and the space between the strip
+/// and the page. `space-1`, because the room is tight: `space-2` would
+/// take 25pt (three gaps and the bar's 1pt separator room) where the
+/// Pixel in landscape has 19pt for them once the page has half the
+/// window; the budget is in `a_short_window_keeps_half_its_height_for_the_page`.
+/// The bar's clearance above stays as it is, so the bar, and the
+/// popovers that hang from it, stand where they stand in a window of any
+/// height. The content panel's margin below the page goes, since `page`
+/// ends its scroll with 24pt of space of its own.
+const SHORT_GAP: f32 = spacing::SPACE_1;
+
 /// A drag on a sideways row picks its axis once it has travelled this
 /// far: a mostly vertical gesture scrolls the page, a mostly horizontal
 /// one scrolls the row, never both.
@@ -141,6 +182,19 @@ const AXIS_LOCK_DISTANCE: f32 = 6.0;
 /// frame, so the hand-off lags one frame.
 const PAGE_FORWARD: &str = "gallery-page-forward";
 
+/// The content height the page laid out last frame, in egui's temp
+/// memory under the page's own id (so one height per panel, as the
+/// scroll state is). `page` compares it with this frame's to tell a page
+/// that changed height from one the reader only scrolled.
+const PAGE_HEIGHT: &str = "gallery-page-height";
+
+/// How far two content heights, or an offset and the page's furthest
+/// offset, may differ and still count as the same: half a point, the
+/// most the layout's pixel snap moves an edge at one device pixel per
+/// point (at 3x a pixel is a third of a point and the snap is finer).
+/// `page` uses it for both comparisons.
+const PAGE_PIXEL_SNAP: f32 = 0.5;
+
 /// One drag gesture on a sideways row: the axis it picked (`true` for
 /// vertical), `None` until its travel passes [`AXIS_LOCK_DISTANCE`].
 #[derive(Clone, Copy, Default)]
@@ -148,9 +202,125 @@ struct DragAxis {
     vertical: Option<bool>,
 }
 
-/// The theme menu's popover width: the longest toggle row ("Reduced
-/// transparency" beside its 44px track) and the frame's insets.
+/// The theme menu's popover width ceiling, not its width: `.width` caps
+/// the area, which shrinks to its content, the longest toggle row
+/// ("Reduced transparency" beside its 44px track) and the frame's
+/// insets, about 226px.
 const THEME_MENU_WIDTH: f32 = 248.0;
+
+/// The theme menu's scroll area's id salt, for the window too short to
+/// show the whole menu (see [`bar_popover_room`]).
+const THEME_MENU_SCROLL: &str = "gallery-theme-menu";
+
+/// The x the theme menu's labels start at, in the theme rows and the
+/// flag rows alike: past the toggle's 44px track and its gap. The
+/// toggle's label cannot start sooner, so the radio group is indented
+/// to meet it ([`THEME_MENU_RADIO_INSET`]).
+const THEME_MENU_LABEL_X: f32 = toggle::TRACK_W + toggle::LABEL_GAP;
+
+/// How far the theme menu's radio group is indented so its labels,
+/// which the kit sets a circle and a gap from the row's left, start
+/// at [`THEME_MENU_LABEL_X`]. The group's legend rides along with it.
+const THEME_MENU_RADIO_INSET: f32 = THEME_MENU_LABEL_X - (radio::CIRCLE_SIZE + radio::LABEL_GAP);
+
+/// The search popover's outer width, frame included: `.width` caps the
+/// area and the field fills it.
+pub(crate) const SEARCH_POPOVER_WIDTH: f32 = 280.0;
+
+/// The gap between the bar's bottom edge and the popovers that open
+/// under it: `space-2`, the bar's own `ACTIONS_GAP`. It clears the
+/// bar's 1px border and its shadow's edge; the select's 4px, under a
+/// field, would leave a popover touching the floating bar.
+pub(crate) const BAR_POPOVER_GAP: f32 = spacing::SPACE_2;
+
+/// The inner margin of the bar's popovers: `space-4`, the theme menu's.
+/// The kit's popover frame keeps 4px, which suits the select's list of
+/// flush rows; a field or a stack of 44px touch rows wants room around
+/// it.
+pub(crate) const BAR_POPOVER_PAD: f32 = spacing::SPACE_4;
+
+/// The frame both of the bar's popovers draw: the kit's popover chrome
+/// with the bar popovers' one inner margin, so the search field and the
+/// theme menu's rows stand the same distance from the edge.
+fn bar_popover_frame(theme: ThemeId) -> egui::Frame {
+    popup_frame(theme).inner_margin(BAR_POPOVER_PAD)
+}
+
+/// The popover for one of the bar's triggers, under the bar. One rule
+/// places both of the bar's popovers (the theme menu and the search
+/// field):
+///
+/// - it starts [`BAR_POPOVER_GAP`] under the bar's bottom edge, not
+///   under the trigger, which ends the bar's padding short of that edge
+///   and would leave the popover over the bar's card, its border and
+///   its hairline;
+/// - its right edge stands on the trigger's right edge; and
+/// - where it is wider than the room between that edge and the bar's
+///   left edge (e.g. at a 384px phone, the 280px search popover under a
+///   search button that ends 233px from the window's left edge, 217px
+///   from the bar's), it is held inside the bar instead: pushed right
+///   until its left edge stands on the bar's. Otherwise it would run
+///   off the window's left edge.
+///
+/// egui's own placement tries `BOTTOM_START`, then its flips, then
+/// every menu alignment, and takes the first that fits the window. That
+/// hung the popovers by their left edges on a wide window and centred
+/// the search popover under its button on a phone, so the alignment is
+/// fixed here, with no alternatives. `bar` is the bar's pane and
+/// `width` the popover's width ceiling, which `.width` sets. The hold
+/// measures the popover as it was last laid out, its area's rect, and
+/// falls back to `width` until the area has been laid out once: the
+/// search popover fills its width, but the theme menu's area shrinks
+/// to its content (about 226pt against the 248pt ceiling), and the
+/// ceiling would push its right edge past the trigger's. The caller sets
+/// the open state and shows the content.
+fn bar_popover<'a>(
+    trigger: &egui::Response,
+    bar: Rect,
+    width: f32,
+    theme: ThemeId,
+) -> egui::Popup<'a> {
+    // The popover's width as last laid out: the area's rect, keyed by
+    // the popup's id. A popup never laid out has none, and its first
+    // sizing pass is invisible, so the next frame anchors it again. A
+    // reopened popup reads the rect of its last opening, which is
+    // content-sized and so not stale.
+    let laid_out = trigger
+        .ctx
+        .memory(|memory| memory.area_rect(egui::Popup::default_response_id(trigger)))
+        .map_or(width, |rect| rect.width());
+    // The trigger's right edge, or the right edge that puts the
+    // popover's left edge on the bar's, where the former would leave
+    // the popover's left edge short of the bar's.
+    let right = trigger.rect.right().max(bar.left() + laid_out);
+    egui::Popup::from_response(trigger)
+        .anchor(egui::pos2(right, bar.bottom()))
+        .align(egui::RectAlign::BOTTOM_END)
+        .align_alternatives(&[])
+        .gap(BAR_POPOVER_GAP)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .frame(bar_popover_frame(theme))
+        .width(width)
+}
+
+/// The height a popover's content may take under the bar `bar` for the
+/// popover to stay below the bar and inside the window: from the
+/// [`BAR_POPOVER_GAP`] under the bar's bottom edge to the bottom of the
+/// window's content rect (the window less its safe-area insets), less
+/// the frame's own margin and border above and below the content.
+///
+/// egui does not shrink a popup that is too tall for the room under the
+/// bar. It keeps the popup's size and moves the popup up until it fits
+/// the content rect (`Area` constrains to it), over the bar, and where
+/// the popup is taller than the whole content rect it stands the popup
+/// at the rect's top and clips the rest. So a popup that can outgrow the
+/// room, as the theme menu does in a landscape phone, scrolls its
+/// content inside this height instead. A popup that fits is left where
+/// [`bar_popover`] put it.
+fn bar_popover_room(ctx: &egui::Context, bar: Rect, theme: ThemeId) -> f32 {
+    let under_bar = ctx.content_rect().bottom() - (bar.bottom() + BAR_POPOVER_GAP);
+    (under_bar - bar_popover_frame(theme).total_margin().sum().y).max(0.0)
+}
 
 /// Apply `theme` with the gallery's own style on top: labels are not
 /// selectable. A gallery is not a document, and a drag that starts on
@@ -176,6 +346,7 @@ impl Gallery {
             choices: ChoiceDemos::populated(),
             tab: 0,
             page_scroll_id: None,
+            page_rect: None,
             banners: BannerDemos::populated(),
             snackbar: SnackbarHost::new(),
             search: String::new(),
@@ -297,9 +468,23 @@ fn forward_to_page(ctx: &egui::Context, offset: f32) {
 /// `add` gets the item spacing the row's `Ui` had before the row set
 /// its own, for each tile to restore inside itself: the row's spacing
 /// is for between tiles, and a tile's art and caption keep the page's.
+///
+/// The row is `horizontal_wrapped` with its tiles aligned to the top of
+/// the line, not its centre. `horizontal_wrapped` centres each widget on
+/// the line laid out so far, and a tile (its height is not known when it
+/// is placed) taller than that line settles lower than the one before it,
+/// by half the difference: the tiles of a line then hang 10 to 100pt
+/// apart instead of from one edge.
 fn wrapping_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui, Vec2)) {
     let inherited = ui.spacing().item_spacing;
-    ui.horizontal_wrapped(|ui| {
+    // The size and the layout `horizontal_wrapped` starts a line with,
+    // less its centre alignment.
+    let line = Vec2::new(
+        ui.available_size_before_wrap().x,
+        ui.spacing().interact_size.y,
+    );
+    let layout = egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true);
+    ui.allocate_ui_with_layout(line, layout, |ui| {
         ui.spacing_mut().item_spacing = Vec2::new(spacing::SPACE_4, spacing::SPACE_3);
         add(ui, inherited);
     });
@@ -389,8 +574,13 @@ pub struct Gallery {
     /// page's live offset (the area's `scroll_area::State`). The app
     /// never reads it. A test cannot rebuild the id itself: egui derives
     /// it from the content panel's nested `Ui`s salted with
-    /// `PAGE_SCROLL`, so a rebuild would re-trace the chrome's nesting.
+    /// `page_scroll_salt`, so a rebuild would re-trace the chrome's nesting.
     pub(crate) page_scroll_id: Option<egui::Id>,
+    /// Test support, read only by the input tests: where the page
+    /// scroll area showed its content as of the last frame (the
+    /// scroll output's `inner_rect`, the visible page). The app never
+    /// reads it.
+    pub(crate) page_rect: Option<egui::Rect>,
     /// Which of the dismissible banner demos still hold their
     /// banners; the warning and the error stay until resolved.
     banners: BannerDemos,
@@ -504,6 +694,18 @@ fn format_tracking(tracking_em: f32) -> String {
     }
 }
 
+/// A style's leading as the specimen states it: the unitless ratio
+/// ("1.02"), or, for the eyebrow, the tokens' absolute line ("16px").
+/// The eyebrow's ratio is stored as 16 over 11 so its line box comes out
+/// at 16px, and printed as a ratio it reads "1.4545455".
+fn format_leading(style: TypeStyle) -> String {
+    if style == TypeStyle::Eyebrow {
+        format!("{}px", trim_float(style.line_height().round()))
+    } else {
+        trim_float(style.leading())
+    }
+}
+
 /// The type specimen: every style in the active theme's faces, each with
 /// its meta line (size over leading, tracking, family).
 fn type_section(ui: &mut egui::Ui, theme: ThemeId) {
@@ -539,7 +741,7 @@ fn type_section(ui: &mut egui::Ui, theme: ThemeId) {
             "{} · {}/{} · {} · {}",
             sentence_case(style.name().trim_start_matches("type-")),
             trim_float(style.size()),
-            trim_float(style.leading()),
+            format_leading(*style),
             format_tracking(style.tracking()),
             style.family_name(theme),
         );
@@ -565,6 +767,12 @@ fn trim_float(value: f32) -> String {
 
 /// One state specimen: a button-shaped rect at `scale`, its caption,
 /// and the focus ring when the state is focus.
+///
+/// The rect is as wide as the label needs, not a fixed width: the label
+/// is laid out first and the rect takes the kit button's horizontal
+/// padding around it, so a wider face (the themes' body faces differ in
+/// width) widens the tile instead of spilling the label's ends past the
+/// fill. The row scrolls sideways, so a wider tile costs nothing.
 fn state_tile(
     ui: &mut egui::Ui,
     theme: ThemeId,
@@ -575,7 +783,13 @@ fn state_tile(
     focused: bool,
 ) {
     let colors = theme.colors();
-    let size = Vec2::new(spacing::SPACE_24, spacing::SPACE_10);
+    let label = ui.painter().layout_no_wrap(
+        copy::START_A_PROJECT.to_owned(),
+        TypeStyle::Body.font_id(theme),
+        text,
+    );
+    let width = button::min_width(ButtonSize::Default, label.size().x, false, false);
+    let size = Vec2::new(width, spacing::SPACE_10);
     ui.vertical(|ui| {
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let body = Rect::from_center_size(rect.center(), size * scale);
@@ -584,13 +798,8 @@ fn state_tile(
         if focused {
             states::focus_ring_at(ui.painter(), rect, radius, theme);
         }
-        ui.painter().text(
-            body.center(),
-            Align2::CENTER_CENTER,
-            copy::START_A_PROJECT,
-            TypeStyle::Body.font_id(theme),
-            text,
-        );
+        ui.painter()
+            .galley(body.center() - label.size() / 2.0, label, text);
         ui.add_space(spacing::SPACE_1);
         ui.add(egui::Label::new(specimen_job(
             caption,
@@ -675,7 +884,21 @@ fn states_section(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
 
     ui.add_space(spacing::SPACE_2);
     FocusRing::new().wrap(ui, theme, flags, |ui| {
-        ui.add(egui::Button::new(copy::STATES_TAB_BUTTON))
+        // A compact pill rather than egui's 18pt default, which leaves
+        // the label touching its outline: at least SPACE_6 tall, with
+        // SPACE_1 of air between the label and the outline's inner edge
+        // above and below, and SPACE_2 beside it. The padding counts
+        // the outline, which egui draws inside the button's rect.
+        ui.scope(|ui| {
+            let outline = ui.visuals().widgets.inactive.bg_stroke.width;
+            ui.spacing_mut().button_padding =
+                Vec2::new(spacing::SPACE_2, spacing::SPACE_1 + outline);
+            ui.add(
+                egui::Button::new(copy::STATES_TAB_BUTTON)
+                    .min_size(Vec2::new(0.0, spacing::SPACE_6)),
+            )
+        })
+        .inner
     });
     ui.add(egui::Label::new(specimen_job(
         copy::STATES_NOTE,
@@ -723,6 +946,10 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
     ui.add_space(spacing::SPACE_2);
     // Eight labelled swatches run wide; the row scrolls.
     scrolling_row(ui, "radii-row", |ui| {
+        // The swatch's 1px outline is drawn outside its rect, and the
+        // scroll area clips at the row's left edge: start the first
+        // swatch one outline in, so its left pixel is inside the clip.
+        ui.add_space(spacing::SPACE_PX);
         for (name, value) in radii::ALL {
             ui.vertical(|ui| {
                 let (rect, _) =
@@ -736,13 +963,20 @@ fn foundations_section(ui: &mut egui::Ui, theme: ThemeId) {
                 );
                 ui.painter()
                     .rect_filled(rect.shrink(1.0), radius, colors.surface_container_high);
-                ui.add(egui::Label::new(specimen_job(
-                    &format!("{} · {}", sentence_case(name), trim_float(*value)),
-                    TypeStyle::Caption,
-                    theme,
-                    colors.text_muted(),
-                    Some(ui.available_width()),
-                )));
+                // One line, however far the row has scrolled: a `Label`
+                // wraps a job at the width left to it, and a swatch at the
+                // row's right edge has little, so "Radius Lg · 12" broke
+                // after "Radius" until it was scrolled in.
+                ui.add(
+                    egui::Label::new(specimen_job(
+                        &format!("{} · {}", sentence_case(name), trim_float(*value)),
+                        TypeStyle::Caption,
+                        theme,
+                        colors.text_muted(),
+                        None,
+                    ))
+                    .wrap_mode(egui::TextWrapMode::Extend),
+                );
             });
             ui.add_space(spacing::SPACE_2);
         }
@@ -1328,9 +1562,7 @@ fn buttons_group(ui: &mut egui::Ui, theme: ThemeId, flags: &UiKitFlags) {
         Button::new(copy::BUTTON_DISABLED)
             .disabled()
             .ui(ui, theme, flags);
-        Button::new(copy::BUTTON_BUSY)
-            .disabled()
-            .ui(ui, theme, flags);
+        Button::new(copy::BUTTON_BUSY).busy().ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
         copy::BUTTONS_NOTE,
@@ -1420,7 +1652,21 @@ fn chips_group(
     ));
     ui.add_space(spacing::SPACE_1);
     ui.horizontal_wrapped(|ui| {
-        for (label, selected) in copy::CHIP_FILTERS.iter().zip(filters.iter_mut()) {
+        let last_filter = copy::CHIP_FILTERS.len() - 1;
+        for (index, (label, selected)) in copy::CHIP_FILTERS
+            .iter()
+            .zip(filters.iter_mut())
+            .enumerate()
+        {
+            if index == last_filter {
+                // The featured chip stands a further `space-4` from the
+                // filters. The gap rides the row's item spacing, which
+                // follows the last filter chip: an `add_space` after it
+                // does not wrap, so a chip ending within the gap of the
+                // page's right edge left the space past it, and the page
+                // grew that wide (see `wrapping_row`).
+                ui.spacing_mut().item_spacing.x += spacing::SPACE_4;
+            }
             if let Some(ChipEvent::Toggled(now)) = Chip::new(label)
                 .set_selected(*selected)
                 .ui(ui, theme, flags)
@@ -1429,7 +1675,6 @@ fn chips_group(
                 *selected = now;
             }
         }
-        ui.add_space(spacing::SPACE_4);
         Chip::new(copy::CHIP_FEATURED).accent().ui(ui, theme, flags);
     });
     ui.add(egui::Label::new(specimen_job(
@@ -2185,7 +2430,7 @@ fn feedback_section(
 struct BarFit {
     /// The nav links follow the wordmark.
     nav: bool,
-    /// The call to action leads the actions, flush right.
+    /// The call to action ends the actions, flush right.
     cta: bool,
     /// How the theme trigger reads.
     trigger: ThemeTrigger,
@@ -2202,6 +2447,42 @@ enum ThemeTrigger {
     Icon,
 }
 
+impl ThemeTrigger {
+    /// How far the trigger's box runs past the row's right edge, when
+    /// it ends the row, so that its icon stands the bar's padding in
+    /// from the pane's edge. The box holds its icon's room inside it:
+    /// the default button's horizontal padding for the labelled
+    /// triggers, and for the icon button the room between its 44px
+    /// circle and its icon. The icon is measured by its box, not by its
+    /// ink, which sits a further 5px in for the chevron and 3px for the
+    /// tune icon.
+    ///
+    /// The labelled triggers pull back from that by
+    /// [`states::FOCUS_RING_REACH`], a deliberate trade-off.
+    /// Overhanging by the whole padding put their box 4px from the
+    /// pane's edge, and their focus ring, which reaches
+    /// [`states::FOCUS_RING_REACH`] past the box, on the bar's border,
+    /// where it is cut. Now the ring ends where the box would have, 4px
+    /// in from the edge (`BAR_PAD_X` less the padding), and the icon's
+    /// box stands 4px further in than the wordmark (28px against 24px):
+    /// the bar's two ends are unequal, a known limit of the bar.
+    ///
+    /// That 4px of clearance is `BAR_PAD_X` less the padding whatever
+    /// the reach is; it is also the reach, which the focus-ring test
+    /// asks of it, only while both are 4px. The icon button and the
+    /// call to action keep their rings clear without a pull back.
+    fn overhang(&self) -> f32 {
+        match self {
+            ThemeTrigger::Named | ThemeTrigger::Bare => {
+                ButtonSize::Default.padding_x() - states::FOCUS_RING_REACH
+            }
+            ThemeTrigger::Icon => {
+                (ui_kit::components::badge::ICON_BUTTON_SIZE - IconSize::Lg.px()) / 2.0
+            }
+        }
+    }
+}
+
 impl BarFit {
     /// The fullest bar that fits the row `ui` is about to lay out. The
     /// widths are measured before anything is placed, in the widgets'
@@ -2211,23 +2492,13 @@ impl BarFit {
     /// them. `narrow`, the phone layout, goes straight to the compact
     /// bars.
     fn measure(ui: &egui::Ui, theme: ThemeId, narrow: bool) -> BarFit {
-        use ui_kit::components::button::ButtonSize;
-
         // egui spaces each widget from the next by its item spacing,
         // and the bar's own gaps come on top of that.
         let spacing = ui.spacing().item_spacing.x;
         let action = |width: f32| width + spacing + ACTIONS_GAP;
         let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
-        let labelled = |named: bool| {
-            let label = theme_trigger_label(theme, named);
-            action(button_width(ui, theme, ButtonSize::Default, &label, true))
-        };
-        let trigger_width = |trigger: ThemeTrigger| match trigger {
-            ThemeTrigger::Named => labelled(true),
-            ThemeTrigger::Bare => labelled(false),
-            // The icon button, square at the search button's size.
-            ThemeTrigger::Icon => action(search),
-        };
+        let trigger_width =
+            |trigger: ThemeTrigger| action(trigger_button_width(ui, theme, &trigger));
         let row = ui.available_width();
         let logo = Logo::wordmark().height(LOGO_HEIGHT).size().x;
         if !narrow {
@@ -2235,13 +2506,7 @@ impl BarFit {
                 .iter()
                 .map(|label| nav_link_width(ui, theme, label) + spacing + LINK_GAP)
                 .sum();
-            let cta = action(button_width(
-                ui,
-                theme,
-                ButtonSize::Sm,
-                copy::START_A_PROJECT,
-                false,
-            ));
+            let cta = action(cta_button_width(ui, theme));
             let named = trigger_width(ThemeTrigger::Named);
             let bare = trigger_width(ThemeTrigger::Bare);
             // The room left once the wordmark, with the gap after it,
@@ -2294,6 +2559,47 @@ impl BarFit {
             trigger,
         }
     }
+
+    /// How wide the actions group runs, from the search button's left
+    /// edge to the right edge of its last control. It must equal the
+    /// extent of the left-to-right group `Gallery::app_bar` builds: the
+    /// search button, the theme trigger and (where the bar has room) the
+    /// call to action, each after the one before it by egui's item
+    /// spacing and the bar's own `ACTIONS_GAP`. `app_bar` opens the
+    /// group this far in from its right edge, so that the last control
+    /// ends flush with it; a change to what the group holds or to the
+    /// gaps between its controls changes this too.
+    fn actions_width(&self, ui: &egui::Ui, theme: ThemeId) -> f32 {
+        let between = ui.spacing().item_spacing.x + ACTIONS_GAP;
+        let search = ui_kit::components::badge::ICON_BUTTON_SIZE;
+        let through_trigger = search + between + trigger_button_width(ui, theme, &self.trigger);
+        if self.cta {
+            through_trigger + between + cta_button_width(ui, theme)
+        } else {
+            through_trigger
+        }
+    }
+}
+
+/// The width of the bar's theme trigger as `kind` reads: the default
+/// button over its label with the chevron beside it, or the kit's icon
+/// button, square at the search button's size.
+fn trigger_button_width(ui: &egui::Ui, theme: ThemeId, kind: &ThemeTrigger) -> f32 {
+    let labelled = |named: bool| {
+        let label = theme_trigger_label(theme, named);
+        button_width(ui, theme, ButtonSize::Default, &label, true)
+    };
+    match kind {
+        ThemeTrigger::Named => labelled(true),
+        ThemeTrigger::Bare => labelled(false),
+        ThemeTrigger::Icon => ui_kit::components::badge::ICON_BUTTON_SIZE,
+    }
+}
+
+/// The width of the bar's call to action, the small button over its
+/// label.
+fn cta_button_width(ui: &egui::Ui, theme: ThemeId) -> f32 {
+    button_width(ui, theme, ButtonSize::Sm, copy::START_A_PROJECT, false)
 }
 
 /// The theme trigger's label: the menu's own, followed by the live
@@ -2377,6 +2683,23 @@ impl Gallery {
         let flags = self.flags;
         TopAppBar::new().ui(ui, theme, &flags, |ui| {
             ui.horizontal(|ui| {
+                // The row is the bar's content height, so everything in
+                // it centres on the bar's centre line. `horizontal` opens
+                // the row at egui's 18px interact height, and an item
+                // placed first and taller than that (the 24px wordmark,
+                // the nav links, the call to action) is pinned to the
+                // row's top, short of the 44px controls' centre line.
+                ui.set_height(CONTENT_HEIGHT);
+                // The bar's pane: the row grown by the padding of
+                // `TopAppBar::ui`'s inner margin (`BAR_PAD_X` at the
+                // sides, `BAR_PAD_Y` above and below), which this
+                // inverts. It assumes `ui.max_rect()` is the frame's
+                // content rect: the row spans its width, and
+                // `set_height` above pins the row to its height. The
+                // bar's popovers hang from the pane's bottom edge and
+                // keep inside its left edge (`bar_popover`). Keep in
+                // step with `TopAppBar::ui`'s inner margin.
+                let bar = ui.max_rect().expand2(egui::vec2(BAR_PAD_X, BAR_PAD_Y));
                 let fit = BarFit::measure(ui, theme, narrow);
 
                 // The brand: the wordmark at its 24px chrome height,
@@ -2401,20 +2724,38 @@ impl Gallery {
                     }
                 }
 
-                // The actions, flush right: the one CTA where the row
-                // has room for it, the theme menu, the search
-                // affordance.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if fit.cta {
-                        Button::new(copy::START_A_PROJECT)
-                            .small()
-                            .emphasis(ButtonEmphasis::Tertiary)
-                            .ui(ui, theme, &flags);
-                        ui.add_space(ACTIONS_GAP);
-                    }
-
-                    self.theme_menu(ui, ctx, fit.trigger);
-                    ui.add_space(ACTIONS_GAP);
+                // The actions, flush right: the search affordance, the
+                // theme menu, and the one CTA where the row has room
+                // for it. With no CTA the theme trigger ends the row,
+                // and its own padding sits inside the bar's, so its
+                // icon would stand that much further in than the
+                // wordmark does. The group is a child `Ui` that runs
+                // past the row's right edge by the trigger's overhang
+                // (a little less than that padding, to keep its focus
+                // ring inside the bar): `with_layout` would stay inside
+                // the row, and allocating the overhang would widen the
+                // bar.
+                //
+                // The group is built left to right, in the order its
+                // controls stand, because egui hands Tab focus along in
+                // creation order, not layout order (built from the
+                // right it ran CTA, theme, search). It still ends at
+                // the right edge: the child opens `actions_width` in
+                // from it.
+                let row = ui.available_rect_before_wrap();
+                let overhang = if fit.cta { 0.0 } else { fit.trigger.overhang() };
+                let right = row.max.x + overhang;
+                let mut actions = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(Rect::from_min_max(
+                            egui::pos2(right - fit.actions_width(ui, theme), row.min.y),
+                            egui::pos2(right, row.max.y),
+                        ))
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                {
+                    // The child, under the name the controls below use.
+                    let ui = &mut actions;
 
                     // The search affordance: the 44px icon button
                     // opening the reused TextField in its popover. The
@@ -2428,11 +2769,8 @@ impl Gallery {
                         self.search_open = !self.search_open;
                         self.theme_open = false;
                     }
-                    egui::Popup::from_response(&search)
+                    bar_popover(&search, bar, SEARCH_POPOVER_WIDTH, theme)
                         .open_bool(&mut self.search_open)
-                        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                        .frame(popup_frame(theme))
-                        .width(280.0)
                         .show(|ui| {
                             TextField::new(copy::SEARCH_FIELD_LABEL, &mut self.search)
                                 .placeholder(copy::SEARCH_PLACEHOLDER)
@@ -2440,7 +2778,22 @@ impl Gallery {
                                 .hint(copy::SEARCH_FIELD_HINT)
                                 .ui(ui, theme, &flags);
                         });
-                });
+                    // Keep in step with `BarFit::actions_width`.
+                    ui.add_space(ACTIONS_GAP);
+
+                    self.theme_menu(ui, ctx, fit.trigger, bar);
+
+                    if fit.cta {
+                        // Keep in step with `BarFit::actions_width`.
+                        ui.add_space(ACTIONS_GAP);
+                        Button::new(copy::START_A_PROJECT)
+                            .small()
+                            .emphasis(ButtonEmphasis::Tertiary)
+                            .ui(ui, theme, &flags);
+                    }
+                }
+                // The row claims its own rect, not the overhang.
+                ui.advance_cursor_after_rect(row);
             });
         });
     }
@@ -2453,9 +2806,18 @@ impl Gallery {
     /// naming the live theme where the bar has room for the name, or on
     /// the bare label where it has room for that, and on the narrowest
     /// phones the kit's 44px icon button with the tune icon, the search
-    /// button's twin. The popover closes on a tap outside it, and
-    /// opening it closes the search popover.
-    fn theme_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, kind: ThemeTrigger) {
+    /// button's twin. The popover hangs under the bar `bar`
+    /// ([`bar_popover`], as the search popover does), scrolls where the
+    /// room under the bar is shorter than the menu ([`bar_popover_room`]),
+    /// closes on a tap outside it, and opening it closes the search
+    /// popover.
+    fn theme_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        kind: ThemeTrigger,
+        bar: Rect,
+    ) {
         let theme = self.theme;
         let flags = self.flags;
         let labelled = |ui: &mut egui::Ui, named: bool| {
@@ -2481,12 +2843,33 @@ impl Gallery {
         // The open state is the Gallery's own: the popover clears it
         // when a tap lands outside it (or on Escape).
         let mut open = self.theme_open;
-        egui::Popup::from_response(&trigger)
+        let room = bar_popover_room(ctx, bar, theme);
+        bar_popover(&trigger, bar, THEME_MENU_WIDTH, theme)
             .open_bool(&mut open)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-            .frame(popup_frame(theme).inner_margin(spacing::SPACE_4))
-            .width(THEME_MENU_WIDTH)
-            .show(|ui| self.theme_menu_content(ui, ctx));
+            .show(|ui| {
+                // Taller than the room under the bar (a landscape phone),
+                // the menu scrolls inside it, a finger dragging it on
+                // [`drag_scroll`]'s terms; where it fits, the area
+                // shrinks to the content and changes nothing.
+                //
+                // The popup's `Ui` is as tall as the popup was last
+                // frame (400pt, egui's default area height, while the
+                // popup is first sized). Plain content overflows that,
+                // and the popup measures the overflow; a scroll area takes
+                // no more than its `Ui` offers, so left at that it would
+                // hold the menu at 400pt less the frame, cutting its last
+                // rows off in a window with room for them. The `Ui` is
+                // given the room itself.
+                ui.set_max_height(room);
+                egui::ScrollArea::vertical()
+                    .id_salt(THEME_MENU_SCROLL)
+                    .max_height(room)
+                    .scroll_source(ScrollSource {
+                        drag: drag_scroll(),
+                        ..ScrollSource::default()
+                    })
+                    .show(ui, |ui| self.theme_menu_content(ui, ctx));
+            });
         self.theme_open = open;
     }
 
@@ -2500,10 +2883,23 @@ impl Gallery {
         let flags = self.flags;
         let names: Vec<&'static str> = ThemeId::ALL.iter().map(|id| id.name()).collect();
         let themes = radio_options(ThemeId::ALL, &names);
-        let choice = RadioGroup::new(copy::THEME_MENU)
-            .options(&themes)
-            .selected(Some(theme))
-            .ui(ui, theme, &flags);
+        // Every row is a touch target: the kit's rows are 20 and 26px
+        // tall, so each is grown to the touch floor, and the theme rows
+        // meet with no gap between them (the toggles keep the column's
+        // own 3px item spacing). The radio group is indented so its
+        // labels start where the toggles' do.
+        let mut group = ui.available_rect_before_wrap();
+        group.min.x += THEME_MENU_RADIO_INSET;
+        let choice = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(group), |ui| {
+                RadioGroup::new(copy::THEME_MENU)
+                    .options(&themes)
+                    .selected(Some(theme))
+                    .min_row_height(button::TOUCH_TARGET_MIN)
+                    .row_gap(0.0)
+                    .ui(ui, theme, &flags)
+            })
+            .inner;
         if let Some(picked) = choice.committed {
             self.theme = picked;
             install(picked, ctx);
@@ -2513,14 +2909,15 @@ impl Gallery {
         ui.add_space(spacing::SPACE_5);
         if let Some(on) = Toggle::new(copy::REDUCED_MOTION)
             .checked(flags.reduced_motion)
+            .min_row_height(button::TOUCH_TARGET_MIN)
             .ui(ui, theme, &flags)
             .toggled
         {
             self.flags.reduced_motion = on;
         }
-        ui.add_space(ui_kit::components::checkbox::ROW_GAP);
         if let Some(on) = Toggle::new(copy::REDUCED_TRANSPARENCY)
             .checked(flags.reduced_transparency)
+            .min_row_height(button::TOUCH_TARGET_MIN)
             .ui(ui, theme, &flags)
             .toggled
         {
@@ -2568,10 +2965,20 @@ impl Gallery {
                         .role(role)
                         .expect("ROLES names all resolve to fields");
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
-                    ui.painter().rect_filled(
+                    let radius = CornerRadius::same(radii::RADIUS_XS as u8);
+                    ui.painter().rect_filled(rect, radius, color);
+                    // The surfaces and glass tints sit close to the
+                    // canvas and vanish without an edge. The edge is
+                    // `outline`, the border role that holds 3:1 on the
+                    // canvas in every theme (`outline_variant` is a
+                    // 1.4:1 hairline, and translucent in the Teal
+                    // themes), drawn outside so the swatch keeps its
+                    // own colour.
+                    ui.painter().rect_stroke(
                         rect,
-                        CornerRadius::same(radii::RADIUS_XS as u8),
-                        color,
+                        radius,
+                        egui::Stroke::new(1.0, colors.outline),
+                        egui::StrokeKind::Outside,
                     );
                     ui.label(sentence_case(role));
                     ui.end_row();
@@ -2623,26 +3030,51 @@ impl Gallery {
     /// terms: on a phone from the very first touch, the page following
     /// the finger with the kinetic fling on release. The output's
     /// `content_size` is the panel's laid-out extent.
+    ///
+    /// When the content height changes, the frame is laid out again in
+    /// the same frame if the panel ends up shorter than the offset the
+    /// frame began at (a banner dismissed at the page's end). The gate
+    /// compares the content height only: a restore lengthens the page and
+    /// never fires it, and a change of the viewport that leaves the
+    /// content height alone (a rotation, the keyboard) is not covered.
+    ///
+    /// egui places the content at the offset it stored and clamps that
+    /// offset only after the content is placed, so the first frame with
+    /// the shorter panel would be painted over-scrolled: the top of the
+    /// panel under the tab strip and blank space below it. egui does
+    /// follow that frame with one that paints the clamped page, but the
+    /// Pixel was seen keeping the over-scrolled one on screen (finding
+    /// 3-A9), so the frame is made right by itself: its second pass
+    /// begins at the clamped offset, and only that pass reaches the
+    /// screen. Only a changed height asks for it: a reader's own
+    /// scrolling, the clamp at the page's end included, takes one pass.
     fn page(&mut self, ui: &mut egui::Ui) -> egui::scroll_area::ScrollAreaOutput<()> {
         let ctx = ui.ctx().clone();
-        let page_id = ui.make_persistent_id(egui::IdSalt::new(PAGE_SCROLL));
+        let salt = page_scroll_salt(self.tab);
+        let page_id = ui.make_persistent_id(egui::IdSalt::new(salt));
         // A vertical drag that began on a sideways row arrives as the
         // offset change the row handed over last frame (`scrolling_row`).
         let forwarded = ctx.data_mut(|d| {
             std::mem::take(d.get_temp_mut_or_default::<f32>(egui::Id::new(PAGE_FORWARD)))
         });
         let mut area = egui::ScrollArea::vertical()
-            .id_salt(PAGE_SCROLL)
+            .id_salt(salt)
             .scroll_source(ScrollSource {
                 drag: drag_scroll(),
                 ..ScrollSource::default()
             });
+        // Loaded on every frame, not only when a row forwards a drag:
+        // `began_at` below needs the stored offset each time.
+        let stored =
+            egui::scroll_area::State::load(&ctx, page_id).map_or(0.0, |state| state.offset.y);
         if forwarded != 0.0 {
-            let offset =
-                egui::scroll_area::State::load(&ctx, page_id).map_or(0.0, |state| state.offset.y);
-            area = area.vertical_scroll_offset(offset + forwarded);
+            area = area.vertical_scroll_offset(stored + forwarded);
         }
-        area.show(ui, |ui| {
+        // The offset stored when the frame began. egui applies a drag's
+        // and a fling's deltas inside `begin`, after the load above, so
+        // the area may lay the content out a little away from it.
+        let began_at = stored + forwarded;
+        let page = area.show(ui, |ui| {
             match self.tab {
                 0 => self.brand_panel(ui),
                 1 => self.foundations_panel(ui),
@@ -2650,7 +3082,28 @@ impl Gallery {
                 _ => self.feedback_panel(ui),
             }
             ui.add_space(spacing::SPACE_6);
-        })
+        });
+
+        let height = page.content_size.y;
+        let height_id = page_id.with(PAGE_HEIGHT);
+        // The new height is stored on every pass, the one that asks for
+        // the discard included, so the second pass reads `previous ==
+        // height`, the gate stays shut and the frame discards once. The
+        // offset test shuts it as well (the first pass stored the clamped
+        // offset); a store skipped on the discard path would leave that
+        // test as the only guard.
+        let previous = ctx.data_mut(|d| {
+            let previous = d.get_temp::<f32>(height_id);
+            d.insert_temp(height_id, height);
+            previous
+        });
+        let furthest = (height - page.inner_rect.height()).max(0.0);
+        if previous.is_some_and(|previous| (previous - height).abs() > PAGE_PIXEL_SNAP)
+            && began_at > furthest + PAGE_PIXEL_SNAP
+        {
+            ctx.request_discard("the page is shorter than the offset it was laid out at");
+        }
+        page
     }
 
     /// The window's chrome for one frame: the TopAppBar on Liquid Glass
@@ -2675,20 +3128,60 @@ impl Gallery {
         // landscape phone would otherwise push the whole chrome to the
         // other side, so both gutters grow to the larger of the two.
         let side = insets.left.max(insets.right);
+        // A short window (a phone in landscape) keeps most of its height
+        // for the page: the gaps under the bar shrink to `SHORT_GAP`, and
+        // the tab description below the strip goes.
+        let short = root.available_height() < SHORT_WINDOW_HEIGHT;
+        // `full` in a window of full height, `SHORT_GAP` in a short one.
+        // The bar's clearance above is not one of these: it stays, and
+        // only the gaps under the bar are compressed.
+        let gap = |full: f32| if short { SHORT_GAP } else { full };
         let chrome_margin = |top: f32, bottom: f32| egui::Margin {
             left: (PAGE_GUTTER + side) as i8,
             right: (PAGE_GUTTER + side) as i8,
             top: (spacing::SPACE_3 + top) as i8,
-            bottom: (spacing::SPACE_3 + bottom) as i8,
+            bottom: (gap(spacing::SPACE_3) + bottom) as i8,
+        };
+        // The content panel's margin: the gutter at each side as ever.
+        // A short window gives up the 24px rhythm above the strip (for
+        // `SHORT_GAP`) and below the page (no margin at all, as the page
+        // ends with space of its own). It names `SHORT_GAP` rather than
+        // using `gap`, which would repeat `content_margin`'s 24px here.
+        let panel_margin = if short {
+            egui::Margin {
+                top: SHORT_GAP as i8,
+                bottom: 0,
+                ..content_margin()
+            }
+        } else {
+            content_margin()
         };
         // On a phone-width window the bar carries the brand, the theme
         // menu and the search affordance only: the nav links and the
         // call to action would not fit beside the wordmark, and the
         // Tabs strip below the bar already switches every panel.
         let narrow = root.available_width() < NARROW_WIDTH;
-        // The sticky bar, floating on the canvas with its clearance.
+        // The sticky bar, floating on the canvas with its clearance. The
+        // bar is a rounded pane with a border of its own, so the
+        // panel's separator line is off: a full-width straight line on
+        // the panel's edge lay against that border and doubled it, and
+        // ran on under the pane's rounded corners. The panel reserved
+        // the line's room in its outer margin; the clearance keeps it,
+        // so the page below the bar does not move. The room is the width
+        // egui's `Panel::resolve_frame` reserves for the line (the
+        // `noninteractive.bg_stroke` width), rounded the same way.
+        let separator_room = root
+            .style()
+            .visuals
+            .widgets
+            .noninteractive
+            .bg_stroke
+            .width
+            .round();
         egui::Panel::top("vynatix-app-bar")
-            .frame(egui::Frame::default().outer_margin(chrome_margin(insets.top, 0.0)))
+            // Off, with `separator_room` standing in for the room it took.
+            .show_separator_line(false)
+            .frame(egui::Frame::default().outer_margin(chrome_margin(insets.top, separator_room)))
             .show(root, |ui| self.app_bar(ui, &ctx, narrow));
 
         egui::CentralPanel::default()
@@ -2700,7 +3193,7 @@ impl Gallery {
             }))
             .show(root, |ui| {
                 egui::Frame::default()
-                    .inner_margin(content_margin())
+                    .inner_margin(panel_margin)
                     .show(ui, |ui| {
                         // The Tabs strip: the widget's own real demo, the
                         // gallery's panel switcher. It stays above the
@@ -2715,8 +3208,11 @@ impl Gallery {
                         }
                         // The caption explains the panels and the arrow
                         // keys: on a phone it is noise above the content,
-                        // and it names keys the phone does not have.
-                        if !narrow {
+                        // and it names keys the phone does not have. A
+                        // short window has no room for it either: three
+                        // lines under the strip took a quarter of the
+                        // Pixel's screen in landscape.
+                        if !narrow && !short {
                             ui.add(egui::Label::new(specimen_job(
                                 copy::TABS_NOTE,
                                 TypeStyle::Caption,
@@ -2726,9 +3222,10 @@ impl Gallery {
                             )));
                         }
 
-                        ui.add_space(spacing::SPACE_4);
+                        ui.add_space(gap(spacing::SPACE_4));
                         let page = self.page(ui);
                         self.page_scroll_id = Some(page.id);
+                        self.page_rect = Some(page.inner_rect);
                     });
             });
 
@@ -2764,10 +3261,15 @@ impl Gallery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ui_kit::components::metric_card::MIN_WIDTH;
 
     /// The narrowest phone the layout guard holds the panels to: 360pt,
     /// the common small Android width.
     const PHONE_WIDTH: f32 = 360.0;
+
+    /// The Pixel emulator's window, 384pt: the width the usability pass
+    /// saw the metric cards squeezed at.
+    const PIXEL_WIDTH: f32 = 384.0;
 
     /// A desktop window, wide enough for every two-column layout.
     const DESKTOP_WIDTH: f32 = 1200.0;
@@ -2851,6 +3353,292 @@ mod tests {
             assert!(
                 overflow <= 0.5,
                 "{name} runs {overflow}pt past a {DESKTOP_WIDTH}pt window"
+            );
+        }
+    }
+
+    /// Lay the Foundations STATES row out in `theme` on a desktop window
+    /// and return, for each "Start a project" label it paints, the
+    /// label's rect and the rect of the filled tile body it sits on (the
+    /// last filled rect before the label that holds the label's centre;
+    /// the focus ring's halo and outline are strokes with no fill).
+    fn state_tile_labels(theme: ThemeId) -> Vec<(Rect, Rect)> {
+        let ctx = egui::Context::default();
+        install(theme, &ctx);
+        apply_theme(theme, &ctx);
+        let flags = UiKitFlags::default();
+        let mut pairs = Vec::new();
+        // The first pass binds the installed faces; the next let the
+        // scroll row settle.
+        for _ in 0..3 {
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(DESKTOP_WIDTH, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        states_section(ui, theme, &flags);
+                    });
+                },
+            );
+            let mut bodies: Vec<Rect> = Vec::new();
+            pairs.clear();
+            for clipped in &out.shapes {
+                match &clipped.shape {
+                    egui::Shape::Rect(rect) if rect.fill != Color32::TRANSPARENT => {
+                        bodies.push(rect.rect);
+                    }
+                    egui::Shape::Text(text) if text.galley.text() == copy::START_A_PROJECT => {
+                        let label = Rect::from_min_size(text.pos, text.galley.size());
+                        let body = bodies
+                            .iter()
+                            .rev()
+                            .find(|body| body.contains(label.center()))
+                            .copied()
+                            .expect("a label sits on a filled tile body");
+                        pairs.push((label, body));
+                    }
+                    _ => {}
+                }
+            }
+            out.drop_without_applying_deltas();
+        }
+        pairs
+    }
+
+    /// The STATES row's five tiles each hold the whole "Start a project"
+    /// label inside their painted body, in every theme: the body takes
+    /// its width from the label, so a wider face or a longer label
+    /// widens the tile instead of spilling its ends onto the page.
+    #[test]
+    fn state_tile_labels_fit_inside_their_tiles() {
+        for theme in ThemeId::ALL {
+            let pairs = state_tile_labels(*theme);
+            assert_eq!(
+                pairs.len(),
+                copy::STATE_CAPTIONS.len(),
+                "{theme:?}: one label per state tile"
+            );
+            for (index, (label, body)) in pairs.iter().enumerate() {
+                // The body is the tile's own fill: a focus ring around it
+                // is taller than the tile, so one picked up here would
+                // make the containment below too easy to meet.
+                assert!(
+                    body.height() <= spacing::SPACE_10 + 0.5,
+                    "{theme:?}, tile {index}: the {}pt body is taller than the \
+                     {}pt tile, so it is not the tile's fill",
+                    body.height(),
+                    spacing::SPACE_10,
+                );
+                assert!(
+                    body.contains_rect(*label),
+                    "{theme:?}, tile {index}: the {}pt label at x {}..{} runs outside \
+                     its {}pt button at x {}..{}",
+                    label.width(),
+                    label.left(),
+                    label.right(),
+                    body.width(),
+                    body.left(),
+                    body.right(),
+                );
+            }
+        }
+    }
+
+    /// Lay the Foundations STATES row out in `theme` on a desktop window
+    /// and return the "Tab to me" button as painted: the rect of its
+    /// outlined frame (the 1pt outline is drawn inside that rect), the
+    /// outline's width, and the label's glyph box (the galley's rect).
+    fn tab_to_me_pill(theme: ThemeId) -> (Rect, f32, Rect) {
+        let ctx = egui::Context::default();
+        install(theme, &ctx);
+        apply_theme(theme, &ctx);
+        let flags = UiKitFlags::default();
+        let mut found = None;
+        // The first pass binds the installed faces; the next let the
+        // scroll row settle.
+        for _ in 0..3 {
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(DESKTOP_WIDTH, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        states_section(ui, theme, &flags);
+                    });
+                },
+            );
+            let mut frames: Vec<(Rect, f32)> = Vec::new();
+            found = None;
+            for clipped in &out.shapes {
+                match &clipped.shape {
+                    egui::Shape::Rect(rect) if rect.stroke.width > 0.0 => {
+                        frames.push((rect.rect, rect.stroke.width));
+                    }
+                    egui::Shape::Text(text) if text.galley.text() == copy::STATES_TAB_BUTTON => {
+                        let label = Rect::from_min_size(text.pos, text.galley.size());
+                        let (pill, outline) = frames
+                            .iter()
+                            .rev()
+                            .find(|(frame, _)| frame.contains(label.center()))
+                            .copied()
+                            .expect("the label sits in an outlined frame");
+                        found = Some((pill, outline, label));
+                    }
+                    _ => {}
+                }
+            }
+            out.drop_without_applying_deltas();
+        }
+        found.expect("the states row paints the Tab-to-me label")
+    }
+
+    /// The least a compact label's pill stands tall: 24pt, room for the
+    /// outline and the label with air around it.
+    const MIN_PILL_HEIGHT: f32 = spacing::SPACE_6;
+
+    /// The least air between the label's glyph box and the pill's
+    /// outline, on each side.
+    const MIN_PILL_AIR: f32 = spacing::SPACE_1;
+
+    /// The "Tab to me" pill is at least 24pt tall, and its label keeps
+    /// at least 4pt from the outline's inner edge on every side, in every
+    /// theme: a pill at egui's 18pt default leaves the label touching it.
+    #[test]
+    fn the_tab_to_me_pill_has_room_for_its_label() {
+        let mut short = Vec::new();
+        for theme in ThemeId::ALL {
+            let (pill, outline, label) = tab_to_me_pill(*theme);
+            let size = format!(
+                "pill {}x{}pt, outline {outline}pt, label {}x{}pt",
+                pill.width(),
+                pill.height(),
+                label.width(),
+                label.height(),
+            );
+            if pill.height() < MIN_PILL_HEIGHT - 0.01 {
+                short.push(format!(
+                    "{theme:?}: the pill is {}pt tall, under {MIN_PILL_HEIGHT}pt ({size})",
+                    pill.height(),
+                ));
+            }
+            let inner = pill.shrink(outline);
+            let air = [
+                ("left", label.left() - inner.left()),
+                ("right", inner.right() - label.right()),
+                ("top", label.top() - inner.top()),
+                ("bottom", inner.bottom() - label.bottom()),
+            ];
+            for (side, gap) in air {
+                if gap < MIN_PILL_AIR - 0.01 {
+                    short.push(format!(
+                        "{theme:?}: the {side} gap from the label to the outline is {gap}pt, \
+                         under {MIN_PILL_AIR}pt ({size})"
+                    ));
+                }
+            }
+        }
+        assert!(short.is_empty(), "{}", short.join("\n"));
+    }
+
+    /// Lay the Components tab's metric row out on a window `width` wide,
+    /// inside the page's margins, and return the card bodies it painted
+    /// (the rects filled with the card surface) with the right edge of
+    /// the width the page gives the row.
+    fn metric_cards(width: f32) -> (Vec<Rect>, f32) {
+        let theme = ThemeId::Light;
+        let ctx = egui::Context::default();
+        install(theme, &ctx);
+        apply_theme(theme, &ctx);
+        let surface = theme.colors().surface_container_low;
+        let mut bodies = Vec::new();
+        let mut visible_right = f32::NAN;
+        // The first pass binds the installed faces; the next let the
+        // scroll row settle.
+        for _ in 0..3 {
+            let out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(width, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::default())
+                        .show(ui, |ui| {
+                            egui::Frame::default()
+                                .inner_margin(content_margin())
+                                .show(ui, |ui| {
+                                    visible_right = ui.max_rect().right();
+                                    metrics_group(ui, theme);
+                                });
+                        });
+                },
+            );
+            bodies.clear();
+            for clipped in &out.shapes {
+                filled_rects(&clipped.shape, surface, &mut bodies);
+            }
+            out.drop_without_applying_deltas();
+        }
+        (bodies, visible_right)
+    }
+
+    /// Collect the rects `shape` fills with `fill`. A frame with a shadow
+    /// paints its shadow and its fill as one nested shape, so the walk
+    /// descends into those.
+    fn filled_rects(shape: &egui::Shape, fill: Color32, found: &mut Vec<Rect>) {
+        match shape {
+            egui::Shape::Rect(rect) if rect.fill == fill => found.push(rect.rect),
+            egui::Shape::Vec(nested) => {
+                nested
+                    .iter()
+                    .for_each(|shape| filled_rects(shape, fill, found));
+            }
+            _ => {}
+        }
+    }
+
+    /// The metric row keeps every card it paints at or above the kit's
+    /// minimum on a phone window, and runs on past the window's edge to
+    /// be scrolled to. A horizontal scroll caps its content at the
+    /// visible width, so before the cards held a minimum the row gave
+    /// each card what was left of that width: the second card came out
+    /// narrow and the third one narrower, their labels broken a letter
+    /// to a line. Card three sits wholly beyond the row's clip at this
+    /// width, and a frame outside the clip paints nothing, so the test
+    /// holds the cards that do paint.
+    #[test]
+    fn the_metric_row_scrolls_instead_of_squeezing_its_cards() {
+        for width in [PHONE_WIDTH, PIXEL_WIDTH] {
+            let (bodies, visible_right) = metric_cards(width);
+            assert!(
+                bodies.len() >= 2,
+                "{width}pt: the row painted {} cards; at least the first two sit in view",
+                bodies.len()
+            );
+            for (index, body) in bodies.iter().enumerate() {
+                assert!(
+                    body.width() >= MIN_WIDTH - 0.5,
+                    "{width}pt: card {} is {}pt wide; the minimum is {MIN_WIDTH}pt",
+                    index + 1,
+                    body.width()
+                );
+            }
+            assert!(
+                bodies.iter().any(|body| body.right() > visible_right + 0.5),
+                "{width}pt: every card fits inside the window, so the row squeezed them \
+                 instead of scrolling"
             );
         }
     }

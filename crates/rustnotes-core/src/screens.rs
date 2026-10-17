@@ -8,7 +8,7 @@
 
 use crate::layout::{
     self, add_button, back_button, bar_title, bottom_nav, icon_notes, icon_settings, BarLine,
-    Metrics, Nav, NavItem, Palette, Scaffold, WindowClass,
+    Metrics, Nav, NavItem, Palette, Scaffold, SizeClass, WindowClass,
 };
 use crate::{debounce, notes, App, DebounceAction, Screen, Tab, DELETE_ARM_WINDOW, EDITOR_ID};
 use egui::{
@@ -86,6 +86,20 @@ fn tab_bar(ui: &mut Ui, selected: Tab, pal: &Palette, m: &Metrics) -> Option<Tab
     bottom_nav(ui, &TABS, idx, pal, m).map(|i| if i == 0 { Tab::Notes } else { Tab::Settings })
 }
 
+/// Where a list row's delete cross is centred: 32 pt in from the card's right edge.
+fn cross_center(card: Rect) -> egui::Pos2 {
+    pos2(card.right() - 32.0, card.center().y)
+}
+
+/// A row's delete cross touch area: a square 4 pt wider than the touch target,
+/// centred on the cross.
+fn cross_hit(card: Rect, touch_target: f32) -> Rect {
+    Rect::from_center_size(
+        cross_center(card),
+        vec2(touch_target + 4.0, touch_target + 4.0),
+    )
+}
+
 /// Contents of the list's top bar. Returns whether "+" was tapped.
 fn list_bar(ui: &mut Ui, count: usize, pal: &Palette, m: &Metrics) -> bool {
     let title = bar_title(ui, m.sp(3), "Notes", pal, m);
@@ -146,7 +160,9 @@ impl App {
                 // The stack is borrowed while it draws; routes queue commands
                 // instead of touching it.
                 let mut nav = std::mem::replace(&mut self.nav, Nav::new(Screen::List));
-                nav.show(root, now, |ui, route| self.route_ui(ui, *route, &pal, &m));
+                nav.show(root, now, |ui, route| {
+                    self.route_ui(ui, *route, &pal, &m, class)
+                });
                 self.nav = nav;
             }
         }
@@ -185,7 +201,14 @@ impl App {
     }
 
     /// One route of the single-pane notes flow.
-    fn route_ui(&mut self, ui: &mut Ui, route: Screen, pal: &Palette, m: &Metrics) {
+    fn route_ui(
+        &mut self,
+        ui: &mut Ui,
+        route: Screen,
+        pal: &Palette,
+        m: &Metrics,
+        class: WindowClass,
+    ) {
         match route {
             Screen::List => {
                 let count = self.notes.len();
@@ -206,9 +229,19 @@ impl App {
             Screen::Editor => {
                 let new_note = self.edit_id == 0;
                 let mut back = false;
-                Scaffold::new(pal, m)
-                    .background(pal.surface)
-                    .limit_body_width()
+                // Capped at any width unless the window has Compact height
+                // (metrics.rs:24 documents the cap for readability). A landscape
+                // phone is Compact in height, and there a 640 pt column centred
+                // in the window starts the typed text about 140pt in, while the
+                // title sits at the margin (finding 7-A2), so it is uncapped.
+                // `two_pane_ok` uses the same height test.
+                let scaffold = Scaffold::new(pal, m).background(pal.surface);
+                let scaffold = if class.height != SizeClass::Compact {
+                    scaffold.limit_body_width()
+                } else {
+                    scaffold
+                };
+                scaffold
                     .top_bar(|u| back = editor_bar(u, new_note, true, pal, m))
                     .show(ui, |ui, _| self.editor_body(ui, pal, m));
                 if back {
@@ -241,9 +274,14 @@ impl App {
                 let left = Rect::from_min_max(r.min, pos2(r.min.x + list_w, r.max.y));
                 let right = Rect::from_min_max(pos2(left.right(), r.min.y), r.max);
 
-                // Detail surface, edge to edge behind the right pane.
+                // Detail surface behind the right pane: up into the status
+                // strip like the bar, and across to the same mirrored edge the
+                // bar stops at. The side margin beside a cutout is canvas.
                 ui.painter().rect_filled(
-                    Rect::from_min_max(pos2(right.left(), full.top()), pos2(full.max.x, r.max.y)),
+                    Rect::from_min_max(
+                        pos2(right.left(), full.top()),
+                        pos2(right.right(), r.max.y),
+                    ),
                     0.0,
                     pal.surface,
                 );
@@ -432,6 +470,19 @@ impl App {
         self.refresh_notes();
     }
 
+    /// One delete request on a row, from its cross or a swipe past the
+    /// threshold. The first arms the row; a second within `DELETE_ARM_WINDOW`
+    /// deletes it. Matched by note id (MED-1), so a reorder between the two
+    /// cannot retarget the delete.
+    fn arm_or_confirm_delete(&mut self, id: i64) {
+        match self.armed_delete.take() {
+            Some((armed_id, t)) if armed_id == id && t.elapsed() < DELETE_ARM_WINDOW => {
+                self.delete_note(id);
+            }
+            _ => self.armed_delete = Some((id, Instant::now())),
+        }
+    }
+
     fn list_body(&mut self, ui: &mut Ui, pal: &Palette, m: &Metrics, selected: Option<i64>) {
         let ctx = ui.ctx().clone();
         let area = ui.max_rect();
@@ -560,7 +611,8 @@ impl App {
             let del_r = 16.0;
             let side_w = 64.0; // reserved for the delete button
 
-            // Releasing a left swipe past the threshold deletes the row.
+            // Releasing a left swipe past the threshold asks for the delete on
+            // that row; the caller arms it, and a second request confirms it.
             if !down {
                 if let Some(s) = swipe.take() {
                     if s.axis == Axis::Horizontal && -s.dx > SWIPE_DELETE_FRACTION * card_w {
@@ -575,9 +627,8 @@ impl App {
                     Rect::from_min_size(pos2(row.left() + card_m, row.top()), vec2(card_w, card_h));
                 // Delete is registered after the row so it wins the hit test.
                 let row_resp = ui.interact(card, Id::new(("row", note.id)), Sense::click());
-                let del_c = pos2(card.right() - 32.0, card.center().y);
-                let del_hit =
-                    Rect::from_center_size(del_c, vec2(m.touch_target + 4.0, m.touch_target + 4.0));
+                let del_c = cross_center(card);
+                let del_hit = cross_hit(card, m.touch_target);
                 let del_resp = ui.interact(del_hit, Id::new(("del", note.id)), Sense::click());
                 if del_resp.clicked() {
                     action = Some(ListAction::Delete(note.id));
@@ -758,23 +809,14 @@ impl App {
         self.list_offset = out.state.offset.y;
         self.swipe = swipe;
 
+        // A swipe past the threshold takes the same two-step confirm as the cross.
         if let Some(id) = swipe_delete {
-            self.delete_note(id);
+            self.arm_or_confirm_delete(id);
             return;
         }
         match action {
             Some(ListAction::Open(id)) => self.cmds.push(Cmd::OpenNote(id)),
-            Some(ListAction::Delete(id)) => {
-                // Two taps within 2 s on the cross confirms the delete,
-                // matched by note id (MED-1) so a reorder between taps
-                // cannot retarget it.
-                match self.armed_delete.take() {
-                    Some((armed_id, t)) if armed_id == id && t.elapsed() < DELETE_ARM_WINDOW => {
-                        self.delete_note(id);
-                    }
-                    _ => self.armed_delete = Some((id, Instant::now())),
-                }
-            }
+            Some(ListAction::Delete(id)) => self.arm_or_confirm_delete(id),
             None => {}
         }
     }
@@ -851,7 +893,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui::{Event, RawInput};
+    use egui::{Color32, Event, RawInput};
     use std::time::Duration;
 
     /// Copy of `temp` in lib.rs's tests (private to that module), under its own prefix,
@@ -890,10 +932,62 @@ mod tests {
         events: Vec<Event>,
         t: f64,
     ) -> Vec<Painted> {
+        run_pass_insets(app, ctx, size, Default::default(), events, t).text
+    }
+
+    /// A filled rectangle as a pass painted it.
+    struct Filled {
+        rect: Rect,
+        fill: Color32,
+        /// The clip rect it was painted under: what shows of it.
+        clip: Rect,
+    }
+
+    /// What one pass painted, each kind in paint order (later is on top).
+    struct Pass {
+        text: Vec<Painted>,
+        fills: Vec<Filled>,
+    }
+
+    impl Pass {
+        /// The colour a pass left at `pos`: the topmost filled rectangle
+        /// covering it, as its clip leaves it showing.
+        fn colour_at(&self, pos: egui::Pos2) -> Option<Color32> {
+            self.fills
+                .iter()
+                .rev()
+                .find(|f| f.rect.contains(pos) && f.clip.contains(pos))
+                .map(|f| f.fill)
+        }
+
+        /// Every filled rectangle with some part of itself inside `area`
+        /// (one that only touches an edge of `area` is outside it).
+        fn fills_in(&self, area: Rect) -> impl Iterator<Item = &Filled> {
+            self.fills.iter().filter(move |f| {
+                let shown = f.rect.intersect(f.clip);
+                shown.min.x < area.max.x
+                    && shown.max.x > area.min.x
+                    && shown.min.y < area.max.y
+                    && shown.max.y > area.min.y
+            })
+        }
+    }
+
+    /// `run_pass_sized` with the safe-area insets the host reports, and the
+    /// filled rectangles it painted as well as its text.
+    fn run_pass_insets(
+        app: &mut App,
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        insets: egui::epaint::MarginF32,
+        events: Vec<Event>,
+        t: f64,
+    ) -> Pass {
         let screen = Rect::from_min_size(egui::Pos2::ZERO, size);
         ctx.begin_pass(RawInput {
             time: Some(t),
             screen_rect: Some(screen),
+            safe_area_insets: Some(egui::SafeAreaInsets(insets)),
             events,
             ..Default::default()
         });
@@ -907,24 +1001,33 @@ mod tests {
         // No renderer applies the glyph-atlas delta; clear it or epaint
         // panics on the drop.
         out.textures_delta.clear();
-        let mut painted = vec![];
+        let mut pass = Pass {
+            text: vec![],
+            fills: vec![],
+        };
         for clipped in &out.shapes {
-            collect_text(&clipped.shape, clipped.clip_rect, &mut painted);
+            collect_shapes(&clipped.shape, clipped.clip_rect, &mut pass);
         }
-        painted
+        pass
     }
 
-    /// Every `Shape::Text` in `shape`, looking inside `Shape::Vec` groups,
-    /// which are painted under their parent's clip rect.
-    fn collect_text(shape: &Shape, clip: Rect, into: &mut Vec<Painted>) {
+    /// Every `Shape::Text` and filled `Shape::Rect` in `shape`, looking
+    /// inside `Shape::Vec` groups, which are painted under their parent's
+    /// clip rect.
+    fn collect_shapes(shape: &Shape, clip: Rect, into: &mut Pass) {
         match shape {
-            Shape::Text(text) => into.push(Painted {
+            Shape::Text(text) => into.text.push(Painted {
                 text: text.galley.text().to_owned(),
                 shown: text.galley.rows.iter().map(|row| row.text()).collect(),
                 rect: Rect::from_min_size(text.pos, text.galley.size()),
                 clip,
             }),
-            Shape::Vec(inner) => inner.iter().for_each(|s| collect_text(s, clip, into)),
+            Shape::Rect(r) if r.fill != Color32::TRANSPARENT => into.fills.push(Filled {
+                rect: r.rect,
+                fill: r.fill,
+                clip,
+            }),
+            Shape::Vec(inner) => inner.iter().for_each(|s| collect_shapes(s, clip, into)),
             _ => {}
         }
     }
@@ -948,6 +1051,44 @@ mod tests {
             modifiers: egui::Modifiers::NONE,
         };
         vec![Event::PointerMoved(pos), button(true), button(false)]
+    }
+
+    /// A primary press or release at `pos`, for the swipe helper.
+    fn press(pos: egui::Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    /// A left swipe across row `id` past the delete threshold, one pass per
+    /// step as the host delivers it: a press inside the card, the finger
+    /// moving left, and the release. Returns the egui time after the release.
+    fn swipe_left_past_threshold(app: &mut App, ctx: &egui::Context, id: i64, mut t: f64) -> f64 {
+        let card = ctx
+            .read_response(Id::new(("row", id)))
+            .expect("the row is laid out")
+            .rect;
+        // Starts clear of the cross, and ends well past 40% of the card.
+        let start = pos2(card.right() - 100.0, card.center().y);
+        let end = pos2(card.left() + 20.0, card.center().y);
+        let steps = 8;
+        run_pass(
+            app,
+            ctx,
+            vec![Event::PointerMoved(start), press(start, true)],
+            t,
+        );
+        for k in 1..=steps {
+            t += 0.016;
+            let p = start + (end - start) * (k as f32 / steps as f32);
+            run_pass(app, ctx, vec![Event::PointerMoved(p)], t);
+        }
+        t += 0.016;
+        run_pass(app, ctx, vec![press(end, false)], t);
+        t
     }
 
     /// A fresh app listing `bodies` as saved notes, the last one on top
@@ -1049,6 +1190,143 @@ mod tests {
         let expired = run_pass(&mut app, &ctx, vec![], 1.3);
         assert_eq!(hints(&expired), 0, "an expired arm shows no hint");
         assert!(app.armed_delete.is_none(), "the expiry drops the arm");
+    }
+
+    /// A left swipe past the threshold does not delete on release. It arms
+    /// the row's delete, the same state the cross sets, and the armed row
+    /// shows the hint in place of its date.
+    #[test]
+    fn swipe_past_threshold_arms_the_delete_instead_of_deleting() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "swipe-arms");
+        let id = app.notes[0].id;
+        run_pass(&mut app, &ctx, vec![], 1.0);
+
+        swipe_left_past_threshold(&mut app, &ctx, id, 1.0);
+
+        assert_eq!(app.notes.len(), 2, "the release does not delete the note");
+        assert_eq!(
+            app.armed_delete.map(|(armed, _)| armed),
+            Some(id),
+            "the release arms the swiped row"
+        );
+        let armed = run_pass(&mut app, &ctx, vec![], 2.0);
+        assert_eq!(hints(&armed), 1, "the armed row shows the delete hint");
+    }
+
+    /// The second swipe past the threshold, inside the window, confirms the
+    /// delete: the same two-step rule the cross follows.
+    #[test]
+    fn second_swipe_within_the_window_deletes_the_note() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "swipe-confirms");
+        let id = app.notes[0].id;
+        run_pass(&mut app, &ctx, vec![], 1.0);
+
+        let t = swipe_left_past_threshold(&mut app, &ctx, id, 1.0);
+        swipe_left_past_threshold(&mut app, &ctx, id, t + 0.1);
+
+        assert_eq!(app.notes.len(), 1, "the second swipe deletes the note");
+        assert!(
+            app.notes.iter().all(|n| n.id != id),
+            "the swiped note is the one gone"
+        );
+        assert_eq!(app.armed_delete, None, "the delete consumes the arm");
+    }
+
+    /// The smallest a delete cross's touch area may be, in points, in each
+    /// dimension. The list's own target is larger; this pins the minimum.
+    const MIN_TOUCH_PT: f32 = 44.0;
+
+    /// Each row's delete cross has a touch area at least `MIN_TOUCH_PT` in
+    /// both dimensions, for the card the list lays out at phone width (the
+    /// window the list tests use). The list must also hit-test exactly where
+    /// `cross_hit` puts it, so the check covers the rect the list uses.
+    #[test]
+    fn delete_cross_touch_area_is_at_least_44_points() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "cross-min");
+        run_pass(&mut app, &ctx, vec![], 1.0);
+        for note in &app.notes {
+            let card = ctx
+                .read_response(Id::new(("row", note.id)))
+                .expect("the row is laid out")
+                .rect;
+            let hit = ctx
+                .read_response(Id::new(("del", note.id)))
+                .expect("the delete cross is laid out")
+                .rect;
+            let touch = cross_hit(card, Metrics::DEFAULT.touch_target);
+            assert!(
+                touch.width() >= MIN_TOUCH_PT && touch.height() >= MIN_TOUCH_PT,
+                "the cross's touch area is {} by {} pt, under {MIN_TOUCH_PT} pt",
+                touch.width(),
+                touch.height()
+            );
+            assert!(
+                near(hit.left(), touch.left())
+                    && near(hit.top(), touch.top())
+                    && near(hit.width(), touch.width())
+                    && near(hit.height(), touch.height()),
+                "the list hit-tests the cross at {hit:?}, not where cross_hit puts it at {touch:?}"
+            );
+        }
+    }
+
+    /// Each row's date is right-aligned to one shared edge, and that edge is
+    /// left of the row's delete cross touch area, so no date runs under a
+    /// cross. The dates differ in length, so a shared edge cannot be a
+    /// shared start by accident.
+    #[test]
+    fn row_dates_share_one_right_edge_clear_of_the_cross() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_notes(
+            &ctx,
+            "dates-edge",
+            &["first note", "second note", "third note"],
+        );
+        app.row_dates = vec![
+            "Oct 14, 2026".to_owned(),
+            "Sep 30, 2025".to_owned(),
+            "Jan 2, 2026".to_owned(),
+        ];
+        let painted = run_pass(&mut app, &ctx, vec![], 1.0);
+        assert_eq!(dates(&app, &painted), 3, "all three rows show their dates");
+
+        let mut rights = vec![];
+        for note in &app.notes {
+            let card = ctx
+                .read_response(Id::new(("row", note.id)))
+                .expect("the row is laid out")
+                .rect;
+            let cross = cross_hit(card, Metrics::DEFAULT.touch_target);
+            // The date on this row: a row's date sits inside its card's height.
+            let on_row: Vec<&Painted> = painted
+                .iter()
+                .filter(|p| {
+                    app.row_dates.contains(&p.text)
+                        && (card.top()..=card.bottom()).contains(&p.rect.center().y)
+                })
+                .collect();
+            assert_eq!(on_row.len(), 1, "one date on the row of note {}", note.id);
+            let date = on_row[0];
+            assert_eq!(date.shown, date.text, "the date is shown whole");
+            assert!(
+                date.rect.right() < cross.left(),
+                "the date {:?} ends at {} but the cross's touch area starts at {}",
+                date.text,
+                date.rect.right(),
+                cross.left()
+            );
+            rights.push(date.rect.right());
+        }
+        let first = rights[0];
+        for right in &rights {
+            assert!(
+                (right - first).abs() <= 1.0,
+                "the dates end at {rights:?}, not one edge"
+            );
+        }
     }
 
     /// A note's second line, long enough to run the whole width of its row.
@@ -1208,6 +1486,388 @@ mod tests {
             date.shown.starts_with("Sep") && date.shown.ends_with('…'),
             "the date is cut at its end: {:?}",
             date.shown
+        );
+    }
+
+    /// A Pixel in landscape, with its camera cutout reported as a 53 pt inset
+    /// on the left and nothing on the right. The emulator's 2992 x 1344 px at
+    /// 3 px per pt is 997.3 x 448 pt; 998 keeps the centred body on whole
+    /// points, where a half point would paint a pixel off on one side. At 997
+    /// the margins of the note card in `landscape_mirrors_a_left_only_inset`
+    /// differ by a rounding step (191 and 190 pt), and its `near` check fails.
+    const PIXEL_LANDSCAPE: (f32, f32) = (998.0, 448.0);
+    /// The left inset the Pixel reports for its cutout, in points: the margin
+    /// each side must keep, and the width `margin_strays` inspects. The window
+    /// is 998 pt wide, not 997, so the centred body stays on whole points; at
+    /// 997 `landscape_mirrors_a_left_only_inset` would fail on the note card.
+    const CUTOUT: f32 = 53.0;
+
+    fn cutout_on_the_left() -> egui::epaint::MarginF32 {
+        egui::epaint::MarginF32 {
+            left: CUTOUT,
+            ..Default::default()
+        }
+    }
+
+    /// One settled pass of `app` on the Pixel in landscape.
+    fn landscape_pass(app: &mut App, ctx: &egui::Context) -> Pass {
+        // Nothing mid-slide, so the one route that shows is the only one drawn.
+        app.nav.settle();
+        let (w, h) = PIXEL_LANDSCAPE;
+        run_pass_insets(app, ctx, vec2(w, h), cutout_on_the_left(), vec![], 0.0)
+    }
+
+    /// How far the list screen's parts stand from the window's left and right
+    /// edges: (what, left margin, right margin), in points. The bars' contents
+    /// are in it as well as the bars, as they show where a bar's own edges are:
+    /// the title one `sp(3)` inside the left edge, the "+" button one `sp(3)`
+    /// inside the right.
+    fn list_margins(pass: &Pass, pal: &Palette, w: f32, h: f32) -> Vec<(&'static str, f32, f32)> {
+        let filled = |what: &str, found: Option<&Filled>| {
+            found
+                .unwrap_or_else(|| panic!("nothing painted for {what}"))
+                .rect
+        };
+        let top_bar = filled(
+            "the top bar",
+            pass.fills
+                .iter()
+                .find(|f| f.fill == pal.bar && f.rect.top() <= 0.0),
+        );
+        let bottom_bar = filled(
+            "the bottom bar",
+            pass.fills
+                .iter()
+                .find(|f| f.fill == pal.bar && f.rect.bottom() >= h),
+        );
+        let card = filled(
+            "a note's card",
+            pass.fills.iter().find(|f| {
+                f.fill == pal.surface
+                    && f.rect.top() > 0.0
+                    && f.rect.bottom() < h
+                    // A card is wide; a small fill of the same colour (an
+                    // icon, a handle) is not the card.
+                    && f.rect.width() > 100.0
+            }),
+        );
+        let plus = filled(
+            "the + button",
+            pass.fills.iter().find(|f| f.fill == pal.accent),
+        );
+        // The bottom bar's tab has the same word; this one is in the top half.
+        let title = pass
+            .text
+            .iter()
+            .find(|p| p.text == "Notes" && p.rect.top() < h / 2.0)
+            .expect("the top bar's title")
+            .rect;
+        vec![
+            ("top bar", top_bar.left(), w - top_bar.right()),
+            ("bottom bar", bottom_bar.left(), w - bottom_bar.right()),
+            ("note card", card.left(), w - card.right()),
+            ("title / + button", title.left(), w - plus.right()),
+        ]
+    }
+
+    /// What stands in the two `CUTOUT`-wide side margins of a `w` x `h`
+    /// window besides the screen's canvas: a message for each stray.
+    fn margin_strays(pass: &Pass, w: f32, h: f32, canvas: Color32) -> Vec<String> {
+        let sides = [
+            ("left", Rect::from_min_max(pos2(0.0, 0.0), pos2(CUTOUT, h))),
+            (
+                "right",
+                Rect::from_min_max(pos2(w - CUTOUT, 0.0), pos2(w, h)),
+            ),
+        ];
+        let mut strays = vec![];
+        for (side, area) in sides {
+            for f in pass.fills_in(area) {
+                if f.fill != canvas {
+                    strays.push(format!(
+                        "{side} margin: a {:?} rect at {:?}",
+                        f.fill, f.rect
+                    ));
+                }
+            }
+            // The bar rows (through the middle of each bar) and the body
+            // between them.
+            let mid_bar = Metrics::DEFAULT.bar_height / 2.0;
+            for y in [mid_bar, h / 2.0, h - mid_bar] {
+                let seen = pass.colour_at(pos2(area.center().x, y));
+                if seen != Some(canvas) {
+                    strays.push(format!("{side} margin at y={y}: shows {seen:?}"));
+                }
+            }
+        }
+        strays
+    }
+
+    /// Finding 4-A5. A Pixel in landscape reports its cutout as a 53 pt left
+    /// inset and no right inset. The scaffold honoured only that, so the bars
+    /// stood 53 pt from the left edge and at the right edge, and the title and
+    /// "+" button 69 pt from the left and 16 pt from the right. The gallery
+    /// mirrors the inset (the larger of the two on both sides); so does this.
+    #[test]
+    fn landscape_mirrors_a_left_only_inset() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "mirror-list");
+        let pass = landscape_pass(&mut app, &ctx);
+        let pal = Palette::of(&ctx);
+        let (w, h) = PIXEL_LANDSCAPE;
+
+        // Each part stands as far from one edge as from the other, and clear
+        // of the cutout.
+        let crooked: Vec<String> = list_margins(&pass, &pal, w, h)
+            .into_iter()
+            .filter(|&(_, left, right)| !near(left, right) || left < CUTOUT)
+            .map(|(what, left, right)| {
+                format!("{what}: {left} pt from the left, {right} from the right")
+            })
+            .collect();
+        assert!(
+            crooked.is_empty(),
+            "equal margins of at least {CUTOUT} pt were wanted: {crooked:#?}"
+        );
+    }
+
+    /// The margins beside the cutout hold the app's canvas and nothing else:
+    /// no bar, button or card runs into them, so no stray colour shows. On the
+    /// list the canvas is the background token.
+    #[test]
+    fn landscape_margins_of_the_list_are_its_canvas() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "mirror-list-canvas");
+        let pass = landscape_pass(&mut app, &ctx);
+        let (w, h) = PIXEL_LANDSCAPE;
+        let strays = margin_strays(&pass, w, h, Palette::of(&ctx).bg);
+        assert!(
+            strays.is_empty(),
+            "the margins are not all canvas: {strays:#?}"
+        );
+    }
+
+    /// The editor paints its own canvas (the surface) and Settings the
+    /// ordinary one (the background); the margins take whichever the screen
+    /// has, in both themes.
+    #[test]
+    fn landscape_margins_hold_each_screens_own_canvas() {
+        let (w, h) = PIXEL_LANDSCAPE;
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let ctx = egui::Context::default();
+            ctx.set_theme(theme);
+            let pal = Palette::of(&ctx);
+
+            let mut editor = app_with_two_notes(&ctx, "mirror-editor");
+            editor.open_editor(0);
+            let pass = landscape_pass(&mut editor, &ctx);
+            let strays = margin_strays(&pass, w, h, pal.surface);
+            assert!(strays.is_empty(), "editor, {theme:?}: {strays:#?}");
+
+            let mut settings = app_with_two_notes(&ctx, "mirror-settings");
+            settings.tab = Tab::Settings;
+            let pass = landscape_pass(&mut settings, &ctx);
+            let strays = margin_strays(&pass, w, h, pal.bg);
+            assert!(strays.is_empty(), "settings, {theme:?}: {strays:#?}");
+        }
+    }
+
+    /// The two-pane window: the Pixel's width at the height `two_pane_ok`
+    /// needs. `PIXEL_LANDSCAPE`'s 448 pt is Compact in height, so it renders
+    /// the single pane and never reaches `two_pane`.
+    const TWO_PANE_LANDSCAPE: (f32, f32) = (998.0, 480.0);
+
+    /// The detail pane's surface stops at the edge its bar stops at, the
+    /// mirrored edge: the side margin beside the cutout is canvas, not
+    /// surface. The detail is closed, so the only surface fill on the right
+    /// is the one under test.
+    #[test]
+    fn two_pane_surface_meets_the_mirrored_edge() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "two-pane-surface");
+        let pal = Palette::of(&ctx);
+        let (w, h) = TWO_PANE_LANDSCAPE;
+        let pass = run_pass_insets(
+            &mut app,
+            &ctx,
+            vec2(w, h),
+            cutout_on_the_left(),
+            vec![],
+            0.0,
+        );
+
+        // The bar and the surface are found by shape, not by colour: some
+        // palettes give them the same fill, and `Palette::of` takes the
+        // context's theme, which this context does not set. The surface is
+        // the full-height fill at the top of the detail pane (the bars are
+        // one bar height, and the cards sit lower down).
+        let bar_h = Metrics::DEFAULT.bar_height;
+        let surface = pass
+            .fills
+            .iter()
+            .find(|f| f.fill == pal.surface && f.rect.top() <= 0.0 && f.rect.height() > bar_h)
+            .expect("the detail surface")
+            .rect;
+        // The detail bar starts where the surface does; the list's bar starts
+        // at the cutout.
+        let bar = pass
+            .fills
+            .iter()
+            .find(|f| {
+                f.fill == pal.bar
+                    && f.rect.top() <= 0.0
+                    && (f.rect.height() - bar_h).abs() <= 1.0
+                    && (f.rect.left() - surface.left()).abs() <= 1.0
+            })
+            .expect("the detail bar")
+            .rect;
+        assert!(
+            (surface.right() - bar.right()).abs() <= 1.0,
+            "the detail surface ends at {} pt, its bar at {} pt (window {w} pt, \
+             left inset {CUTOUT} pt)",
+            surface.right(),
+            bar.right(),
+        );
+        // Both edges come from the same scaffold variable, so the pair alone
+        // would pass a wrong edge: pin the edge to the window's geometry too.
+        assert!(
+            (surface.right() - (w - CUTOUT)).abs() <= 1.0,
+            "the detail surface ends at {} pt, not the mirrored edge at {} pt",
+            surface.right(),
+            w - CUTOUT,
+        );
+
+        let right_margin = Rect::from_min_max(pos2(w - CUTOUT, 0.0), pos2(w, h));
+        let strays: Vec<Rect> = pass
+            .fills_in(right_margin)
+            .filter(|f| f.fill == pal.surface)
+            .map(|f| f.rect)
+            .collect();
+        assert!(
+            strays.is_empty(),
+            "surface colour in the right margin, past the bar's edge at {} pt: {strays:?}",
+            bar.right(),
+        );
+    }
+
+    /// With no horizontal inset (a phone upright) nothing moves: the bars
+    /// run edge to edge, the title and button stand one `sp(3)` inside them.
+    #[test]
+    fn portrait_without_a_horizontal_inset_is_unchanged() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "mirror-portrait");
+        app.nav.settle();
+        let (w, h) = (400.0, 800.0);
+        let insets = egui::epaint::MarginF32 {
+            top: 59.0,
+            bottom: 34.0,
+            ..Default::default()
+        };
+        let pass = run_pass_insets(&mut app, &ctx, vec2(w, h), insets, vec![], 0.0);
+        let pal = Palette::of(&ctx);
+        assert_eq!(
+            list_margins(&pass, &pal, w, h),
+            vec![
+                ("top bar", 0.0, 0.0),
+                ("bottom bar", 0.0, 0.0),
+                ("note card", 12.0, 12.0),
+                ("title / + button", 16.0, 16.0),
+            ]
+        );
+        assert_eq!(
+            pass.colour_at(pos2(2.0, 400.0)),
+            Some(pal.bg),
+            "the canvas still fills the window"
+        );
+    }
+
+    /// Finding 7-A2. On the Pixel in landscape the editor's typed text started
+    /// 142 pt in from the usable left edge: the editor caps its body at
+    /// `max_content_width` and centres it, so the column sat inside the
+    /// landscape window. Upright the text starts `sp(3)` in from the edge. The
+    /// text now starts `sp(3)` in from the usable edge in landscape too, and
+    /// the bar's title stays where it was, `CUTOUT` plus the back button's 56.
+    #[test]
+    fn landscape_editor_text_starts_at_the_margin() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "editor-margin-landscape");
+        let id = app.notes[0].id;
+        app.open_editor(id);
+        app.buffer = "typed text".to_owned();
+        let land = landscape_pass(&mut app, &ctx);
+        let text_x = find(&land.text, "typed text").rect.left();
+        let title_x = find(&land.text, "Edit note").rect.left();
+
+        // The same editor and text upright, with no insets.
+        let ctx_up = egui::Context::default();
+        let mut upright = app_with_two_notes(&ctx_up, "editor-margin-portrait");
+        let up_id = upright.notes[0].id;
+        upright.open_editor(up_id);
+        upright.buffer = "typed text".to_owned();
+        upright.nav.settle();
+        let insets = egui::epaint::MarginF32 {
+            top: 59.0,
+            bottom: 34.0,
+            ..Default::default()
+        };
+        let port = run_pass_insets(
+            &mut upright,
+            &ctx_up,
+            vec2(400.0, 800.0),
+            insets,
+            vec![],
+            0.0,
+        );
+        let upright_x = find(&port.text, "typed text").rect.left();
+
+        let margin = Metrics::DEFAULT.sp(3);
+        assert!(
+            near(upright_x, margin),
+            "the premise: upright the text starts {margin} in, at {upright_x}"
+        );
+        assert!(
+            near(text_x, CUTOUT + margin),
+            "landscape text at {text_x}, wanted {} (usable left {CUTOUT} + sp(3)); \
+             the title is at {title_x}",
+            CUTOUT + margin
+        );
+        assert!(
+            near(title_x, CUTOUT + 56.0),
+            "the bar is unchanged: title at {title_x}, wanted {}",
+            CUTOUT + 56.0
+        );
+    }
+
+    /// `metrics.rs:24`: the body is capped in Medium and Expanded windows. A
+    /// 744 x 1133 pt window is width Medium and height Expanded, so the editor
+    /// keeps its cap: the 640 pt body is centred, and the typed text starts at
+    /// the column's left plus `sp(3)`, not at the full-width margin.
+    #[test]
+    fn medium_editor_keeps_its_body_width_cap() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_two_notes(&ctx, "editor-cap-medium");
+        let id = app.notes[0].id;
+        app.open_editor(id);
+        app.buffer = "typed text".to_owned();
+        app.nav.settle();
+        let pass = run_pass_insets(
+            &mut app,
+            &ctx,
+            vec2(744.0, 1133.0),
+            Default::default(),
+            vec![],
+            0.0,
+        );
+        let text_x = find(&pass.text, "typed text").rect.left();
+
+        let cap = Metrics::DEFAULT.max_content_width;
+        let margin = Metrics::DEFAULT.sp(3);
+        let column_left = (744.0 - cap) / 2.0;
+        assert!(
+            near(text_x, column_left + margin),
+            "medium editor text at {text_x}, wanted {} (column left {column_left} \
+             + sp(3), body capped at {cap}); the cap is missing",
+            column_left + margin
         );
     }
 }

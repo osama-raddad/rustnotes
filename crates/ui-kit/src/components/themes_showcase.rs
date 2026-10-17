@@ -35,8 +35,10 @@ use crate::typography::{
     body_semibold_family, specimen_job, tracked_text, TrackedLabel, TypeStyle,
 };
 
-/// The theme card's content width (the card's own padding rides on
-/// top; three cards and their gutters fit the gallery's page).
+/// The theme card's content width where cards share a line (the card's
+/// own padding rides on top; three cards and their gutters fit the
+/// gallery's page). Under the compact breakpoint the cards stack and each
+/// takes the whole column instead (`brand_showcase::card_width`).
 pub const CARD_WIDTH: f32 = 264.0;
 
 /// The roles the swatch grid and the ratio bar paint, resolved from
@@ -275,7 +277,7 @@ impl ThemesShowcase {
             TypeStyle::Lede,
             theme,
             colors.text_muted(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
         ui.add_space(spacing::SPACE_6);
 
@@ -301,7 +303,7 @@ impl ThemesShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            None,
         )))
     }
 }
@@ -313,7 +315,10 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
     let card_theme = copy.theme;
     let colors = card_theme.colors();
     Card::new().compact().ui(ui, card_theme, flags, |ui| {
-        ui.set_min_width(CARD_WIDTH);
+        // The cell's width less the card's padding: `CARD_WIDTH` where
+        // the cards share a line, the column less the padding on a phone.
+        let inner = ui.available_width();
+        ui.set_min_width(inner);
 
         // The mark in this theme's primary, the id pill beside it.
         ui.horizontal(|ui| {
@@ -338,7 +343,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                             0.0,
                             None,
                             colors.text_muted(),
-                            Some(CARD_WIDTH - spacing::SPACE_8),
+                            None,
                         )));
                     });
             });
@@ -355,7 +360,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             Some(type_scale::TEXT_BODY_LG * 1.25),
             colors.text_body(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
         ui.add(egui::Label::new(tracked_text(
             copy.character,
@@ -366,7 +371,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             Some(20.0),
             colors.text_muted(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
 
         // The anchor swatches, one a row with its mono label beside:
@@ -380,10 +385,15 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                         ui.allocate_exact_size(Vec2::splat(spacing::SPACE_6), Sense::hover());
                     ui.painter()
                         .rect_filled(rect, swatch_radius, role.resolve(&colors));
+                    // The edge is `outline`, the border role that holds
+                    // 3:1 on the card in every theme: `outline-variant`
+                    // is a 1.31 to 1.84:1 hairline, translucent in the
+                    // Teal themes, and the surface-coloured swatches
+                    // vanished into the card behind it.
                     ui.painter().rect_stroke(
                         rect,
                         swatch_radius,
-                        Stroke::new(1.0, colors.outline_variant),
+                        Stroke::new(1.0, colors.outline),
                         egui::StrokeKind::Outside,
                     );
                     ui.add(egui::Label::new(tracked_text(
@@ -395,7 +405,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                         0.0,
                         None,
                         colors.text_muted(),
-                        Some(CARD_WIDTH - spacing::SPACE_8),
+                        None,
                     )));
                     ui.add_space(spacing::SPACE_3);
                 }
@@ -404,8 +414,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
 
         // The ratio bar, bordered, and its legend.
         ui.add_space(spacing::SPACE_1);
-        let (bar, _) =
-            ui.allocate_exact_size(Vec2::new(CARD_WIDTH, spacing::SPACE_4), Sense::hover());
+        let (bar, _) = ui.allocate_exact_size(Vec2::new(inner, spacing::SPACE_4), Sense::hover());
         let total: u32 = copy.ratio.iter().map(|(share, _)| share).sum();
         let mut x = bar.left();
         for &(share, role) in copy.ratio {
@@ -432,7 +441,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             0.0,
             None,
             colors.text_muted(),
-            Some(CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
 
         // The display specimen in this theme's own faces, on a small
@@ -442,7 +451,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
             .filled()
             .compact()
             .ui(ui, card_theme, flags, |ui| {
-                ui.set_min_width(CARD_WIDTH - spacing::SPACE_8);
+                ui.set_min_width(ui.available_width());
                 ui.add(egui::Label::new(tracked_text(
                     SPECIMEN_LINE,
                     FontId {
@@ -452,7 +461,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                     -0.01,
                     Some(26.0),
                     colors.text_display(),
-                    Some(CARD_WIDTH - spacing::SPACE_8),
+                    None,
                 )));
                 ui.add(egui::Label::new(tracked_text(
                     copy.faces,
@@ -463,7 +472,7 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
                     0.0,
                     None,
                     colors.text_muted(),
-                    Some(CARD_WIDTH - spacing::SPACE_8),
+                    None,
                 )));
             });
 
@@ -490,11 +499,14 @@ fn theme_card(ui: &mut Ui, flags: &UiKitFlags, copy: &ThemeCardCopy) {
 #[cfg(test)]
 mod tests {
     use crate::components::brand_showcase::copy_passes_voice_checks;
+    use crate::components::card::Card;
+    use crate::states::composite_over;
     use crate::theme::ThemeId;
+    use crate::tokens::spacing;
 
     use super::{
-        ShowcaseRole, CARDS, CHIP_LABEL, DARK_ROW, INTRO, LIGHT_ROW, NOTE, PRIMARY_ACTION,
-        SECONDARY_ACTION, SECTION_EYEBROW, SPECIMEN_LINE,
+        ShowcaseRole, CARDS, CARD_WIDTH, CHIP_LABEL, DARK_ROW, INTRO, LIGHT_ROW, NOTE,
+        PRIMARY_ACTION, SECONDARY_ACTION, SECTION_EYEBROW, SPECIMEN_LINE,
     };
 
     /// The showcase covers every theme exactly once: each of the six
@@ -625,5 +637,128 @@ mod tests {
             });
             out.drop_without_applying_deltas();
         }
+    }
+
+    /// WCAG relative luminance of one opaque colour (a copy of the
+    /// helper in `tokens/tests.rs`, private there).
+    fn luminance(c: egui::Color32) -> f64 {
+        let channel = |v: u8| {
+            let s = f64::from(v) / 255.0;
+            if s <= 0.03928 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+    }
+
+    /// WCAG contrast ratio between two opaque colours (1 to 21).
+    fn contrast(a: egui::Color32, b: egui::Color32) -> f64 {
+        let (la, lb) = (luminance(a), luminance(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    /// Every rect `copy`'s card paints, headless, on the last of a few
+    /// passes (so the card's sizing passes settle).
+    fn painted_rects(copy: &super::ThemeCardCopy) -> Vec<egui::epaint::RectShape> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<egui::epaint::RectShape>) {
+            match shape {
+                egui::Shape::Rect(rect) => out.push(rect.clone()),
+                egui::Shape::Vec(nested) => nested.iter().for_each(|shape| walk(shape, out)),
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        let flags = crate::states::UiKitFlags::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            for theme in ThemeId::ALL {
+                crate::typography::install(*theme, ui.ctx());
+            }
+        })
+        .drop_without_applying_deltas();
+        let mut rects = Vec::new();
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(CARD_WIDTH + 64.0, 10_000.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| super::theme_card(ui, &flags, copy));
+            rects.clear();
+            for clipped in std::mem::take(&mut out.shapes) {
+                walk(&clipped.shape, &mut rects);
+            }
+            out.drop_without_applying_deltas();
+        }
+        rects
+    }
+
+    /// Each card's role swatches, as the card paints them: the swatch
+    /// keeps a border that holds 3:1 against the card it sits on, in all
+    /// six themes. A role close to the card (the surfaces, on-primary in
+    /// Teal Light) vanishes without one, and the hairline `outline-variant`
+    /// (1.31 to 1.84:1, translucent in the Teal themes) is too faint to be
+    /// the edge. 3:1 is what WCAG 1.4.11 asks of a graphic that carries
+    /// meaning.
+    #[test]
+    fn every_swatch_on_every_card_keeps_a_visible_border() {
+        let swatch_radius = egui::CornerRadius::same(crate::tokens::radii::RADIUS_SM as u8);
+        let mut off = Vec::new();
+        for copy in CARDS {
+            let theme = copy.theme;
+            let colors = theme.colors();
+            // The card paints on its own elevated surface.
+            let card = Card::new().compact().look(false, theme).surface;
+            let rects = painted_rects(copy);
+            let swatches: Vec<_> = rects
+                .iter()
+                .filter(|shape| {
+                    shape.rect.size() == egui::Vec2::splat(spacing::SPACE_6)
+                        && shape.corner_radius == swatch_radius
+                        && shape.fill != egui::Color32::TRANSPARENT
+                })
+                .collect();
+            assert_eq!(
+                swatches.len(),
+                ShowcaseRole::SWATCHES.len(),
+                "{theme:?}: one swatch per role"
+            );
+            for (shape, role) in swatches.iter().zip(ShowcaseRole::SWATCHES) {
+                assert_eq!(
+                    shape.fill,
+                    role.resolve(&colors),
+                    "{theme:?}: the swatches run in role order, each in its own colour"
+                );
+                let border = rects
+                    .iter()
+                    .filter(|edge| {
+                        edge.rect == shape.rect
+                            && edge.fill == egui::Color32::TRANSPARENT
+                            && edge.stroke.width >= 1.0
+                    })
+                    .map(|edge| contrast(composite_over(edge.stroke.color, card), card))
+                    .fold(None, |best: Option<f64>, ratio| {
+                        Some(best.map_or(ratio, |b| b.max(ratio)))
+                    });
+                match border {
+                    None => off.push(format!("{theme:?} {}: no border", role.name())),
+                    Some(ratio) if ratio < 3.0 => off.push(format!(
+                        "{theme:?} {}: border {ratio:.2}:1 on the card surface, under 3:1",
+                        role.name()
+                    )),
+                    Some(_) => {}
+                }
+            }
+        }
+        assert!(
+            off.is_empty(),
+            "{} swatches:\n{}",
+            off.len(),
+            off.join("\n")
+        );
     }
 }

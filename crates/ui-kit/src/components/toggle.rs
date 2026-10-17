@@ -9,7 +9,10 @@
 //! `on-primary` when on, carrying `shadow-l1`, and slides over 200ms
 //! on the house curve `cubic-bezier(0.2, 0.8, 0.2, 1)`. The label sits
 //! beside the track in the 14px body face with a 12px gap, and a click
-//! on the words flips the switch too.
+//! on the words flips the switch too. A host that needs a touch target
+//! can grow the row with [`Toggle::min_row_height`]; the track and
+//! label stay centred on it, and a toggle that sets nothing is the
+//! spec's 26px row.
 //!
 //! Motion inside egui's per-frame model: the slide is remembered per
 //! widget id as (from, target, started-at) in context data and driven
@@ -166,6 +169,21 @@ pub fn knob_left(track: egui::Rect, fraction: f32) -> f32 {
     track.left() + KNOB_INSET + KNOB_TRAVEL * fraction.clamp(0.0, 1.0)
 }
 
+/// The thumb's rect inside `track` at `fraction` of the travel: a
+/// [`KNOB_SIZE`] square whose left edge is [`knob_left`] and which is
+/// centred on the track's midline. The painter takes the thumb's centre
+/// from this rect, so the slide's two ends sit [`KNOB_INSET`] in from the
+/// track's edges.
+pub fn knob_rect(track: egui::Rect, fraction: f32) -> egui::Rect {
+    egui::Rect::from_min_size(
+        Pos2::new(
+            knob_left(track, fraction),
+            track.center().y - KNOB_SIZE / 2.0,
+        ),
+        Vec2::splat(KNOB_SIZE),
+    )
+}
+
 /// The track's rect inside its row: flush left, centred on the row.
 pub fn track_rect(row: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_size(
@@ -290,6 +308,7 @@ pub struct Toggle<'a> {
     label: &'a str,
     checked: bool,
     enabled: bool,
+    min_row_height: f32,
 }
 
 impl Default for Toggle<'_> {
@@ -305,6 +324,7 @@ impl<'a> Toggle<'a> {
             label,
             checked: false,
             enabled: true,
+            min_row_height: 0.0,
         }
     }
 
@@ -326,6 +346,16 @@ impl<'a> Toggle<'a> {
         self.enabled(false)
     }
 
+    /// Grow the row to at least `height` tall, the rect it registers
+    /// for interaction (a touch target's height); the track and label
+    /// stay centred on it. A `height` under the row's natural one (the
+    /// 26px track, or a taller label) changes nothing, and that is the
+    /// default.
+    pub const fn min_row_height(mut self, height: f32) -> Self {
+        self.min_row_height = height;
+        self
+    }
+
     /// Show the toggle and hand back its typed response: the row's
     /// egui response, the state a flip landed on (if any), and the
     /// knob's position along its slide this frame (0 off, 1 on).
@@ -338,7 +368,7 @@ impl<'a> Toggle<'a> {
             fonts.layout_delayed_color(self.label.to_owned(), font_id, f32::INFINITY)
         });
 
-        let height = TRACK_H.max(galley.size().y);
+        let height = TRACK_H.max(galley.size().y).max(self.min_row_height);
         let size = Vec2::new(TRACK_W + LABEL_GAP + galley.size().x, height);
         let id = ui.next_auto_id().with("vynatix-toggle");
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -374,7 +404,9 @@ impl<'a> Toggle<'a> {
         let track = track_rect(rect);
         let radius = (TRACK_H / 2.0) as u8;
         painter.rect_filled(track, egui::CornerRadius::same(radius), look.track);
-        let center = Pos2::new(knob_left(track, position), track.center().y);
+        // `knob_left` is the thumb's left edge, not its centre: the
+        // circle is centred on the thumb's rect.
+        let center = knob_rect(track, position).center();
         // shadow-l1 as its layers' own offset translucent circles.
         for layer in theme.shadows().l1 {
             if !layer.inset {
@@ -436,8 +468,8 @@ mod tests {
     use crate::typography::{assert_painted_inside, paint_pass};
 
     use super::{
-        ease_vynatix, knob_left, toggle_look, track_rect, travel_fraction, Toggle, KNOB_INSET,
-        KNOB_SIZE, KNOB_TRAVEL, LABEL_GAP, TRACK_H, TRACK_W, TRAVEL_MS,
+        ease_vynatix, knob_left, knob_rect, toggle_look, track_rect, travel_fraction, Toggle,
+        KNOB_INSET, KNOB_SIZE, KNOB_TRAVEL, LABEL_GAP, TRACK_H, TRACK_W, TRAVEL_MS,
     };
 
     /// Install the faces the toggle paints with: the icon families and
@@ -556,6 +588,140 @@ mod tests {
         assert_eq!(knob_left(track, 0.0), 13.0);
         assert_eq!(knob_left(track, 1.0), 31.0);
         assert_eq!(knob_left(track, 1.5), 31.0, "clamped");
+    }
+
+    /// The thumb's rect keeps the thumb's size and stays inside the
+    /// track the whole way along: `KNOB_INSET` from the left edge at
+    /// 0 (off), `KNOB_INSET` from the right edge at 1 (on), and between
+    /// the two for the middle of the slide.
+    #[test]
+    fn knob_rect_stays_inside_the_track_with_the_inset_at_both_ends() {
+        let track = track_rect(egui::Rect::from_min_size(
+            egui::Pos2::new(10.0, 50.0),
+            egui::Vec2::new(200.0, TRACK_H),
+        ));
+        for fraction in [0.0, 0.5, 1.0] {
+            let knob = knob_rect(track, fraction);
+            assert_eq!(
+                knob.size(),
+                egui::Vec2::splat(KNOB_SIZE),
+                "fraction {fraction}: the thumb keeps its size"
+            );
+            assert!(
+                track.contains_rect(knob),
+                "fraction {fraction}: thumb {knob:?} leaves track {track:?}"
+            );
+            assert_eq!(
+                knob.center().y,
+                track.center().y,
+                "fraction {fraction}: centred on the track's midline"
+            );
+        }
+        assert_eq!(
+            knob_rect(track, 0.0).left() - track.left(),
+            KNOB_INSET,
+            "off: the left gap is the inset"
+        );
+        assert_eq!(
+            track.right() - knob_rect(track, 1.0).right(),
+            KNOB_INSET,
+            "on: the right gap is the inset"
+        );
+    }
+
+    /// Every shape a frame painted, with `Shape::Vec` groups walked
+    /// into, in paint order.
+    fn flat_shapes(shapes: &[egui::epaint::ClippedShape]) -> Vec<egui::Shape> {
+        fn walk(shape: &egui::Shape, found: &mut Vec<egui::Shape>) {
+            match shape {
+                egui::Shape::Vec(nested) => nested.iter().for_each(|shape| walk(shape, found)),
+                other => found.push(other.clone()),
+            }
+        }
+        let mut found = Vec::new();
+        for clipped in shapes {
+            walk(&clipped.shape, &mut found);
+        }
+        found
+    }
+
+    /// What the toggle really paints, in both themes and both states:
+    /// the thumb's circle lies inside the painted track with the inset
+    /// gap at its end (left when off, right when on), and it is the
+    /// circle `knob_rect` describes. The paint once took the thumb's
+    /// left edge for its centre, which left half the off thumb outside
+    /// the pill and stopped the on thumb short of the right end.
+    #[test]
+    fn the_painted_knob_sits_inside_the_painted_track_at_both_ends() {
+        for theme in ThemeId::ALL {
+            let name = theme.name();
+            for on in [false, true] {
+                // A fresh context per case: the knob seeds its slide at
+                // the target, so the first frame paints it settled.
+                let ctx = egui::Context::default();
+                install_faces(&ctx, *theme);
+                let flags = UiKitFlags::default();
+
+                let (row, shapes) = paint_pass(&ctx, |ui| {
+                    Toggle::new("Reduced motion")
+                        .checked(on)
+                        .ui(ui, *theme, &flags)
+                        .response
+                        .rect
+                });
+                let look = toggle_look(on, &WidgetState::default(), *theme);
+                let painted = flat_shapes(&shapes);
+
+                let tracks: Vec<egui::Rect> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Rect(rect) if rect.fill == look.track => Some(rect.rect),
+                        _ => None,
+                    })
+                    .collect();
+                let [track] = tracks.as_slice() else {
+                    panic!("{name}, on={on}: expected one painted track, got {tracks:?}");
+                };
+                assert_eq!(*track, track_rect(row), "{name}, on={on}: the track");
+
+                let knobs: Vec<&egui::epaint::CircleShape> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Circle(circle) if circle.fill == look.knob => Some(circle),
+                        _ => None,
+                    })
+                    .collect();
+                let knob = knobs
+                    .last()
+                    .unwrap_or_else(|| panic!("{name}, on={on}: no thumb circle was painted"));
+                assert_eq!(knob.radius, KNOB_SIZE / 2.0, "{name}, on={on}: thumb size");
+                let knob_box =
+                    egui::Rect::from_center_size(knob.center, egui::Vec2::splat(KNOB_SIZE));
+
+                assert!(
+                    track.contains_rect(knob_box),
+                    "{name}, on={on}: thumb {knob_box:?} leaves track {track:?}"
+                );
+                if on {
+                    assert_eq!(
+                        track.right() - knob_box.right(),
+                        KNOB_INSET,
+                        "{name}: on, the right gap is the inset"
+                    );
+                } else {
+                    assert_eq!(
+                        knob_box.left() - track.left(),
+                        KNOB_INSET,
+                        "{name}: off, the left gap is the inset"
+                    );
+                }
+                assert_eq!(
+                    knob_box,
+                    knob_rect(*track, if on { 1.0 } else { 0.0 }),
+                    "{name}, on={on}: the paint follows knob_rect"
+                );
+            }
+        }
     }
 
     /// The house curve: identity at the ends, a strong decelerate
@@ -729,6 +895,40 @@ mod tests {
             "starts at x {} but after the track and its gap is {after_track}",
             pos.x
         );
+    }
+
+    /// A toggle is the spec's 26px row unless asked to be taller:
+    /// `min_row_height` grows the rect the row registers for interaction,
+    /// the track and the label stay on its midline, and a minimum under
+    /// the track's own height changes nothing.
+    #[test]
+    fn the_row_defaults_to_the_track_and_grows_on_request() {
+        let theme = ThemeId::Light;
+        let flags = UiKitFlags::default();
+        for (minimum, expected) in [(0.0, TRACK_H), (10.0, TRACK_H), (44.0, 44.0)] {
+            let ctx = egui::Context::default();
+            install_faces(&ctx, theme);
+            let (row, shapes) = paint_pass(&ctx, |ui| {
+                Toggle::new("Reduced motion")
+                    .min_row_height(minimum)
+                    .ui(ui, theme, &flags)
+                    .response
+                    .rect
+            });
+            assert_eq!(row.height(), expected, "a minimum of {minimum}");
+
+            assert_painted_inside(&shapes, "Reduced motion", row);
+            let look = toggle_look(false, &WidgetState::default(), theme);
+            let track = flat_shapes(&shapes)
+                .into_iter()
+                .find_map(|shape| match shape {
+                    egui::Shape::Rect(rect) if rect.fill == look.track => Some(rect.rect),
+                    _ => None,
+                })
+                .expect("the track was painted");
+            assert_eq!(track, track_rect(row), "a minimum of {minimum}: the track");
+            assert_eq!(track.center().y, row.center().y, "the track is centred");
+        }
     }
 
     /// Run a press then a release at `pos`, returning what `widget`

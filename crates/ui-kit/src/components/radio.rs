@@ -9,6 +9,12 @@
 //! hint and error rows come from the shared field helpers — the spec
 //! sets legends exactly like TextField labels.
 //!
+//! A host that needs touch targets can grow the rows with
+//! [`RadioGroup::min_row_height`] and close the gap between them with
+//! [`RadioGroup::row_gap`]; the circle and label stay centred on the
+//! taller row, and a group that sets neither is the spec's 20px rows
+//! 12px apart.
+//!
 //! Group semantics. One value is selected, exactly one ([`Option`] by
 //! construction), and a click on any row commits that row's value — a
 //! click on the selected row commits nothing, the native radio
@@ -231,6 +237,8 @@ pub struct RadioGroup<'a, T: Copy + Eq> {
     hint: Option<&'a str>,
     error: Option<&'a str>,
     enabled: bool,
+    min_row_height: f32,
+    row_gap: f32,
 }
 
 impl<'a, T: Copy + Eq> RadioGroup<'a, T> {
@@ -243,6 +251,8 @@ impl<'a, T: Copy + Eq> RadioGroup<'a, T> {
             hint: None,
             error: None,
             enabled: true,
+            min_row_height: ROW_HEIGHT,
+            row_gap: ROW_GAP,
         }
     }
 
@@ -282,6 +292,25 @@ impl<'a, T: Copy + Eq> RadioGroup<'a, T> {
         self.enabled(false)
     }
 
+    /// Grow each option row to at least `height` tall, the rect a row
+    /// registers for interaction (a touch target's height); the circle
+    /// and label stay centred on it. A `height` under the spec's
+    /// [`ROW_HEIGHT`] changes nothing: that is the floor, and the
+    /// default.
+    pub const fn min_row_height(mut self, height: f32) -> Self {
+        self.min_row_height = height;
+        self
+    }
+
+    /// Set the gap between option rows (the spec's [`ROW_GAP`] by
+    /// default). Rows grown to a touch target's height with
+    /// [`RadioGroup::min_row_height`] already hold their own space, so
+    /// a host closes the gap to let their targets meet.
+    pub const fn row_gap(mut self, gap: f32) -> Self {
+        self.row_gap = gap;
+        self
+    }
+
     /// Show the group and hand back its typed response: the selected
     /// row's egui response plus the value a choice landed on, if any.
     pub fn ui(self, ui: &mut Ui, theme: ThemeId, flags: &UiKitFlags) -> RadioResponse<T> {
@@ -304,7 +333,7 @@ impl<'a, T: Copy + Eq> RadioGroup<'a, T> {
 
         for (index, option) in self.options.iter().enumerate() {
             if index > 0 {
-                ui.add_space(ROW_GAP);
+                ui.add_space(self.row_gap);
             }
             let font_id = FontId {
                 size: LABEL_SIZE,
@@ -313,7 +342,10 @@ impl<'a, T: Copy + Eq> RadioGroup<'a, T> {
             let galley = ui.ctx().fonts_mut(|fonts| {
                 fonts.layout_delayed_color(option.label.to_owned(), font_id, f32::INFINITY)
             });
-            let size = Vec2::new(row_min_width(galley.size().x), ROW_HEIGHT);
+            let size = Vec2::new(
+                row_min_width(galley.size().x),
+                ROW_HEIGHT.max(self.min_row_height),
+            );
             let id = ui.next_auto_id().with("vynatix-radio").with(index);
             let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
             let enabled = self.enabled && option.enabled;
@@ -816,6 +848,69 @@ mod tests {
                 option.label,
                 pos.x
             );
+        }
+    }
+
+    /// The row each region registers for interaction under `tweak`
+    /// (read by selecting each option in turn, as the group answers with
+    /// the selected row), beside where that row's label starts. The label
+    /// must sit on the row's midline, whatever the row's height.
+    fn laid_out_rows(
+        tweak: impl Fn(RadioGroup<'static, Region>) -> RadioGroup<'static, Region>,
+    ) -> Vec<(egui::Rect, egui::Pos2)> {
+        let ctx = egui::Context::default();
+        install_faces(&ctx, ThemeId::Light);
+        let flags = UiKitFlags::default();
+        REGIONS
+            .iter()
+            .map(|option| {
+                let (row, shapes) = paint_pass(&ctx, |ui| {
+                    tweak(RadioGroup::new("Region").options(REGIONS))
+                        .selected(Some(option.value))
+                        .ui(ui, ThemeId::Light, &flags)
+                        .response
+                        .rect
+                });
+                (row, assert_painted_inside(&shapes, option.label, row))
+            })
+            .collect()
+    }
+
+    /// A group that sets nothing is the spec's: 20px rows 12px apart, a
+    /// 32px pitch. `min_row_height` grows the rect each row registers
+    /// for interaction (the label stays on the row's midline) and
+    /// `row_gap` sets the space between rows; a minimum under the spec's
+    /// 20px changes nothing.
+    #[test]
+    fn rows_default_to_the_spec_and_grow_on_request() {
+        use super::ROW_GAP;
+
+        let pitch = |rows: &[(egui::Rect, egui::Pos2)]| rows[1].0.top() - rows[0].0.top();
+        let heights = |rows: &[(egui::Rect, egui::Pos2)]| -> Vec<f32> {
+            rows.iter().map(|(row, _)| row.height()).collect()
+        };
+
+        let spec = laid_out_rows(|group| group);
+        assert_eq!(heights(&spec), vec![ROW_HEIGHT; 3], "the spec's 20px rows");
+        assert_eq!(pitch(&spec), ROW_HEIGHT + ROW_GAP, "12px apart");
+
+        let floor = laid_out_rows(|group| group.min_row_height(10.0));
+        assert_eq!(heights(&floor), vec![ROW_HEIGHT; 3], "20px is the floor");
+        assert_eq!(pitch(&floor), ROW_HEIGHT + ROW_GAP);
+
+        let tall = laid_out_rows(|group| group.min_row_height(44.0));
+        assert_eq!(heights(&tall), vec![44.0; 3], "grown to 44px");
+        assert_eq!(pitch(&tall), 44.0 + ROW_GAP, "the gap is untouched");
+
+        let touching = laid_out_rows(|group| group.min_row_height(44.0).row_gap(0.0));
+        assert_eq!(heights(&touching), vec![44.0; 3]);
+        assert_eq!(pitch(&touching), 44.0, "no gap: the targets meet");
+
+        // The label keeps its x whatever the row's height.
+        for rows in [&spec, &tall, &touching] {
+            for (row, label) in rows {
+                assert_eq!(label.x, row.left() + CIRCLE_SIZE + LABEL_GAP);
+            }
         }
     }
 

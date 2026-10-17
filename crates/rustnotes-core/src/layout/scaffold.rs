@@ -69,7 +69,12 @@ type Slot<'a> = Option<Box<dyn FnOnce(&mut Ui) + 'a>>;
 ///
 /// Between those duties, `content_rect()` drives the layout, top to bottom:
 /// top bar, body, bottom bar, with an optional floating action button over
-/// the body's corner.
+/// the body's corner. Its horizontal insets are mirrored first (the larger
+/// of the left and right insets on both sides), so a cutout on one side of
+/// a landscape phone leaves the layout centred; the margins beside it are
+/// the canvas the scaffold paints behind everything. Unlike the vertical
+/// strips, the bars stop at the mirrored rect; the side margins are canvas,
+/// not bar colour.
 pub struct Scaffold<'a> {
     pal: &'a Palette,
     m: &'a Metrics,
@@ -132,7 +137,21 @@ impl<'a> Scaffold<'a> {
              inset the root and the safe areas will not line up"
         );
         let shift = full.min - ctx.viewport_rect().min;
+        let viewport = ctx.viewport_rect().translate(shift);
         let mut content = ctx.content_rect().translate(shift);
+        // The horizontal insets are mirrored, as the gallery's chrome does: a
+        // cutout on one side of a landscape phone would otherwise push the
+        // bars and the body to the other side, so both sides keep `side`, the
+        // larger of the two. The margin it leaves beside a bar or the body
+        // is the canvas painted behind them. Unlike the vertical strips, the
+        // bars stop at the mirrored rect; the side margins are canvas, not
+        // bar colour. Capped at half the window, so a window narrower than
+        // its two gutters has an empty body rather than an inverted one.
+        let side = (content.min.x - viewport.min.x)
+            .max(viewport.max.x - content.max.x)
+            .min(viewport.width() / 2.0);
+        content.min.x = viewport.min.x + side;
+        content.max.x = viewport.max.x - side;
         // Backstop for a host that hands us an already-inset root anyway:
         // clamp so the safe areas can neither apply twice nor spill outside
         // the root we were given.
@@ -224,12 +243,16 @@ mod tests {
     use egui::{Pos2, RawInput, SafeAreaInsets, Vec2};
 
     fn raw(size: Vec2, top: f32, bottom: f32) -> RawInput {
+        raw_sides(size, 0.0, 0.0, top, bottom)
+    }
+
+    fn raw_sides(size: Vec2, left: f32, right: f32, top: f32, bottom: f32) -> RawInput {
         RawInput {
             time: Some(0.0),
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
             safe_area_insets: Some(SafeAreaInsets(egui::epaint::MarginF32 {
-                left: 0.0,
-                right: 0.0,
+                left,
+                right,
                 top,
                 bottom,
             })),
@@ -267,6 +290,79 @@ mod tests {
             r.body,
             Rect::from_min_max(pos2(0.0, 115.0), pos2(400.0, 710.0))
         );
+    }
+
+    /// A cutout on one side of a landscape phone insets the other side by the
+    /// same amount: both sides keep the larger of the two insets, whichever
+    /// side it is on, so the bars and the body stand centred in the window.
+    #[test]
+    fn horizontal_insets_are_mirrored() {
+        let (pal, m) = (Palette::LIGHT, Metrics::DEFAULT);
+        // A Pixel in landscape, its cutout 53 pt wide.
+        let size = vec2(997.0, 448.0);
+        for (left, right) in [
+            (53.0, 0.0),
+            (0.0, 53.0),
+            (53.0, 20.0),
+            (20.0, 53.0),
+            (53.0, 53.0),
+        ] {
+            let r = run(raw_sides(size, left, right, 0.0, 0.0), |root| {
+                Scaffold::new(&pal, &m)
+                    .top_bar(|_| {})
+                    .bottom_bar(|_| {})
+                    .show(root, |_, _| {})
+            });
+            let at = format!("insets {left} / {right}");
+            assert_eq!(
+                r.top_bar.expect("top bar"),
+                Rect::from_min_max(pos2(53.0, 0.0), pos2(944.0, 56.0)),
+                "{at}"
+            );
+            assert_eq!(
+                r.bottom_bar.expect("bottom bar"),
+                Rect::from_min_max(pos2(53.0, 392.0), pos2(944.0, 448.0)),
+                "{at}"
+            );
+            assert_eq!(
+                r.body,
+                Rect::from_min_max(pos2(53.0, 56.0), pos2(944.0, 392.0)),
+                "{at}"
+            );
+        }
+    }
+
+    /// The mirrored body is still capped and centred in what is left, so it
+    /// stands the same distance from either edge of the window.
+    #[test]
+    fn mirrored_inset_leaves_a_centred_capped_body() {
+        let (pal, m) = (Palette::LIGHT, Metrics::DEFAULT);
+        let size = vec2(997.0, 448.0);
+        let r = run(raw_sides(size, 53.0, 0.0, 0.0, 0.0), |root| {
+            Scaffold::new(&pal, &m)
+                .limit_body_width()
+                .show(root, |_, _| {})
+        });
+        assert_eq!(r.body.width(), m.max_content_width);
+        assert_eq!(r.body.left(), size.x - r.body.right());
+    }
+
+    /// A window narrower than its two gutters has an empty body, not an
+    /// inverted one: the mirror may not push the edges past each other.
+    #[test]
+    fn mirrored_inset_in_a_narrow_window_does_not_invert() {
+        let (pal, m) = (Palette::LIGHT, Metrics::DEFAULT);
+        let r = run(raw_sides(vec2(60.0, 400.0), 53.0, 0.0, 0.0, 0.0), |root| {
+            Scaffold::new(&pal, &m)
+                .top_bar(|_| {})
+                .show(root, |_, _| {})
+        });
+        let bar = r.top_bar.expect("top bar");
+        // Both gutters are capped at half the 60 pt window: 30 pt each, so
+        // the content rect is empty, not inverted.
+        assert_eq!(r.body.width(), 0.0, "an empty body: {:?}", r.body);
+        assert_eq!(bar.width(), 0.0, "an empty bar: {bar:?}");
+        assert!(r.body.height() >= 0.0 && bar.height() >= 0.0);
     }
 
     /// `limit_body_width` centers the capped body in a wide window.

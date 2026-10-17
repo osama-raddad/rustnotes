@@ -20,7 +20,10 @@
 //! anti-patterns, exempt from the vocabulary discipline by design
 //! while still passing the punctuation checks.
 
-use egui::{Color32, CornerRadius, FontId, Response, Sense, Ui, Vec2};
+use std::borrow::Cow;
+use std::sync::Arc;
+
+use egui::{Color32, CornerRadius, FontId, Galley, Painter, Response, Sense, Ui, Vec2};
 
 use crate::components::card::{Card, CardPadding};
 use crate::icon::{family_for_theme, icon, IconSize};
@@ -30,18 +33,24 @@ use crate::theme::ThemeId;
 use crate::tokens::{breakpoints, radii, spacing, type_scale, ThemeColors};
 use crate::typography::{display_bold_family, specimen_job, tracked_text, TrackedLabel, TypeStyle};
 
-/// One voice card's content width; four of them and their gutters fit
-/// the gallery's page.
+/// One voice card's content width where cards share a line; four of them
+/// and their gutters fit the gallery's page. Under the compact breakpoint
+/// the cards stack and each takes the whole column (`card_width`).
 pub const VOICE_CARD_WIDTH: f32 = 184.0;
 
-/// One do or don't tile's content width; a pair fills the page.
+/// One do or don't tile's content width where tiles share a line; a pair
+/// fills the page. Under the compact breakpoint the tiles stack and each
+/// takes the whole column (`card_width`).
 pub const MODE_TILE_WIDTH: f32 = 380.0;
 
-/// The lead photo tile's size: tall, spanning the four small tiles'
-/// two rows.
+/// The lead photo tile's size in the desktop composition: tall, spanning
+/// the four small tiles' two rows. On a phone only its height holds: it
+/// takes the column's width.
 pub const PHOTO_TILE_WIDE: Vec2 = Vec2::new(300.0, 220.0);
 
-/// The small photo tiles' size.
+/// The small photo tiles' size in the desktop composition. On a phone
+/// only its height holds: the tiles stack one to a row and each takes the
+/// column's width.
 pub const PHOTO_TILE_SMALL: Vec2 = Vec2::new(160.0, 104.0);
 
 // ---- the voice checks -----------------------------------------------------
@@ -84,18 +93,35 @@ pub(crate) fn card_columns(available: f32, width: f32, gap: f32, max: usize) -> 
     fit.min(max.max(1))
 }
 
+/// The width one card of a [`card_rows`] row takes, given the `available`
+/// column and the card's `fixed` width: under the compact breakpoint the
+/// cards stack one to a row and each takes the whole column; from it up
+/// the card keeps its `fixed` width, so several share a line.
+pub(crate) fn card_width(available: f32, fixed: f32) -> f32 {
+    if available < breakpoints::BREAKPOINT_TABLET {
+        available
+    } else {
+        fixed
+    }
+}
+
 /// Lay `items` out as cards in rows of [`card_columns`], `gap` apart
-/// and `gap` between the rows, each card placed at its `width` up
-/// front. egui's `horizontal_wrapped` moves a widget to the next line
-/// only when it knows the widget's size before laying it out, which a
-/// card (a child `Ui`) never offers, so a wrapped row of cards runs on
-/// past the window's edge. The up-front width is what lets the rows
-/// break, and it bounds a card whose own rows reach for all the width
-/// they are given (a right-aligned pill, a full-width rule). Rows hang
-/// from their tops, the cards' heights their own. The gap is between
-/// the cards only: a child `Ui` clones its parent's style, so each cell
-/// hands its card the spacing the caller laid out with, and the card's
-/// own rows keep egui's gaps rather than the row's.
+/// and `gap` between the rows, each card placed at its [`card_width`]
+/// (`width` where the cards share a line, the column on a phone) up
+/// front. The `card` closure is handed the cell and must fill it: a
+/// [`Card`] or a frame hugs its content, so its body claims the cell with
+/// `ui.set_min_width(ui.available_width())`, while a tile that allocates
+/// its exact size from `ui.available_width()` already does. egui's
+/// `horizontal_wrapped` moves a widget to the next line only when it knows
+/// the widget's size before laying it out, which a card (a child `Ui`)
+/// never offers, so a wrapped row of cards runs on past the window's edge.
+/// The up-front width is what lets the rows break, and it bounds a card
+/// whose own rows reach for all the width they are given (a right-aligned
+/// pill, a full-width rule). Rows hang from their tops, the cards' heights
+/// their own. The gap is between the cards only: a child `Ui` clones its
+/// parent's style, so each cell hands its card the spacing the caller laid
+/// out with, and the card's own rows keep egui's gaps rather than the
+/// row's.
 pub(crate) fn card_rows<T>(
     ui: &mut Ui,
     width: f32,
@@ -105,7 +131,9 @@ pub(crate) fn card_rows<T>(
     mut card: impl FnMut(&mut Ui, &T),
 ) {
     let inner = ui.spacing().item_spacing;
-    let per_row = card_columns(ui.available_width(), width, gap, max);
+    let available = ui.available_width();
+    let per_row = card_columns(available, width, gap, max);
+    let cell = card_width(available, width);
     for (index, row) in items.chunks(per_row).enumerate() {
         if index > 0 {
             // The item spacing already rides after the row above.
@@ -115,7 +143,7 @@ pub(crate) fn card_rows<T>(
             ui.spacing_mut().item_spacing.x = gap;
             for item in row {
                 ui.allocate_ui_with_layout(
-                    Vec2::new(width, 0.0),
+                    Vec2::new(cell, 0.0),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.spacing_mut().item_spacing = inner;
@@ -398,11 +426,18 @@ impl BrandShowcase {
 
         // The governing principle: the numeral in indicator beside the
         // eyebrow, headline and body, the preview's one panel.
+        let column = ui.available_width();
         Card::new().large().ui(ui, theme, flags, |ui| {
             // Captured while the Ui is still the card's bounded
             // interior: inside the horizontal below, available width is
             // unbounded.
             let panel_width = ui.available_width();
+            // A card hugs its content, and the panel's text wraps short of
+            // the interior: on a phone the panel runs the column, as the
+            // cards of `card_rows` do; wider, it hugs its text as it did.
+            if column < breakpoints::BREAKPOINT_TABLET {
+                ui.set_min_width(panel_width);
+            }
             ui.horizontal(|ui| {
                 let _ = panel_width;
                 ui.add(egui::Label::new(tracked_text(
@@ -460,7 +495,7 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
-            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
         ui.add_space(spacing::SPACE_2);
         // The four tones in one row where they fit, stacked one to a row
@@ -473,7 +508,7 @@ impl BrandShowcase {
             VOICE_POSITIONS,
             |ui, (label, register, example)| {
                 Card::new().filled().compact().ui(ui, theme, flags, |ui| {
-                    ui.set_min_width(VOICE_CARD_WIDTH);
+                    ui.set_min_width(ui.available_width());
                     // The indicator rule across the card's top, the
                     // preview's 2px border-top.
                     let (rule, _) = ui
@@ -497,7 +532,7 @@ impl BrandShowcase {
                         -0.01,
                         Some(26.0),
                         colors.text_display(),
-                        Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+                        None,
                     )));
                     ui.add_space(spacing::SPACE_1);
                     ui.add(egui::Label::new(specimen_job(
@@ -505,7 +540,7 @@ impl BrandShowcase {
                         TypeStyle::Caption,
                         theme,
                         colors.text_body(),
-                        Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+                        None,
                     )));
                 });
             },
@@ -514,14 +549,13 @@ impl BrandShowcase {
         // Headlines: the three approved modes as do and don't pairs,
         // the verdict carried by the icon and the word, never colour
         // alone. A pair to a row where two tiles fit; on a phone the
-        // tiles stack, each no wider than the page.
+        // tiles stack, each as wide as the page.
         ui.add_space(spacing::SPACE_6);
         ui.label(HEADLINES_HEADING);
         ui.add_space(spacing::SPACE_2);
-        let tile_width = (MODE_TILE_WIDTH + 2.0 * spacing::SPACE_4).min(ui.available_width());
         card_rows(
             ui,
-            tile_width,
+            MODE_TILE_WIDTH + 2.0 * spacing::SPACE_4,
             spacing::SPACE_3,
             2,
             HEADLINE_MODES,
@@ -547,7 +581,7 @@ impl BrandShowcase {
                     .corner_radius(radii::RADIUS_MD as u8)
                     .inner_margin(spacing::SPACE_4)
                     .show(ui, |ui| {
-                        ui.set_min_width(tile_width - 2.0 * spacing::SPACE_4);
+                        ui.set_min_width(ui.available_width());
                         ui.horizontal(|ui| {
                             icon(ui, glyph, IconSize::Sm, ink);
                             ui.add_space(spacing::SPACE_2);
@@ -574,7 +608,7 @@ impl BrandShowcase {
                             -0.01,
                             Some(24.0),
                             ink,
-                            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+                            None,
                         )));
                     });
             },
@@ -590,22 +624,24 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
-            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+            None,
         )));
         ui.add_space(spacing::SPACE_2);
         let (lead_ground, lead_caption) = PHOTO_TILES[0];
         // The lead tile beside the two-by-two where that composition
-        // fits; on a phone, and wherever it would not, the lead tile
-        // leads and the small tiles follow in rows of what fits, one to
-        // a row under the compact breakpoint. The composition's
-        // footprint is the lead tile and two small ones across, each
-        // followed by its gap: the row's item spacing and the 12px
-        // space.
+        // fits; on a phone, and wherever it would not, the lead tile leads
+        // and the small tiles follow in rows of what fits, one to a row
+        // under the compact breakpoint. Under it every tile takes the
+        // column's width at its own height (`card_width`, as the cards
+        // do). The composition's footprint is the lead tile and two small
+        // ones across, each followed by its gap: the row's item spacing
+        // and the 12px space.
         let gap = spacing::SPACE_3 + ui.spacing().item_spacing.x;
         let composition = PHOTO_TILE_WIDE.x + 2.0 * PHOTO_TILE_SMALL.x + 3.0 * gap;
         let available = ui.available_width();
         if available < breakpoints::BREAKPOINT_TABLET || available < composition {
-            photo_tile(ui, theme, lead_ground, lead_caption, PHOTO_TILE_WIDE);
+            let lead = Vec2::new(card_width(available, PHOTO_TILE_WIDE.x), PHOTO_TILE_WIDE.y);
+            photo_tile(ui, theme, lead_ground, lead_caption, lead);
             ui.add_space(spacing::SPACE_3);
             card_rows(
                 ui,
@@ -613,7 +649,12 @@ impl BrandShowcase {
                 spacing::SPACE_3,
                 2,
                 &PHOTO_TILES[1..],
-                |ui, (ground, caption)| photo_tile(ui, theme, *ground, caption, PHOTO_TILE_SMALL),
+                |ui, (ground, caption)| {
+                    // The cell's width: the small tile's, or the column's
+                    // on a phone.
+                    let size = Vec2::new(ui.available_width(), PHOTO_TILE_SMALL.y);
+                    photo_tile(ui, theme, *ground, caption, size)
+                },
             );
         } else {
             ui.horizontal(|ui| {
@@ -638,7 +679,7 @@ impl BrandShowcase {
             TypeStyle::Caption,
             theme,
             colors.text_muted(),
-            Some(VOICE_CARD_WIDTH - spacing::SPACE_8),
+            None,
         )))
     }
 }
@@ -662,25 +703,76 @@ fn photo_tile(ui: &mut Ui, theme: ThemeId, ground: PhotoGround, caption: &str, s
         },
         ink,
     );
-    ui.painter().text(
-        rect.left_bottom() + Vec2::new(spacing::SPACE_3, -spacing::SPACE_3),
-        egui::Align2::LEFT_BOTTOM,
-        caption,
-        FontId {
-            size: type_scale::TEXT_CAPTION,
-            family: TypeStyle::Body.family(theme),
-        },
-        ink,
-    );
+    // The caption wraps inside the tile, the tile's inset kept on both
+    // sides, and hangs from the bottom inset so its last line sits where
+    // the one-line caption did.
+    let font = FontId {
+        size: type_scale::TEXT_CAPTION,
+        family: TypeStyle::Body.family(theme),
+    };
+    let max_width = size.x - 2.0 * spacing::SPACE_3;
+    let galley = caption_galley(ui.painter(), caption, font, ink, max_width);
+    let corner = rect.left_bottom() + Vec2::new(spacing::SPACE_3, -spacing::SPACE_3);
+    let at = egui::Align2::LEFT_BOTTOM.anchor_size(corner, galley.size());
+    ui.painter().galley(at.min, galley, ink);
+}
+
+/// `caption` in `font` laid out to wrap within `max_width`. egui breaks
+/// a word wider than the line mid-word onto the next row, so such a
+/// word is cut short with an ellipsis first and the rest of the caption
+/// kept: every word then fits, the wrap only ever falls between words,
+/// and no row runs past `max_width`. A middle dot is held to the word
+/// after it by a no-break space, so the wrap never ends a row on the
+/// dot; the dot may begin a row, with its word, instead. The space
+/// looks the same and the text reads the same.
+fn caption_galley(
+    painter: &Painter,
+    caption: &str,
+    font: FontId,
+    ink: Color32,
+    max_width: f32,
+) -> Arc<Galley> {
+    let caption = caption.replace("\u{b7} ", "\u{b7}\u{a0}");
+    let fits = |text: &str| {
+        painter
+            .layout_no_wrap(text.to_owned(), font.clone(), ink)
+            .size()
+            .x
+            <= max_width
+    };
+    let fitted: Vec<Cow<str>> = caption
+        .split(' ')
+        .map(|word| {
+            if fits(word) {
+                Cow::Borrowed(word)
+            } else {
+                Cow::Owned(ellipsize(word, fits))
+            }
+        })
+        .collect();
+    painter.layout(fitted.join(" "), font, ink, max_width)
+}
+
+/// `word` cut from its end until what is left and an ellipsis `fits`,
+/// at least one letter kept.
+fn ellipsize(word: &str, fits: impl Fn(&str) -> bool) -> String {
+    let ends: Vec<usize> = word.char_indices().map(|(at, _)| at).skip(1).collect();
+    let cut = |end: usize| format!("{}\u{2026}", &word[..end]);
+    ends.iter()
+        .rev()
+        .map(|&end| cut(end))
+        .find(|cut| fits(cut))
+        .or_else(|| ends.first().map(|&end| cut(end)))
+        .unwrap_or_else(|| word.to_owned())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         copy_passes_voice_checks, PhotoGround, HEADLINES_HEADING, HEADLINE_MODES, PHOTO_HEADING,
-        PHOTO_INTRO, PHOTO_NOTE, PHOTO_TILES, PRINCIPLE_BODY, PRINCIPLE_EYEBROW,
-        PRINCIPLE_HEADLINE, PRINCIPLE_NUMERAL, SECTION_EYEBROW, VOICE_HEADING, VOICE_INTRO,
-        VOICE_POSITIONS,
+        PHOTO_INTRO, PHOTO_NOTE, PHOTO_TILES, PHOTO_TILE_SMALL, PHOTO_TILE_WIDE, PRINCIPLE_BODY,
+        PRINCIPLE_EYEBROW, PRINCIPLE_HEADLINE, PRINCIPLE_NUMERAL, SECTION_EYEBROW, VOICE_HEADING,
+        VOICE_INTRO, VOICE_POSITIONS,
     };
     use crate::icon::IconSize;
     use crate::icons::Icon;
@@ -888,6 +980,223 @@ mod tests {
                     "at {width}pt the {glyph:?} icon sits {gap}pt from {label:?}, not {inner}pt"
                 );
             }
+        }
+    }
+
+    /// Lay the five photo tiles out headless in `theme`, each at the
+    /// size the showcase gives it (the lead tile wide, the other four
+    /// small), and hand back every tile's rect beside the texts the
+    /// layout painted.
+    fn lay_out_photo_tiles(theme: ThemeId) -> (Vec<egui::Rect>, Vec<(String, egui::Rect)>) {
+        let mut tiles = Vec::new();
+        let (_, painted) = super::lay_out(PHOTO_TILE_WIDE.x, |ui| {
+            tiles.clear();
+            for (index, (ground, caption)) in PHOTO_TILES.iter().enumerate() {
+                let size = if index == 0 {
+                    PHOTO_TILE_WIDE
+                } else {
+                    PHOTO_TILE_SMALL
+                };
+                let tile = ui
+                    .scope(|ui| super::photo_tile(ui, theme, *ground, caption, size))
+                    .response
+                    .rect;
+                assert_eq!(tile.size(), size, "the scope is the tile and nothing else");
+                tiles.push(tile);
+            }
+        });
+        (tiles, painted)
+    }
+
+    /// The rect the painted text `text` covers, a no-break space (a
+    /// caption's middle dot is held to its word by one) read as the
+    /// space it looks like; a text the layout never painted panics.
+    fn painted_rect(painted: &[(String, egui::Rect)], text: &str) -> egui::Rect {
+        painted
+            .iter()
+            .find(|(seen, _)| seen.replace('\u{a0}', " ") == text)
+            .map(|(_, rect)| *rect)
+            .unwrap_or_else(|| panic!("{text:?} was never painted"))
+    }
+
+    /// Every photo tile's caption stays inside its tile, at the size the
+    /// showcase gives the tile and in every theme's face. The small
+    /// 160pt tiles' captions are wider than the tile on one line; they
+    /// wrap onto more lines instead of running on past its edge. Each
+    /// caption is painted whole (a caption cut short would not be found
+    /// under its own text), keeps the tile's left and bottom inset it
+    /// always had, and the lines the wrap adds, which grow upward from
+    /// that inset, stop short of the camera glyph above them.
+    #[test]
+    fn photo_captions_stay_inside_their_tiles() {
+        let camera = Icon::PhotoCamera.as_char().to_string();
+        let mut problems = Vec::new();
+        for theme in ThemeId::ALL {
+            let (tiles, painted) = lay_out_photo_tiles(*theme);
+            for ((_, caption), tile) in PHOTO_TILES.iter().zip(&tiles) {
+                let text = painted_rect(&painted, caption);
+                if !tile.expand(0.01).contains_rect(text) {
+                    problems.push(format!(
+                        "{theme:?}: {caption:?} paints {text:?}, outside its {tile:?} tile"
+                    ));
+                }
+                let (left, bottom) = (text.left() - tile.left(), tile.bottom() - text.bottom());
+                if (left - spacing::SPACE_3).abs() > 0.01
+                    || (bottom - spacing::SPACE_3).abs() > 0.01
+                {
+                    problems.push(format!(
+                        "{theme:?}: {caption:?} sits {left}pt from the tile's left and {bottom}pt \
+                         from its bottom, not {}pt",
+                        spacing::SPACE_3
+                    ));
+                }
+                let glyph = painted
+                    .iter()
+                    .filter(|(seen, _)| *seen == camera)
+                    .map(|(_, rect)| *rect)
+                    .find(|rect| tile.contains(rect.center()))
+                    .unwrap_or_else(|| panic!("{theme:?}: no camera glyph in the {tile:?} tile"));
+                if glyph.bottom() > text.top() + 0.01 {
+                    problems.push(format!(
+                        "{theme:?}: {caption:?} (top {}) runs up into the camera glyph (bottom {})",
+                        text.top(),
+                        glyph.bottom()
+                    ));
+                }
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    /// A word wider than the tile is the one thing wrapping cannot fit:
+    /// it is cut short with an ellipsis, the rest of the caption kept,
+    /// and still nothing paints outside the tile.
+    #[test]
+    fn photo_caption_word_wider_than_the_tile_ends_in_an_ellipsis() {
+        const WORD: &str = "Antidisestablishmentarianism";
+        let caption = format!("{WORD} · Lundby");
+        for theme in ThemeId::ALL {
+            let mut tile = egui::Rect::NOTHING;
+            let (_, painted) = super::lay_out(PHOTO_TILE_SMALL.x, |ui| {
+                tile = ui
+                    .scope(|ui| {
+                        super::photo_tile(
+                            ui,
+                            *theme,
+                            PhotoGround::SecondaryContainer,
+                            &caption,
+                            PHOTO_TILE_SMALL,
+                        )
+                    })
+                    .response
+                    .rect;
+            });
+            let cut: Vec<_> = painted
+                .iter()
+                .filter(|(seen, _)| seen.contains('\u{2026}'))
+                .collect();
+            assert_eq!(cut.len(), 1, "{theme:?}: one caption, one ellipsis");
+            let (text, rect) = cut[0];
+            // The dot's no-break space reads as the space it looks like.
+            let text = &text.replace('\u{a0}', " ");
+            assert!(
+                text.starts_with("Anti") && text.ends_with("\u{2026} · Lundby"),
+                "{theme:?}: only the over-wide word is cut, got {text:?}"
+            );
+            assert!(
+                tile.expand(0.01).contains_rect(*rect),
+                "{theme:?}: {text:?} paints {rect:?}, outside its {tile:?} tile"
+            );
+        }
+    }
+
+    /// The rows the caption of a photo tile `width` wide is painted in,
+    /// each row's text as the layout broke it, read off the galley
+    /// `photo_tile` painted.
+    fn caption_rows(theme: ThemeId, caption: &str, width: f32) -> Vec<String> {
+        let camera = Icon::PhotoCamera.as_char().to_string();
+        let mut rows = Vec::new();
+        super::lay_out(width, |ui| {
+            rows.clear();
+            let size = egui::vec2(width, PHOTO_TILE_SMALL.y);
+            super::photo_tile(ui, theme, PhotoGround::SecondaryContainer, caption, size);
+            ui.ctx().graphics(|layers| {
+                let list = layers.get(ui.layer_id()).expect("the tile painted a layer");
+                for clipped in list.all_entries() {
+                    if let egui::Shape::Text(text) = &clipped.shape {
+                        if text.galley.text() != camera {
+                            rows = text.galley.rows.iter().map(|row| row.text()).collect();
+                        }
+                    }
+                }
+            });
+        });
+        rows
+    }
+
+    /// Finding 5-E1: a photo caption's middle dot stays with the word
+    /// after it. The wrap broke "After-hours debug · Gothenburg HQ" at
+    /// the space after the dot, so its first line ended on a stray "·".
+    /// No row of any caption, in any theme's face, at any tile width from
+    /// 120pt (a small tile on a narrow phone at a large font scale) to
+    /// 320pt, ends with the dot.
+    #[test]
+    fn a_photo_captions_middle_dot_is_never_left_ending_a_row() {
+        let mut problems = Vec::new();
+        for theme in ThemeId::ALL {
+            for (_, caption) in PHOTO_TILES {
+                for width in (120..=320).step_by(4) {
+                    let rows = caption_rows(*theme, caption, width as f32);
+                    if rows.iter().any(|row| row.trim_end().ends_with('\u{b7}')) {
+                        problems.push(format!(
+                            "{theme:?}: {caption:?} in a {width}pt tile wraps to {rows:?}"
+                        ));
+                    }
+                    // The no-break spaces read back as spaces, so the words
+                    // must come through unchanged: an ellipsis is a change.
+                    if rows.concat().replace('\u{a0}', " ") != *caption {
+                        problems.push(format!(
+                            "{theme:?}: {caption:?} in a {width}pt tile reads {rows:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            problems.is_empty(),
+            "{} captions break badly (a row ends on the middle dot, or the words change):\n{}",
+            problems.len(),
+            problems.join("\n")
+        );
+    }
+
+    /// Under the compact breakpoint a card takes the whole column, even a
+    /// column wider than the card's fixed width (the Pixel's 416pt against
+    /// the do and don't tile's 412pt); from the breakpoint up it keeps the
+    /// fixed width, so cards can share a line.
+    #[test]
+    fn a_stacked_card_takes_the_column_and_a_shared_one_its_own_width() {
+        use super::card_width;
+        use crate::tokens::breakpoints::BREAKPOINT_TABLET;
+
+        for (available, fixed) in [
+            (288.0, 296.0),
+            (352.0, 412.0),
+            (416.0, 412.0),
+            (599.0, 296.0),
+        ] {
+            assert_eq!(
+                card_width(available, fixed),
+                available,
+                "a {available}pt column is under the breakpoint: the card takes it, not {fixed}pt"
+            );
+        }
+        for (available, fixed) in [(BREAKPOINT_TABLET, 296.0), (652.0, 412.0), (1152.0, 216.0)] {
+            assert_eq!(
+                card_width(available, fixed),
+                fixed,
+                "a {available}pt column keeps the card at {fixed}pt"
+            );
         }
     }
 

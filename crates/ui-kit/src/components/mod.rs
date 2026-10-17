@@ -28,7 +28,7 @@ pub mod top_app_bar;
 pub use badge::{count_text, Badge, BadgeLook, BadgeTone, IconButton};
 pub use banner::{banner_look, Banner, BannerEvent, BannerLook, BannerResponse, BannerTone};
 pub use brand_showcase::{copy_passes_voice_checks, BrandShowcase, PhotoGround};
-pub use button::{emphasis_look, Button, ButtonEmphasis, ButtonResponse, ButtonSize};
+pub use button::{busy_look, emphasis_look, Button, ButtonEmphasis, ButtonResponse, ButtonSize};
 pub use card::{Card, CardLook, CardPadding, CardVariant};
 pub use checkbox::{checkbox_look, Checkbox, CheckboxLook, CheckboxResponse, CheckboxState};
 pub use chip::{chip_look, Chip, ChipEvent, ChipLook, ChipResponse};

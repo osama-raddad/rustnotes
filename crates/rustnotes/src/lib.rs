@@ -273,9 +273,9 @@ impl<A: App> eframe::App for Host<A> {
         // the save hook restores `*mut A` inside its monomorphized closure.
         #[cfg(target_os = "ios")]
         HOST_PTR.with(|p| p.set(&mut self.app as *mut A as *mut ()));
-        // Losing focus is the last reliable save moment on Android (winit
-        // maps LostFocus -> Focused(false) before Pause). It is NOT one on
-        // iOS — backgrounding never resigns the key window there; the
+        // Losing focus saves here only while frames run. On Android the save
+        // that covers backgrounding is `save` below. It is NOT the save moment
+        // on iOS: backgrounding never resigns the key window there, and the
         // lifecycle observers installed in `Host::new` cover iOS.
         if ctx.input(|i| {
             i.events
@@ -302,6 +302,25 @@ impl<A: App> eframe::App for Host<A> {
         // The lifecycle observers can no longer use the pointer.
         HOST_PTR.with(|p| p.set(std::ptr::null_mut()));
     }
+
+    /// Android only. eframe calls this on the exit path, and the device run
+    /// behind the 7-A3 entry exercised it on backgrounding: an edit made
+    /// under 1.5 s before Home survived a process kill (2 of 2 runs, while
+    /// the pre-fix build lost it). Which winit event triggers the call on
+    /// Android is not confirmed in code; the path the code reads is
+    /// `Suspended`. `save_current` is a no-op on a clean buffer. eframe calls
+    /// this only when a storage exists, which `android::start` provides.
+    #[cfg(target_os = "android")]
+    fn save(&mut self, _storage: &mut dyn eframe::Storage) {
+        self.app.save_current();
+    }
+
+    /// Android only. The storage exists to receive `save`, not egui's
+    /// memory, which stays out of the file.
+    #[cfg(target_os = "android")]
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
 }
 
 /// Back at the root: hand control back to the OS, as native apps do. The
@@ -313,10 +332,10 @@ impl<A: App> eframe::App for Host<A> {
 /// exits on `MainEvent::Destroy`, so `onDestroy` would block forever in the
 /// glue and a singleTask relaunch of the cached process would hang.)
 /// `on_exit` above persists the buffer when `run_native` returns. Residual
-/// exposure: system-initiated destroys (don't-keep-activities) still need
-/// winit to forward `MainEvent::Destroy`, which it does not — the process
-/// is then simply killed, losing nothing here because Pause's
-/// `WindowFocused(false)` save has already run.
+/// exposure: system-initiated destroys (don't-keep-activities) need winit
+/// to forward `MainEvent::Destroy`, which it does not. The process is then
+/// killed without `on_exit`, and the buffer is saved only by `save` on
+/// Suspended, if that event arrives before the kill.
 #[cfg_attr(not(target_os = "android"), allow(unused_variables))]
 fn leave_app(ctx: &egui::Context) {
     // Android-only, as before (the call site is shared; other platforms'

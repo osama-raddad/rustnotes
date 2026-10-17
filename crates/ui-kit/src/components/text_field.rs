@@ -367,10 +367,16 @@ impl<'a> TextField<'a> {
             );
         }
 
-        // The edit itself: egui's TextEdit, restyled. No frame of its
-        // own; the kit's chrome stands around it, the margins keeping
-        // the text at the spec's insets (the search rule's 44px with a
-        // leading icon, 14px without).
+        // The edit itself: egui's TextEdit, restyled. No visible frame
+        // of its own; the kit's chrome stands around it. The padding
+        // rides the frame's inner margin: with an explicit frame the
+        // edit takes its inset from the frame and ignores `.margin(..)`
+        // (which only sizes the unframed default), so a margin set
+        // there would leave the text flush against the border. The
+        // insets are the spec's: the search rule's 44px on the left with
+        // a leading icon, 14px without, 14px on the right, and 12px top
+        // and bottom on the textarea (the single line is centred in the
+        // touch floor).
         let margin = Margin {
             left: (if self.leading_icon.is_some() {
                 LEADING_TEXT_INSET
@@ -388,8 +394,7 @@ impl<'a> TextField<'a> {
         };
         edit = edit
             .id(edit_id)
-            .frame(Frame::NONE)
-            .margin(margin)
+            .frame(Frame::NONE.inner_margin(margin))
             .min_size(rect.size())
             .font(FontSelection::FontId(font))
             .text_color(look.text)
@@ -460,10 +465,11 @@ mod tests {
     use egui::{PointerButton, Pos2, RawInput, Rect, Shape, Stroke, StrokeKind, Vec2};
 
     use crate::icon::IconSize;
+    use crate::icons::Icon;
     use crate::states::{self, UiKitFlags, WidgetState};
     use crate::theme::ThemeId;
     use crate::tokens::{radii, spacing, type_scale};
-    use crate::typography::{assert_painted_inside, paint_pass};
+    use crate::typography::{assert_painted_inside, paint_pass, painted_text};
 
     use super::{
         field_look, leading_icon_center, multiline_height, TextField, CONTROL_HEIGHT, FIELD_GAP,
@@ -706,6 +712,203 @@ mod tests {
         assert!(
             textarea.height() > CONTROL_HEIGHT + 2.0 * FIELD_PAD_Y,
             "three rows grow well past one"
+        );
+    }
+
+    /// The box the text `text` really painted in, read off the frame's
+    /// shapes: the galley's rect moved to where the galley was placed.
+    fn painted_box(shapes: &[egui::epaint::ClippedShape], text: &str) -> Rect {
+        let shape = painted_text(shapes, text);
+        shape.galley.rect.translate(shape.pos.to_vec2())
+    }
+
+    /// The text really starts at the spec's inset. egui's `TextEdit`
+    /// reads its inner margin off the frame it is given; an explicit
+    /// `.frame(Frame::NONE)` makes its separate `.margin(..)` a dead
+    /// letter, so the text once sat flush against the border (zero
+    /// padding) and, in the search field, the magnifier lay over the
+    /// placeholder. Measured off the painted frame, not the arithmetic:
+    /// the placeholder, typed text and a disabled field's text all start
+    /// 14px in, or 44px with a leading icon.
+    #[test]
+    fn single_line_text_starts_at_the_spec_inset() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        for (icon, inset) in [
+            (None, FIELD_PAD_X),
+            (Some(Icon::Search), LEADING_TEXT_INSET),
+        ] {
+            let label = if icon.is_some() { "with icon" } else { "plain" };
+
+            // The placeholder, over an empty buffer.
+            let mut empty = String::new();
+            let (control, shapes) = paint_pass(&ctx, |ui| {
+                let mut field =
+                    TextField::new("Find a case", &mut empty).placeholder("Case number");
+                if let Some(icon) = icon {
+                    field = field.leading_icon(icon);
+                }
+                field.ui(ui, theme, &flags).control_rect
+            });
+            let placeholder = painted_box(&shapes, "Case number");
+            assert!(
+                (placeholder.left() - (control.left() + inset)).abs() < 0.5,
+                "{label}: the placeholder starts {}px in, not {inset}px",
+                placeholder.left() - control.left()
+            );
+
+            // The typed text.
+            let mut typed = String::from("Hallmark 2026");
+            let (control, shapes) = paint_pass(&ctx, |ui| {
+                let mut field = TextField::new("Find a case", &mut typed);
+                if let Some(icon) = icon {
+                    field = field.leading_icon(icon);
+                }
+                field.ui(ui, theme, &flags).control_rect
+            });
+            let text = painted_box(&shapes, "Hallmark 2026");
+            assert!(
+                (text.left() - (control.left() + inset)).abs() < 0.5,
+                "{label}: the typed text starts {}px in, not {inset}px",
+                text.left() - control.left()
+            );
+
+            // A disabled field's value sits at the same inset.
+            let mut locked = String::from("A-2026-114");
+            let (control, shapes) = paint_pass(&ctx, |ui| {
+                let mut field = TextField::new("Reference number", &mut locked).disabled();
+                if let Some(icon) = icon {
+                    field = field.leading_icon(icon);
+                }
+                field.ui(ui, theme, &flags).control_rect
+            });
+            let text = painted_box(&shapes, "A-2026-114");
+            assert!(
+                (text.left() - (control.left() + inset)).abs() < 0.5,
+                "{label}: the disabled text starts {}px in, not {inset}px",
+                text.left() - control.left()
+            );
+        }
+    }
+
+    /// The leading icon has its own space: the magnifier ends before the
+    /// placeholder begins, and before the typed text begins (the search
+    /// field once drew "Case number" under its icon).
+    #[test]
+    fn leading_icon_does_not_overlap_the_text() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+        let glyph = Icon::Search.as_char().to_string();
+
+        let mut empty = String::new();
+        let (_, shapes) = paint_pass(&ctx, |ui| {
+            TextField::new("Find a case", &mut empty)
+                .placeholder("Case number")
+                .leading_icon(Icon::Search)
+                .ui(ui, theme, &flags)
+                .control_rect
+        });
+        let icon = painted_box(&shapes, &glyph);
+        let placeholder = painted_box(&shapes, "Case number");
+        assert!(
+            icon.right() <= placeholder.left(),
+            "the icon ends at x {} but the placeholder starts at x {}",
+            icon.right(),
+            placeholder.left()
+        );
+
+        let mut typed = String::from("Case 114");
+        let (_, shapes) = paint_pass(&ctx, |ui| {
+            TextField::new("Find a case", &mut typed)
+                .leading_icon(Icon::Search)
+                .ui(ui, theme, &flags)
+                .control_rect
+        });
+        let icon = painted_box(&shapes, &glyph);
+        let text = painted_box(&shapes, "Case 114");
+        assert!(
+            icon.right() <= text.left(),
+            "the icon ends at x {} but the typed text starts at x {}",
+            icon.right(),
+            text.left()
+        );
+    }
+
+    /// The textarea insets its text on all sides: 12px from the top and
+    /// 14px from the left, and a long line wraps 14px short of the right
+    /// edge. The edit still fills the box exactly (the padding is
+    /// inside it), so the control keeps its `multiline_height`.
+    #[test]
+    fn multiline_text_is_inset_on_every_side() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let flags = UiKitFlags::default();
+
+        // The placeholder, over an empty buffer: top and left.
+        let mut empty = String::new();
+        let (control, shapes) = paint_pass(&ctx, |ui| {
+            TextField::new("What are you trying to ship?", &mut empty)
+                .placeholder("A sentence or two")
+                .multiline(3)
+                .ui(ui, theme, &flags)
+                .control_rect
+        });
+        let placeholder = painted_box(&shapes, "A sentence or two");
+        assert!(
+            (placeholder.left() - (control.left() + FIELD_PAD_X)).abs() < 0.5,
+            "the placeholder starts {}px in, not {FIELD_PAD_X}px",
+            placeholder.left() - control.left()
+        );
+        assert!(
+            (placeholder.top() - (control.top() + FIELD_PAD_Y)).abs() < 0.5,
+            "the placeholder starts {}px down, not {FIELD_PAD_Y}px",
+            placeholder.top() - control.top()
+        );
+
+        // Typed words that run past one line of a narrow box: the first
+        // row sits at the top-left inset and the wrap stops 14px short
+        // of the right edge.
+        let words = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima";
+        let mut typed = String::from(words);
+        let (field, shapes) = paint_pass(&ctx, |ui| {
+            ui.set_max_width(240.0);
+            let field = TextField::new("What are you trying to ship?", &mut typed)
+                .multiline(4)
+                .ui(ui, theme, &flags);
+            (field.control_rect, field.response.rect)
+        });
+        let (control, edit) = field;
+        let body = painted_box(&shapes, words);
+        assert!(
+            (body.left() - (control.left() + FIELD_PAD_X)).abs() < 0.5,
+            "the text starts {}px in, not {FIELD_PAD_X}px",
+            body.left() - control.left()
+        );
+        assert!(
+            (body.top() - (control.top() + FIELD_PAD_Y)).abs() < 0.5,
+            "the text starts {}px down, not {FIELD_PAD_Y}px",
+            body.top() - control.top()
+        );
+        assert!(
+            body.right() <= control.right() - FIELD_PAD_X + 0.5,
+            "the wrapped text reaches x {} but the right inset stops it at x {}",
+            body.right(),
+            control.right() - FIELD_PAD_X
+        );
+        assert!(
+            painted_text(&shapes, words).galley.rows.len() > 1,
+            "the long line wrapped onto further rows, or the right-inset check proves nothing"
+        );
+        assert_eq!(
+            edit.height(),
+            control.height(),
+            "the edit fills the box, the padding inside it"
         );
     }
 

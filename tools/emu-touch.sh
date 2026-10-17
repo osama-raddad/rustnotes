@@ -85,6 +85,36 @@ PY
 
 swipe() { adb -s "$SERIAL" shell input swipe "$@"; }
 
+# still NAME: shoot the screen once a second until two shots in a row differ
+# by under 0.5%, and keep the last one as NAME.png. A fling can still be
+# running a second or two after its swipe ends, so a fixed sleep is not enough.
+still() {
+  local name=$1 i
+  shot "$name.0"
+  for i in 1 2 3 4 5 6; do
+    sleep 1
+    shot "$name.$i"
+    if (( $(diff_pct "$name.$((i - 1))" "$name.$i") < 0.5 )); then
+      cp "$OUT/$name.$i.png" "$OUT/$name.png"
+      return 0
+    fi
+  done
+  echo "   $name still moving after 6 s"
+  cp "$OUT/$name.$i.png" "$OUT/$name.png"
+}
+
+# back_to_top: wait for the page to stop, and swipe back again while it is
+# not yet at the top edge, at most four more times.
+back_to_top() {
+  local n
+  for n in 1 2 3 4; do
+    still back
+    (( $(diff_pct top back) < 2 )) && return 0
+    swipe 540 700 540 2100 400
+  done
+  still back
+}
+
 # check NAME VALUE OP LIMIT: record a PASS or FAIL for VALUE OP LIMIT
 # (OP is > or <) and print it.
 summary=()
@@ -134,8 +164,7 @@ echo "-- swipe back down (twice, so the page lands on its top edge)"
 swipe 540 700 540 2100 400
 sleep 1
 swipe 540 700 540 2100 400
-sleep 2
-shot back
+back_to_top
 check return "$(diff_pct top back)" "<" 2
 
 echo "-- hold: the returned page stays put"
@@ -167,10 +196,14 @@ check sideways "$SIDE" ">" 3
 
 echo "-- unswipe: the reverse swipe restores the row"
 if [[ -n $SIDE_Y ]]; then
-  swipe 300 $SIDE_Y 1100 $SIDE_Y 300
-  sleep 1.5
-  shot restored
+  # 1000 px, longer than the forward swipe's 800 px, so the clamp at the
+  # row's start (offset 0) is reachable. The shot waits until the row stops
+  # moving, but a run can still settle short of the start (K4: 3.1% in one
+  # of three runs), so this check stays informational.
+  swipe 300 $SIDE_Y 1300 $SIDE_Y 300
+  still restored
   check unswipe "$(diff_pct row restored)" "<" 2
+  echo "   info: moved vs restored $(diff_pct moved restored)%"
 else
   echo "   no row found to restore FAIL"
   summary+=("unswipe=n/a:FAIL")

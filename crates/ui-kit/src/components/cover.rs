@@ -11,12 +11,18 @@
 //! `text-muted`. Corners at `radius-lg`, gutters `space-4`, rule pitch
 //! `space-6`.
 //!
+//! The 960 is the preview card's width and the denominator of each
+//! block's share. The four blocks and their three 16-unit gutters take
+//! 944 of it, and the band paints those 944 units across the whole
+//! column, so the proportions between the blocks are the preview's and
+//! the guest paints at about 10% of the band (96 of 944).
+//!
 //! The adaptation (documented judgment): the words gain the eyebrow the
 //! issue's acceptance names, and the V mark at its brand-placement
 //! floor of 96px stands above it, so the composition reads mark,
 //! eyebrow, display headline, standfirst. The canvas leads (the band
 //! blocks are the only fills), the accent stays a guest (the tertiary
-//! block is the narrowest, 10% of the grid), and the headline clears
+//! block is the narrowest, about 10% of the band), and the headline clears
 //! the README's 2.5x pairing floor over the standfirst through
 //! [`crate::typography::pairing_holds`]. The roles re-skin per theme:
 //! Forest, mint, Charcoal, Bronze; Deep Teal, teal tint, Ink,
@@ -43,7 +49,12 @@ pub const BAND_HEIGHT: f32 = 96.0;
 /// How far the blocks bleed past the band's top, px.
 pub const BAND_BLEED: f32 = 16.0;
 
-/// The 960-unit grid the preview's band is drawn on.
+/// The preview card's width in grid units, and the denominator of each
+/// block's share in the preview (the guest's 96 units are the 10% the
+/// ratio rule gives the accent). The blocks and gutters take only 944
+/// of the 960, so the painted band divides by that extent instead
+/// ([`band_layout`]) and the guest paints at about 10.2%. Only the
+/// tests use this constant: it states the preview's shares.
 pub const BAND_UNITS: f32 = 960.0;
 
 /// The band's left margin, in grid units: none. The preview's 32-unit
@@ -96,10 +107,23 @@ pub const BAND_BLOCKS: &[(f32, BandRole)] = &[
 ];
 
 /// The band's blocks laid out over `width`: each block's x offset and
-/// width in px, the 960-unit grid (margin and gutters included) scaled
-/// to fit. Pure geometry, so the proportions test without a context.
+/// width in px. The blocks and the gutters between them (the margin,
+/// none, in front) span the band's grid extent, 944 units, and that
+/// extent is scaled to the whole `width`, so the lead block starts on
+/// the column's left edge and the guest ends on its right edge. The
+/// blocks keep their proportions to one another and to the gutters;
+/// their shares of the painted band are `units / 944`, not the
+/// preview's `units / 960` ([`BAND_UNITS`]). Pure geometry, so the
+/// proportions test without a context.
 pub fn band_layout(width: f32) -> Vec<(f32, f32)> {
-    let scale = width / BAND_UNITS;
+    // The last block's right edge in grid units, which the width fills.
+    // The preview card is 960 units wide (`BAND_UNITS`), but its
+    // blocks and gutters take 944 of them, so 944 is what the band
+    // spans and what the width is divided by.
+    let extent = BAND_MARGIN_UNITS
+        + BAND_BLOCKS.iter().map(|(units, _)| units).sum::<f32>()
+        + BAND_GUTTER_UNITS * (BAND_BLOCKS.len() - 1) as f32;
+    let scale = width / extent;
     let mut x = BAND_MARGIN_UNITS;
     let mut out = Vec::with_capacity(BAND_BLOCKS.len());
     for (units, _) in BAND_BLOCKS {
@@ -154,7 +178,8 @@ impl Cover {
         // bleed the preview draws.
         let (band, _) = ui.allocate_exact_size(Vec2::new(width, BAND_HEIGHT), Sense::hover());
         let block_radius = CornerRadius::same(radii::RADIUS_LG as u8);
-        for ((x, w), (_, role)) in band_layout(width).iter().zip(BAND_BLOCKS) {
+        let layout = band_layout(width);
+        for ((x, w), (_, role)) in layout.iter().zip(BAND_BLOCKS) {
             let rect = Rect::from_min_size(
                 Pos2::new(band.left() + x, band.top() - BAND_BLEED),
                 Vec2::new(*w, BAND_HEIGHT + BAND_BLEED),
@@ -164,7 +189,7 @@ impl Cover {
         }
         // Three hairlines cut from the surface ground across the strip,
         // the editorial ruled-stock pattern.
-        let margin = BAND_MARGIN_UNITS * width / BAND_UNITS;
+        let margin = layout[0].0;
         for line in 1..=3u32 {
             let y = band.top() + BAND_RULE_PITCH * line as f32 + 0.5;
             ui.painter().hline(
@@ -224,6 +249,8 @@ impl Cover {
 
 #[cfg(test)]
 mod tests {
+    use egui::Rect;
+
     use crate::components::brand_showcase::copy_passes_voice_checks;
     use crate::theme::ThemeId;
     use crate::typography::{pairing_holds, TypeStyle};
@@ -286,31 +313,33 @@ mod tests {
         );
     }
 
-    /// The band layout scales the 960-unit grid to any width, margin
-    /// and gutters riding along: at half scale the lead block starts at
-    /// 16px and runs 208px wide, the guest ends where the preview's
-    /// 960-unit grid ends.
+    /// The band layout scales the grid to any width, gutters riding
+    /// along, and the last block ends on the width itself. The blocks
+    /// and gutters take 944 units (416 + 224 + 160 + 96 and three
+    /// gutters of 16), so at 472px the scale is one half: the lead
+    /// block starts at 0 and runs 208px wide, the second starts a
+    /// gutter later at 216px, and the guest ends at 472px.
     #[test]
     fn band_layout_scales_the_grid() {
-        let layout = band_layout(BAND_UNITS / 2.0);
+        let layout = band_layout(472.0);
         assert_eq!(layout.len(), BAND_BLOCKS.len());
         assert!(
             (layout[0].0 - BAND_MARGIN_UNITS / 2.0).abs() < 1e-4,
-            "margin scales"
+            "the margin scales"
         );
         assert!(
             (layout[0].1 - 416.0 / 2.0).abs() < 1e-4,
             "lead width scales"
         );
-        // With no margin the second block starts one gutter past the
-        // lead (416 + 16), and the guest ends 32 units short of the old
-        // 976: the bleed past the grid is the same, the origin moved.
         assert!((layout[1].0 - 432.0 / 2.0).abs() < 1e-4, "gutters scale");
-        let end = layout[3].0 + layout[3].1;
-        assert!(
-            (end - 944.0 / 2.0).abs() < 1e-4,
-            "the guest bleeds off the grid"
-        );
+        for width in [472.0, 320.5, 361.7, 960.0, 1280.0] {
+            let layout = band_layout(width);
+            let end = layout[3].0 + layout[3].1;
+            assert!(
+                (end - width).abs() < 1e-3,
+                "at {width}px the guest ends at {end}px, the column's right edge"
+            );
+        }
     }
 
     /// The band's visible height carries the preview's bleed, the
@@ -354,6 +383,139 @@ mod tests {
                 super::Cover::new().ui(ui, *theme);
             });
             out.drop_without_applying_deltas();
+        }
+    }
+
+    /// What the cover really paints into a page's content column near
+    /// `column`, in `theme`: the column the layout actually gave it (egui
+    /// snaps a requested rect to its own grid, so the request is not the
+    /// column), and every shape the pass drew, groups walked into, in
+    /// paint order. The fonts bind at a pass boundary, so a warm-up pass
+    /// installs them first.
+    fn painted_cover(theme: ThemeId, column: Rect) -> (Rect, Vec<egui::Shape>) {
+        let ctx = egui::Context::default();
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            crate::icon::install(ui.ctx());
+            crate::typography::install(theme, ui.ctx());
+        });
+        out.drop_without_applying_deltas();
+        let (laid_out, shapes) = crate::typography::paint_pass(&ctx, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
+                let column = ui.max_rect();
+                super::Cover::new().ui(ui, theme);
+                column
+            })
+            .inner
+        });
+        fn walk(shape: &egui::Shape, found: &mut Vec<egui::Shape>) {
+            match shape {
+                egui::Shape::Vec(nested) => nested.iter().for_each(|shape| walk(shape, found)),
+                other => found.push(other.clone()),
+            }
+        }
+        let mut found = Vec::new();
+        for clipped in &shapes {
+            walk(&clipped.shape, &mut found);
+        }
+        (laid_out, found)
+    }
+
+    /// The band as painted: four blocks, each one filled rect, in the
+    /// band's roles, with the same gutter between neighbours, the lead
+    /// block on the column's left edge and the guest block on its right
+    /// edge. The band once ended at 944 of 960 grid units, so it stopped
+    /// short of the content column's right edge by 16 units: 6 pt on a
+    /// phone. Each column's origin or width is off the pixel grid, as a
+    /// phone's are, since that is where an edge that was computed rather
+    /// than placed would show.
+    #[test]
+    fn the_painted_band_spans_the_column() {
+        let columns = [
+            Rect::from_min_size(egui::pos2(20.3, 30.0), egui::vec2(361.7, 700.0)),
+            Rect::from_min_size(egui::pos2(16.0, 0.0), egui::vec2(320.5, 700.0)),
+            Rect::from_min_size(egui::pos2(0.25, 12.5), egui::vec2(960.0, 700.0)),
+        ];
+        for theme in ThemeId::ALL {
+            let colors = theme.colors();
+            for requested in columns {
+                let (column, painted) = painted_cover(*theme, requested);
+                let name = format!("{}, column {column:?}", theme.name());
+
+                // The band's blocks are the rects that stand BAND_HEIGHT
+                // plus the bleed tall with their top at the bleed; the
+                // role colours alone cannot pick them out, since a theme
+                // may give two roles one colour.
+                let mut blocks: Vec<&egui::epaint::RectShape> = painted
+                    .iter()
+                    .filter_map(|shape| match shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.top() == column.top() - BAND_BLEED
+                                && rect.rect.height() == BAND_HEIGHT + BAND_BLEED =>
+                        {
+                            Some(rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                blocks.sort_by(|a, b| a.rect.left().total_cmp(&b.rect.left()));
+                assert_eq!(
+                    blocks.len(),
+                    BAND_BLOCKS.len(),
+                    "{name}: one filled rect per block, got {blocks:?}"
+                );
+                for (block, (_, role)) in blocks.iter().zip(BAND_BLOCKS) {
+                    assert_eq!(
+                        block.fill,
+                        role.resolve(&colors),
+                        "{name}: the {role:?} block's fill"
+                    );
+                }
+
+                // Edge to edge: the lead on the column's left, the guest
+                // on its right. The layout snaps the band's origin to
+                // egui's 1/32 pt grid, so the edges agree to that step
+                // and no further.
+                let snap = egui::emath::GUI_ROUNDING;
+                let first = blocks[0].rect;
+                let last = blocks[blocks.len() - 1].rect;
+                assert!(
+                    (first.left() - column.left()).abs() <= snap,
+                    "{name}: the band starts at {}, the column at {}",
+                    first.left(),
+                    column.left()
+                );
+                assert!(
+                    (last.right() - column.right()).abs() <= snap,
+                    "{name}: the band ends at {}, the column at {}",
+                    last.right(),
+                    column.right()
+                );
+
+                // The gutters: the same gap between every pair of
+                // neighbours, open, never overlapping.
+                let gutters: Vec<f32> = blocks
+                    .windows(2)
+                    .map(|pair| pair[1].rect.left() - pair[0].rect.right())
+                    .collect();
+                for gutter in &gutters {
+                    assert!(*gutter > 0.0, "{name}: blocks overlap, gutters {gutters:?}");
+                    assert!(
+                        (gutter - gutters[0]).abs() < 1e-3,
+                        "{name}: uneven gutters {gutters:?}"
+                    );
+                }
+
+                // The proportions: each block's width keeps its share of
+                // the lead block's, to the same tolerance as the gutters.
+                for (block, (units, _)) in blocks.iter().zip(BAND_BLOCKS) {
+                    let want = blocks[0].rect.width() * units / BAND_BLOCKS[0].0;
+                    assert!(
+                        (block.rect.width() - want).abs() < 1e-3,
+                        "{name}: a {units}-unit block is {} wide, wanted {want}",
+                        block.rect.width()
+                    );
+                }
+            }
         }
     }
 }

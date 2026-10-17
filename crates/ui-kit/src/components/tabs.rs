@@ -13,6 +13,21 @@
 //! preview's own focus outline), and the arrow keys move the selection
 //! while any tab of the row holds it, wrapping.
 //!
+//! A row that outgrows its width (a narrow phone, or large text) follows
+//! the selection: a tap on a tab (the selected one too), an arrow key,
+//! or the host moving `selected` has the scroll area bring that tab into
+//! view; it does not centre it. A tab already whole in the strip leaves
+//! it where it is. Only a tap or a move makes the strip scroll, so the
+//! user can still drag it away from the selected tab. Under reduced
+//! motion the follow is instant rather than a slide. A resize, a
+//! rotation or a font-scale change does not follow the selection.
+//!
+//! The ring reaches [`FOCUS_RING_REACH`] past a tab, so the row paints
+//! it under a clip widened by that much at each side (the first tab
+//! stands at the strip's left edge, the last at its right once scrolled
+//! to the end); the host needs to leave that room beside the row, as the
+//! gallery's 16px gutter does.
+//!
 //! Documented deviation: the web system keeps only the selected tab in
 //! the tab order (`tabindex="-1"` on the rest). egui's Tab traversal
 //! walks every interactive widget, so the kit cannot take three of four
@@ -31,7 +46,7 @@ use egui::scroll_area::{DragScroll, ScrollSource};
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Ui, Vec2};
 
 use crate::components::focus_ring::FocusRing;
-use crate::states::UiKitFlags;
+use crate::states::{UiKitFlags, FOCUS_RING_REACH};
 use crate::theme::ThemeId;
 use crate::tokens::{radii, type_scale};
 
@@ -215,6 +230,19 @@ impl<'a> Tabs<'a> {
         // The visuals move this frame, ahead of the host's state copy.
         let showing = changed.unwrap_or(selected);
 
+        // The strip follows the selection: when the tab it shows moves
+        // (an arrow, or the host setting `selected`), the strip scrolls
+        // that tab into view. A row that outgrows its width would leave
+        // the new tab where the edge cut it, or out of sight. The tab
+        // last shown is kept under the row's id, and only a change of
+        // it makes the strip scroll: following every frame would pull
+        // the strip back from wherever the user dragged it. A fresh
+        // strip counts tab 0 as last shown, so a first-frame selection
+        // of any other tab scrolls.
+        let shown_key = id.with("shown");
+        let last_shown: Option<usize> = ctx.data(|data| data.get_temp(shown_key));
+        let selection_moved = last_shown.unwrap_or(0) != showing;
+
         // The row: full-width viewport so a row that outgrows the
         // width scrolls sideways rather than wrapping, the tabs held
         // 28px apart at the label's line box plus their 14px paddings.
@@ -230,6 +258,9 @@ impl<'a> Tabs<'a> {
         let tab_height = 2.0 * TAB_PAD_Y + line_height;
         let mut active_rect: Option<Rect> = None;
         let mut row: Option<Rect> = None;
+        // The clip the host gave the row, before the scroll area narrows
+        // it to the strip.
+        let host_clip = ui.clip_rect();
         let scroll = egui::ScrollArea::horizontal()
             .id_salt(id.with("strip"))
             .scroll_source(ScrollSource {
@@ -266,12 +297,37 @@ impl<'a> Tabs<'a> {
                             ui.allocate_exact_size(Vec2::new(width, tab_height), Sense::hover());
                         row = Some(row.map_or(rect, |so_far| so_far.union(rect)));
                         let response = ui.interact(rect, id.with(index), Sense::click());
-                        if response.clicked() {
+                        let tapped = response.clicked();
+                        if tapped {
                             // A click moves the selection and lands the
                             // focus, the native tab behaviour egui only
                             // gives Tab traversal.
                             changed = Some(index);
                             ctx.memory_mut(|memory| memory.request_focus(id.with(index)));
+                        }
+                        // The tab a tap lands on, or the one the selection
+                        // moved to, is brought into view by the scroll
+                        // area, which does not centre it: a tab already
+                        // whole in the strip moves nothing. The scroll
+                        // area keeps the row's item spacing as a margin
+                        // at the edge it scrolls to, so a cut tab can
+                        // land short of that edge, unless the offset
+                        // stops at the row's end. The strip's scroll area
+                        // takes the request whole, on both axes, so a
+                        // page that scrolls round the row stays put.
+                        // Under reduced motion the follow is instant: the
+                        // same request with a zero-length animation, which
+                        // egui's scroll area applies on the next frame
+                        // rather than sliding there over 0.1 to 0.3s.
+                        if tapped || (selection_moved && active) {
+                            if flags.reduced_motion {
+                                response.scroll_to_me_animation(
+                                    None,
+                                    egui::style::ScrollAnimation::none(),
+                                );
+                            } else {
+                                response.scroll_to_me(None);
+                            }
                         }
 
                         let painter = ui.painter().clone().with_layer_id(response.layer_id);
@@ -287,9 +343,24 @@ impl<'a> Tabs<'a> {
                         if active {
                             active_rect = Some(rect);
                         }
+                        // The scroll area clips on its scroll axis, x, so
+                        // it cuts the ring at the first tab and, once
+                        // scrolled to the end, at the last. Paint the
+                        // ring under a clip widened along x by the ring's
+                        // reach. The other axis is not clipped by the
+                        // scroll area, and the widened clip stays inside
+                        // the host's, so the ring cannot paint beyond
+                        // what the host allows.
+                        let strip_clip = ui.clip_rect();
+                        ui.set_clip_rect(
+                            strip_clip
+                                .expand2(Vec2::new(FOCUS_RING_REACH, 0.0))
+                                .intersect(host_clip),
+                        );
                         FocusRing::new()
                             .radius(radii::RADIUS_XS as u8)
                             .paint(ui, &response, theme, flags);
+                        ui.set_clip_rect(strip_clip);
                     }
                 });
             });
@@ -321,8 +392,14 @@ impl<'a> Tabs<'a> {
         // hosts can read the row's geometry back.
         let response = ui.interact(row_rect, id.with("row"), Sense::hover());
 
+        // What this frame ends on is what the strip has shown: a tap's
+        // tab counts now, so the host's copy of it, next frame, is no
+        // new move to follow.
+        let selected = changed.unwrap_or(selected);
+        ctx.data_mut(|data| data.insert_temp(shown_key, selected));
+
         TabsResponse {
-            selected: changed.unwrap_or(selected),
+            selected,
             changed,
             response,
         }
@@ -605,6 +682,124 @@ mod tests {
         assert!(
             offsets.iter().all(|y| (y - 300.0).abs() < 0.5),
             "the page must hold its 300pt offset every pass: {offsets:?}"
+        );
+    }
+
+    /// The strip's sideways offset after one frame of `labels` with
+    /// `selected` active. The window is 200pt wide, so the row outgrows
+    /// it. Headless frames advance 1/60s of egui time each, as on a 60Hz
+    /// screen, so an animated follow really is still sliding.
+    fn strip_offset_after_frame(
+        ctx: &egui::Context,
+        theme: ThemeId,
+        flags: &UiKitFlags,
+        labels: &[&str],
+        selected: usize,
+    ) -> f32 {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 640.0))),
+            ..Default::default()
+        };
+        let mut strip = None;
+        ctx.run_ui(input, |ui| {
+            let base = ui.next_auto_id();
+            Tabs::new(labels).selected(selected).ui(ui, theme, flags);
+            // The strip's scroll area takes the id Tabs::ui gives it: its
+            // salt under the row's base, on the same `ui`.
+            strip = Some(
+                ui.make_persistent_id(egui::IdSalt::new(base.with("vynatix-tabs").with("strip"))),
+            );
+        })
+        .drop_without_applying_deltas();
+        let id = strip.expect("the strip ran in the pass");
+        egui::scroll_area::State::load(ctx, id).map_or(0.0, |state| state.offset.x)
+    }
+
+    /// Where the strip settles once the follow has run its course: forty
+    /// frames is well past the default animation's 0.3s.
+    fn strip_settled_offset(
+        ctx: &egui::Context,
+        theme: ThemeId,
+        flags: &UiKitFlags,
+        labels: &[&str],
+        selected: usize,
+    ) -> f32 {
+        let mut offset = 0.0;
+        for _ in 0..40 {
+            offset = strip_offset_after_frame(ctx, theme, flags, labels, selected);
+        }
+        offset
+    }
+
+    /// Under reduced motion the follow is instant. egui applies a scroll
+    /// request on the frame after the one that makes it, so the strip is
+    /// read two frames on, and by then it must already sit where the
+    /// follow settles. The animated default is still sliding there two
+    /// frames on (see the next test).
+    #[test]
+    fn reduced_motion_follows_the_selection_at_once() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let labels = [
+            "Overview",
+            "Engagements",
+            "Team",
+            "Accounts",
+            "Reports",
+            "Settings",
+        ];
+        let last = labels.len() - 1;
+        let flags = UiKitFlags {
+            reduced_motion: true,
+            ..Default::default()
+        };
+
+        // Frame 0 shows tab 0; frame 1 selects the last tab, which is off
+        // the strip, and makes the follow request.
+        strip_offset_after_frame(&ctx, theme, &flags, &labels, 0);
+        strip_offset_after_frame(&ctx, theme, &flags, &labels, last);
+        let two_frames_on = strip_offset_after_frame(&ctx, theme, &flags, &labels, last);
+        let settled = strip_settled_offset(&ctx, theme, &flags, &labels, last);
+
+        assert!(
+            settled > 0.0,
+            "the follow scrolls the strip at all: it settles at {settled}"
+        );
+        assert!(
+            (two_frames_on - settled).abs() < 1.0,
+            "reduced motion lands the follow at once: two frames on the strip \
+             sits at {two_frames_on}, where it settles at {settled}"
+        );
+    }
+
+    /// The default follow still animates: two frames on, the strip is
+    /// short of where it settles. Only reduced motion makes it instant.
+    #[test]
+    fn the_default_follow_still_animates() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let labels = [
+            "Overview",
+            "Engagements",
+            "Team",
+            "Accounts",
+            "Reports",
+            "Settings",
+        ];
+        let last = labels.len() - 1;
+        let flags = UiKitFlags::default();
+
+        strip_offset_after_frame(&ctx, theme, &flags, &labels, 0);
+        strip_offset_after_frame(&ctx, theme, &flags, &labels, last);
+        let two_frames_on = strip_offset_after_frame(&ctx, theme, &flags, &labels, last);
+        let settled = strip_settled_offset(&ctx, theme, &flags, &labels, last);
+
+        assert!(
+            two_frames_on < settled - 1.0,
+            "the default follow slides: two frames on the strip sits at \
+             {two_frames_on}, short of where it settles at {settled}"
         );
     }
 
