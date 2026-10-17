@@ -3219,14 +3219,28 @@ fn painted_text(h: &Harness) -> Vec<(String, egui::Rect, egui::Rect)> {
 /// the gutter. The rightmost and leftmost of those rects sit on the gutter's
 /// two edges, so the margins match. Every sideways row clips at the gutter,
 /// and on a phone at least one row has content beyond its clip to scroll to.
-/// The page must paint at least one rect, one string and one row, or the
-/// report says so instead of passing on empty lists.
+/// The page is laid out in a window `TALL` high, so the whole of it is on
+/// the one frame. A window one screen tall culls what lies below the fold:
+/// the page's own rects and text, and the clipped text fields that sit there
+/// (the probe at 9000pt found five, all text fields, and no sideways row below
+/// the first screen). A scroll position moves the page's content up and down
+/// and never its x extents, and a row's own horizontal scroll is held by its
+/// clip at the gutter, so the one frame holds at every scroll position.
+///
+/// The page must paint at least one rect, one string and one clipped region,
+/// or the report says so instead of passing on empty lists.
 fn components_gutter_report(width: f32) -> Vec<String> {
     const SLACK: f32 = 1.0;
+    /// One screen's height, the window the report was first limited to.
+    const FIRST_SCREEN: f32 = 855.0;
+    /// Tall enough for the whole Components page at every width the report
+    /// holds, so one frame paints all of it, the clipped regions below the
+    /// first screen included.
+    const TALL: f32 = 9000.0;
     let gutter = crate::gallery::PAGE_GUTTER;
     let right = width - gutter;
 
-    let mut h = Harness::window(egui::vec2(width, 855.0));
+    let mut h = Harness::window(egui::vec2(width, TALL));
     h.app.gallery.tab = 2;
     h.idle(6);
     let page = h
@@ -3273,15 +3287,16 @@ fn components_gutter_report(width: f32) -> Vec<String> {
         ));
     }
     // The page's paragraphs and labels.
-    let texts: Vec<f32> = painted_text(&h)
-        .into_iter()
+    let painted = painted_text(&h);
+    let texts: Vec<egui::Rect> = painted
+        .iter()
         .filter(|(_, _, clip)| in_page(*clip) && !in_row(*clip))
-        .map(|(_, rect, _)| rect.right())
+        .map(|(_, rect, _)| *rect)
         .collect();
     if texts.is_empty() {
         off.push(format!("at {width}pt the page painted no text"));
     }
-    let text_right = texts.iter().copied().fold(0.0, f32::max);
+    let text_right = texts.iter().map(|rect| rect.right()).fold(0.0, f32::max);
     if right + SLACK < text_right {
         off.push(format!(
             "at {width}pt the page's text ends at x {text_right}, {}pt past the gutter at \
@@ -3289,25 +3304,36 @@ fn components_gutter_report(width: f32) -> Vec<String> {
             text_right - right
         ));
     }
-    // The rows: the clips narrower than the window, one per distinct rect.
-    let mut rows: Vec<egui::Rect> = Vec::new();
+    // The clipped regions narrower than the window, one per distinct rect:
+    // sideways rows and text fields alike (`in_row` reads a clip that starts
+    // right of the gutter's left edge).
+    let mut clips: Vec<egui::Rect> = Vec::new();
     for clipped in &h.shapes {
         if in_page(clipped.clip_rect)
             && in_row(clipped.clip_rect)
-            && !rows.contains(&clipped.clip_rect)
+            && !clips.contains(&clipped.clip_rect)
         {
-            rows.push(clipped.clip_rect);
+            clips.push(clipped.clip_rect);
         }
     }
-    if rows.is_empty() {
-        off.push(format!("at {width}pt the page painted no sideways row"));
+    if clips.is_empty() {
+        off.push(format!("at {width}pt the page painted no clipped region"));
     }
-    for row in &rows {
-        if right + SLACK < row.right() {
+    // The whole page, not its first screen: the clipped regions below the
+    // first screen are laid out and painted with the page, and a window one
+    // screen tall culls them, so one of the regions must start below it.
+    if !clips.iter().any(|clip| clip.top() > FIRST_SCREEN) {
+        off.push(format!(
+            "at {width}pt no clipped region starts below the first {FIRST_SCREEN}pt screen, so \
+             the report checks one screen only"
+        ));
+    }
+    for clip in &clips {
+        if right + SLACK < clip.right() {
             off.push(format!(
-                "at {width}pt a row clips at x {}, {}pt past the gutter at x {right}",
-                row.right(),
-                row.right() - right
+                "at {width}pt a clipped region ends at x {}, {}pt past the gutter at x {right}",
+                clip.right(),
+                clip.right() - right
             ));
         }
     }
@@ -3320,6 +3346,26 @@ fn components_gutter_report(width: f32) -> Vec<String> {
     if phone && !scrolls {
         off.push(format!(
             "at {width}pt no row has content beyond its clip, so none of them scrolls"
+        ));
+    }
+    // The window is tall enough for the whole page: its lowest rect or
+    // string, clipped or not, ends clear of the bottom edge, or the window
+    // cut the page short.
+    let lowest = rects
+        .iter()
+        .filter(|(shape, clip)| in_page(*clip) && (shape.fill.a() > 0 || shape.stroke.width > 0.0))
+        .map(|(shape, _)| shape.rect.bottom())
+        .chain(
+            painted
+                .iter()
+                .filter(|(_, _, clip)| in_page(*clip))
+                .map(|(_, rect, _)| rect.bottom()),
+        )
+        .fold(0.0, f32::max);
+    if lowest + SLACK >= TALL {
+        off.push(format!(
+            "at {width}pt the page runs into the window's bottom edge at {TALL}pt, so the \
+             window cuts the page short"
         ));
     }
     off
