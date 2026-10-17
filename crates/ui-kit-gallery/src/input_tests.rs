@@ -294,17 +294,21 @@ impl Harness {
     }
 }
 
-/// Every string a frame painted, with its rect, where its clip lets it
-/// show.
-fn painted_strings(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
-    fn walk(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<(String, egui::Rect)>) {
+/// Every text shape a frame painted, with its rect and the clip it was
+/// painted under, in paint order. The one walk over the frame's shapes that
+/// the text helpers share; each helper picks what it needs from the result.
+fn painted_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect, egui::Rect)> {
+    fn walk(
+        shape: &egui::Shape,
+        clip: egui::Rect,
+        out: &mut Vec<(String, egui::Rect, egui::Rect)>,
+    ) {
         match shape {
-            egui::Shape::Text(text) => {
-                let rect = egui::Rect::from_min_size(text.pos, text.galley.size());
-                if rect.intersects(clip) {
-                    out.push((text.galley.text().to_owned(), rect));
-                }
-            }
+            egui::Shape::Text(text) => out.push((
+                text.galley.text().to_owned(),
+                egui::Rect::from_min_size(text.pos, text.galley.size()),
+                clip,
+            )),
             egui::Shape::Vec(shapes) => {
                 for shape in shapes {
                     walk(shape, clip, out);
@@ -318,6 +322,16 @@ fn painted_strings(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::
         walk(&clipped.shape, clipped.clip_rect, &mut out);
     }
     out
+}
+
+/// Every string a frame painted, with its rect, where its clip lets it
+/// show.
+fn painted_strings(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+    painted_texts(shapes)
+        .into_iter()
+        .filter(|(_, rect, clip)| rect.intersects(*clip))
+        .map(|(text, rect, _)| (text, rect))
+        .collect()
 }
 
 /// Every node of a frame's accessibility tree that carries a label and
@@ -3188,30 +3202,7 @@ fn scrolling_an_unchanged_page_takes_one_pass_per_frame() {
 /// Every text shape the last frame painted, with its rect and the clip it
 /// was painted under.
 fn painted_text(h: &Harness) -> Vec<(String, egui::Rect, egui::Rect)> {
-    fn walk(
-        shape: &egui::Shape,
-        clip: egui::Rect,
-        out: &mut Vec<(String, egui::Rect, egui::Rect)>,
-    ) {
-        match shape {
-            egui::Shape::Text(text) => out.push((
-                text.galley.text().to_owned(),
-                egui::Rect::from_min_size(text.pos, text.galley.size()),
-                clip,
-            )),
-            egui::Shape::Vec(shapes) => {
-                for shape in shapes {
-                    walk(shape, clip, out);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut out = Vec::new();
-    for clipped in &h.shapes {
-        walk(&clipped.shape, clipped.clip_rect, &mut out);
-    }
-    out
+    painted_texts(&h.shapes)
 }
 
 /// Lay the Components page out in a `width`-wide window and list every
