@@ -18,7 +18,8 @@
 //! or the host moving `selected` has the scroll area bring that tab into
 //! view; it does not centre it. A tab already whole in the strip leaves
 //! it where it is. Only a tap or a move makes the strip scroll, so the
-//! user can still drag it away from the selected tab. A resize, a
+//! user can still drag it away from the selected tab. Under reduced
+//! motion the follow is instant rather than a slide. A resize, a
 //! rotation or a font-scale change does not follow the selection.
 //!
 //! The ring reaches [`FOCUS_RING_REACH`] past a tab, so the row paints
@@ -314,8 +315,19 @@ impl<'a> Tabs<'a> {
                         // stops at the row's end. The strip's scroll area
                         // takes the request whole, on both axes, so a
                         // page that scrolls round the row stays put.
+                        // Under reduced motion the follow is instant: the
+                        // same request with a zero-length animation, which
+                        // egui's scroll area applies on the next frame
+                        // rather than sliding there over 0.1 to 0.3s.
                         if tapped || (selection_moved && active) {
-                            response.scroll_to_me(None);
+                            if flags.reduced_motion {
+                                response.scroll_to_me_animation(
+                                    None,
+                                    egui::style::ScrollAnimation::none(),
+                                );
+                            } else {
+                                response.scroll_to_me(None);
+                            }
                         }
 
                         let painter = ui.painter().clone().with_layer_id(response.layer_id);
@@ -670,6 +682,124 @@ mod tests {
         assert!(
             offsets.iter().all(|y| (y - 300.0).abs() < 0.5),
             "the page must hold its 300pt offset every pass: {offsets:?}"
+        );
+    }
+
+    /// The strip's sideways offset after one frame of `labels` with
+    /// `selected` active. The window is 200pt wide, so the row outgrows
+    /// it. Headless frames advance 1/60s of egui time each, as on a 60Hz
+    /// screen, so an animated follow really is still sliding.
+    fn strip_offset_after_frame(
+        ctx: &egui::Context,
+        theme: ThemeId,
+        flags: &UiKitFlags,
+        labels: &[&str],
+        selected: usize,
+    ) -> f32 {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 640.0))),
+            ..Default::default()
+        };
+        let mut strip = None;
+        ctx.run_ui(input, |ui| {
+            let base = ui.next_auto_id();
+            Tabs::new(labels).selected(selected).ui(ui, theme, flags);
+            // The strip's scroll area takes the id Tabs::ui gives it: its
+            // salt under the row's base, on the same `ui`.
+            strip = Some(
+                ui.make_persistent_id(egui::IdSalt::new(base.with("vynatix-tabs").with("strip"))),
+            );
+        })
+        .drop_without_applying_deltas();
+        let id = strip.expect("the strip ran in the pass");
+        egui::scroll_area::State::load(ctx, id).map_or(0.0, |state| state.offset.x)
+    }
+
+    /// Where the strip settles once the follow has run its course: forty
+    /// frames is well past the default animation's 0.3s.
+    fn strip_settled_offset(
+        ctx: &egui::Context,
+        theme: ThemeId,
+        flags: &UiKitFlags,
+        labels: &[&str],
+        selected: usize,
+    ) -> f32 {
+        let mut offset = 0.0;
+        for _ in 0..40 {
+            offset = strip_offset_after_frame(ctx, theme, flags, labels, selected);
+        }
+        offset
+    }
+
+    /// Under reduced motion the follow is instant. egui applies a scroll
+    /// request on the frame after the one that makes it, so the strip is
+    /// read two frames on, and by then it must already sit where the
+    /// follow settles. The animated default is still sliding there two
+    /// frames on (see the next test).
+    #[test]
+    fn reduced_motion_follows_the_selection_at_once() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let labels = [
+            "Overview",
+            "Engagements",
+            "Team",
+            "Accounts",
+            "Reports",
+            "Settings",
+        ];
+        let last = labels.len() - 1;
+        let flags = UiKitFlags {
+            reduced_motion: true,
+            ..Default::default()
+        };
+
+        // Frame 0 shows tab 0; frame 1 selects the last tab, which is off
+        // the strip, and makes the follow request.
+        strip_offset_after_frame(&ctx, theme, &flags, &labels, 0);
+        strip_offset_after_frame(&ctx, theme, &flags, &labels, last);
+        let two_frames_on = strip_offset_after_frame(&ctx, theme, &flags, &labels, last);
+        let settled = strip_settled_offset(&ctx, theme, &flags, &labels, last);
+
+        assert!(
+            settled > 0.0,
+            "the follow scrolls the strip at all: it settles at {settled}"
+        );
+        assert!(
+            (two_frames_on - settled).abs() < 1.0,
+            "reduced motion lands the follow at once: two frames on the strip \
+             sits at {two_frames_on}, where it settles at {settled}"
+        );
+    }
+
+    /// The default follow still animates: two frames on, the strip is
+    /// short of where it settles. Only reduced motion makes it instant.
+    #[test]
+    fn the_default_follow_still_animates() {
+        let ctx = egui::Context::default();
+        let theme = ThemeId::Light;
+        install_faces(&ctx, theme);
+        let labels = [
+            "Overview",
+            "Engagements",
+            "Team",
+            "Accounts",
+            "Reports",
+            "Settings",
+        ];
+        let last = labels.len() - 1;
+        let flags = UiKitFlags::default();
+
+        strip_offset_after_frame(&ctx, theme, &flags, &labels, 0);
+        strip_offset_after_frame(&ctx, theme, &flags, &labels, last);
+        let two_frames_on = strip_offset_after_frame(&ctx, theme, &flags, &labels, last);
+        let settled = strip_settled_offset(&ctx, theme, &flags, &labels, last);
+
+        assert!(
+            two_frames_on < settled - 1.0,
+            "the default follow slides: two frames on the strip sits at \
+             {two_frames_on}, short of where it settles at {settled}"
         );
     }
 
